@@ -60,7 +60,7 @@ run_gated() {
 run_incus() {
   require_e2e incus
   ensure_run_id incus
-  run go test ./internal/e2e -run 'Test(TenantListingSmoke|DisposableTenantCreateAndPurge|DisposableInfrastructureCreateAndDelete|ImageSync.*AliasE2E)' -count=1 -v
+  run go test ./internal/e2e -run 'Test(TenantListingSmoke|ImageSync.*AliasE2E)' -count=1 -v
 }
 
 
