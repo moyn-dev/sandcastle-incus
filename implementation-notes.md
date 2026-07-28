@@ -5,6 +5,52 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-07-28 — `scripts/e2e.sh`'s `incus` tier referenced two deleted tests
+
+Running the full canonical suite (unit + gated + the CI-documented destructive
+tiers) inside a nested, disposable Incus container turned up a stale reference:
+`run_incus()`'s `-run` pattern named `TestDisposableTenantCreateAndPurge` and
+`TestDisposableInfrastructureCreateAndDelete`, both deleted by the v1-removal
+commits `733484d` ("Remove v1 e2e Go tests") and `aca3f70` ("Remove v1 infra")
+without updating this script. `go test -run` with a pattern matching zero test
+names is not an error — it just runs nothing for that name — so the `incus`
+tier has been silently exercising only `TestTenantListingSmoke` (a read-only
+listing) plus the two `ImageSync*AliasE2E` tests (which self-skip without
+image-source env vars) instead of the tenant/infrastructure mutation coverage
+its name promised. Fixed by dropping the two dead names from the pattern
+(`scripts/e2e.sh`). No replacement tests were added — the v2 e2e is the
+`docs/e2e-sc2.md` manual runbook per the v1-removal commit message, so there is
+nothing on the other side of this branch to restore.
+
+Also found: `docs/test_protocol.md` is a fully orphaned, unreferenced doc whose
+every named test (`TestCLIConnectCommandE2E`, `TestCLICreateDetachE2E`,
+`TestRouteBrokerAuthorizedMutationE2E`, etc.) was deleted by the same v1-removal
+commits; it predates and is superseded by `docs/e2e-sc2.md`. Left it in place —
+deleting a whole doc file is a bigger, more subjective call than the mechanical
+script fix above — but flagging it here for a maintainer to confirm and remove.
+
+### Nested-container virtualization ceiling (this run's environment)
+
+Confirmed empirically, not just inferred: this task ran inside a nested,
+unprivileged Incus/LXC container (`systemd-detect-virt` → `lxc`) with no
+`/dev/kvm` (VMs are unconditionally unavailable — Incus's own log records
+`KVM support is missing (no /dev/kvm)`) and no CAP_BPF/nested-userns
+delegation for containers either. Installing the full `incus` package and
+running `incus admin init --minimal` succeeds (storage pool + bridge come up
+fine), but `incus launch images:debian/13 test-nested` fails at
+`forkstart` with two independent denials in the LXC log:
+`cgroup2_devices: Failed to load bpf program: Operation not permitted` and
+`idmap_utils: newuidmap failed to write mapping: Operation not permitted`.
+Both point to the outer container lacking `security.nesting=true` (or
+equivalent privileged/nesting grant) from its own host — a capability this
+container cannot grant itself from the inside. This blocks every destructive
+e2e tier that actually provisions a tenant/machine (`incus`, `restricted`,
+`tailscale`, `images` on the Incus-import side, `route-broker`,
+`public-routes`, `local-vm`, `cleanup`) — not just for lack of credentials/env
+vars, but because the one tier that had no env-var gate (`incus` with
+`SANDCASTLE_E2E_REMOTE=local`) still fails at the same `forkstart` step once
+those dead test names above are removed and a real create is attempted.
+
 ## 2026-07-22 — connect waits for cloud-init, and verifies host keys before pinning
 
 `sc c <project>:<machine>` that *created* the machine died with
