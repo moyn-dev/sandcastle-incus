@@ -4833,3 +4833,27 @@ form the script exists for.
 **CI lints it.** `ci.yml` runs `bash -n` + `shellcheck --severity=warning`:
 the file is served straight from `main`, so a syntax error there breaks every
 new install immediately, with no release to gate it.
+
+## 2026-09-04 — sidecar updates reconcile Incus Reach
+
+An `obelix` tenant sidecar remained healthy on Tailscale but had an empty
+Tailscale Serve configuration, so its enrolled Incus remote received immediate
+TCP refusals on `:8443`. Sidecar updates previously replaced the binary and
+restarted only the TLS signer; they never checked the Incus Reach invariant
+established during tenant creation.
+
+**Decision:** every sidecar update now derives the tenant bridge gateway from
+the infra project's authoritative `user.sandcastle.v2.cidr` metadata and
+idempotently runs the same raw-TCP `tailscale serve` command as provisioning.
+The update fails if the metadata is missing/invalid or Serve cannot be
+configured, rather than claiming success while the tenant cannot reach Incus.
+This repairs drift without restarting `tailscaled` or CoreDNS.
+
+Alternatives considered:
+
+- **Only repair the live sidecars.** This restores access once but leaves every
+  tenant vulnerable to the same undetected drift.
+- **Install a new systemd unit.** Useful eventual hardening across arbitrary
+  Tailscale state loss, but broader than the reported update regression. The
+  existing update convergence point provides immediate fleet repair with no
+  additional long-running component.

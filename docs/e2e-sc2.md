@@ -2268,7 +2268,10 @@ sc update --yes
 # expect: sidecar updated via the deployment (auth-app token plane on tunnel
 #   installs, broker mTLS otherwise); ONLY sandcastle-tls-sign.service
 #   restarts (verify: coredns/tailscaled uptime unchanged, tenant DNS + SSH
-#   still work mid-update); sidecar stamp = deployment version afterwards.
+#   still work mid-update); the update reconciles Incus Reach, so
+#   `tailscale serve status --json` in the sidecar contains raw TCP :8443 →
+#   the tenant bridge gateway :8443 even when Serve state was empty before;
+#   sidecar stamp = deployment version afterwards.
 
 # 10c-i — install script (curl | bash), the install `sc update` can self-replace
 curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh \
@@ -2301,8 +2304,9 @@ sc update --yes                         # …and forward to latest again
 ```
 
 **PASS:** 10a table complete and truthful (unknown ⇒ outdated); 10b idempotent
-with stamps written; 10c restarts only the leaf signer with connectivity
-untouched and the sidecar never ahead of the deployment; 10c-i installs a
+with stamps written; 10c restarts only the leaf signer, restores missing Incus
+Reach without restarting Tailscale, keeps connectivity intact, and leaves the
+sidecar never ahead of the deployment; 10c-i installs a
 checksum-verified binary into the requested directory as `sandcastle` + `sc`
 symlink, and `sc update` then reports that install as self-updatable (not
 Homebrew-managed); 10d atomic replace with `.bak` rollback artifact through the
