@@ -1065,7 +1065,7 @@ castle:53 {
   <div class="cmdcard">
     <h4><code>sc trust install|uninstall</code> <span class="badge badge-user">user</span></h4>
     <div class="ledger">
-      <div class="ledger-row"><span class="chip local">client</span><div>installs/removes the Tenant CA in the OS trust store (Linux <code>/usr/local/share/ca-certificates</code> + <code>update-ca-certificates</code>; macOS login keychain), caches CA under <code>~/.config/sandcastle/tenant-ca/…</code></div></div>
+      <div class="ledger-row"><span class="chip local">client</span><div>installs/removes the Tenant CA in the OS trust store (Linux: the distro anchors dir + refresh command — Debian <code>/usr/local/share/ca-certificates</code> + <code>update-ca-certificates</code>, Arch <code>/etc/ca-certificates/trust-source/anchors</code> / Fedora <code>/etc/pki/ca-trust/source/anchors</code> + <code>update-ca-trust</code>; macOS login keychain), caches CA under <code>~/.config/sandcastle/tenant-ca/…</code></div></div>
     </div>
     <p class="impl"><code>internal/localtrust</code> · <code>internal/incusx/localtrust.go</code></p>
   </div>

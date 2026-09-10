@@ -4857,3 +4857,25 @@ Alternatives considered:
   Tailscale state loss, but broader than the reported update regression. The
   existing update convergence point provides immediate fleet repair with no
   additional long-running component.
+
+## 2026-09-10 — `sc trust install` detects the Linux trust layout
+
+`localtrust` hardcoded Debian's `/usr/local/share/ca-certificates` +
+`update-ca-certificates`. On Arch that command does not exist and p11-kit never
+reads that directory, so the install failed after leaving a stray cert there.
+
+**Decision:** pick the layout by which anchors directory exists — Arch
+`/etc/ca-certificates/trust-source/anchors` and Fedora/RHEL
+`/etc/pki/ca-trust/source/anchors` (both `update-ca-trust`), openSUSE
+`/etc/pki/trust/anchors` (`update-ca-certificates`), else Debian. The
+`sc tenant` trust-status check uses the same detection.
+
+Alternatives considered:
+
+- **Probe the refresh command on PATH.** Unreliable: `update-ca-certificates`
+  lives in `/usr/sbin`, off an unprivileged PATH, so absence proves nothing.
+- **`trust anchor --store` (p11-kit CLI).** Arch/Fedora only, and its removal
+  semantics differ; the plain file + refresh keeps one code path for all distros.
+- **Read `/etc/os-release`.** Derivatives (Manjaro, EndeavourOS, Rocky) would
+  need an ID/ID_LIKE table; the anchors directory is the thing that actually
+  matters.

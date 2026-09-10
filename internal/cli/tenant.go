@@ -238,7 +238,7 @@ func tenantSwitchTrustReady(ctx context.Context, config commandConfig, tenantNam
 		}
 		return exec.CommandContext(ctx, "security", args...).Run() == nil
 	case "linux":
-		return fileExists(filepath.Join("/usr/local/share/ca-certificates", localtrust.CertFilename(plan)))
+		return fileExists(filepath.Join(localtrust.DetectLinuxTrustLayout().Dir, localtrust.CertFilename(plan)))
 	default:
 		return false
 	}
