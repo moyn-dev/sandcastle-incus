@@ -50,7 +50,7 @@ func (h handler) machineCertificatesAPI(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.projectDomains == nil {
+	if h.projectDomainResolver == nil {
 		http.Error(w, "machine certificates are not available on this deployment", http.StatusNotImplemented)
 		return
 	}
@@ -82,7 +82,7 @@ func (h handler) machineCertificatesAPI(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	domain, zone, err := h.projectDomains.ResolveProjectDomain(r.Context(), tenantName, project)
+	domain, zone, err := h.projectDomainResolver.ResolveProjectDomain(r.Context(), tenantName, project)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

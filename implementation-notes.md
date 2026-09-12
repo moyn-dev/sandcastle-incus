@@ -5159,3 +5159,7 @@ Spec `docs/spec/public-dns-zones.md` §1.3, §2.2, §3.2/§3.3, §4.6, §5.1, §
 - **e2e:** Phase 12 is added with 12a/12b (this slice's user-visible surface)
   and a note that 12c–12f land with slices 4–7; the `unset-domain` step
   records that it is *allowed* until slice 4 stamps the Naming Mode.
+
+## 2026-09-12 — merge of slice 3 onto slices 2+5: two seams called `ProjectDomains`
+
+Slice 5 (built before slice 3 existed) added `HTTPRunner.ProjectDomains` typed `ProjectDomainResolver` (the "which domain does this project have" lookup for `POST /api/machine-certificates`, left nil → 501). Slice 3 added a same-named field typed `TenantProjectDomainManager` (the Incus seam that writes `KeyV2Domain` and re-renders the profile). Textually the merge was clean; semantically it was a redeclaration. Resolution: the resolver seam is renamed `ProjectDomainResolver` / `projectDomainResolver`, and it now defaults to `sqlProjectDomainClaims` (which gained `ResolveProjectDomain` over `GetProjectDomainClaim`) whenever the handler has a database — so the 501 "no claims yet" path is gone and the machine-certificates endpoint answers 404 for a project without a domain. The test fake was renamed `fakeProjectDomainResolver` to avoid clashing with slice 3's `fakeProjectDomains`.

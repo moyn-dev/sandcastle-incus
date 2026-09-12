@@ -541,3 +541,14 @@ SELECT domain, tenant, project FROM project_domain_claims WHERE zone = ? ORDER B
 	}
 	return refs, rows.Err()
 }
+
+// ResolveProjectDomain implements ProjectDomainResolver over the claims table
+// (spec §3.3): the Project Domain and zone for tenant/project, or empty when
+// the project has no domain.
+func (s sqlProjectDomainClaims) ResolveProjectDomain(ctx context.Context, tenantName, project string) (string, string, error) {
+	claim, found, err := GetProjectDomainClaim(ctx, s.db, tenantName, project)
+	if err != nil || !found {
+		return "", "", err
+	}
+	return claim.Domain, claim.Zone, nil
+}

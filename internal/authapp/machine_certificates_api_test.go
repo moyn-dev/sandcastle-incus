@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// fakeProjectDomains is the test ProjectDomainResolver: tenant/project →
+// fakeProjectDomainResolver is the test ProjectDomainResolver: tenant/project →
 // (domain, zone).
-type fakeProjectDomains struct {
+type fakeProjectDomainResolver struct {
 	domains map[string][2]string
 	err     error
 }
 
-func (f fakeProjectDomains) ResolveProjectDomain(_ context.Context, tenant, project string) (string, string, error) {
+func (f fakeProjectDomainResolver) ResolveProjectDomain(_ context.Context, tenant, project string) (string, string, error) {
 	if f.err != nil {
 		return "", "", f.err
 	}
@@ -39,9 +39,9 @@ func machineCertTestHandler(t *testing.T, resolver ProjectDomainResolver) (http.
 		t.Fatal(err)
 	}
 	h := NewHandler(db, HandlerOptions{
-		AuthHostname:   "sc2.thieso2.dev",
-		ACMEDirectory:  LetsEncryptStagingDirectory,
-		ProjectDomains: resolver,
+		AuthHostname:          "sc2.thieso2.dev",
+		ACMEDirectory:         LetsEncryptStagingDirectory,
+		ProjectDomainResolver: resolver,
 	})
 	return h, db, token
 }
@@ -57,7 +57,7 @@ func postMachineCertificate(h http.Handler, token, body string) *httptest.Respon
 }
 
 func TestMachineCertificatesAPI_RecordsPendingRow(t *testing.T) {
-	h, db, token := machineCertTestHandler(t, fakeProjectDomains{domains: map[string][2]string{
+	h, db, token := machineCertTestHandler(t, fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum": {"baum.hase.de", "hase.de"},
 	}})
 
@@ -94,7 +94,7 @@ func TestMachineCertificatesAPI_RecordsPendingRow(t *testing.T) {
 }
 
 func TestMachineCertificatesAPI_RetainedCertificateIsReported(t *testing.T) {
-	h, db, token := machineCertTestHandler(t, fakeProjectDomains{domains: map[string][2]string{
+	h, db, token := machineCertTestHandler(t, fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum": {"baum.hase.de", "hase.de"},
 	}})
 	ctx := context.Background()
@@ -129,7 +129,7 @@ func TestMachineCertificatesAPI_RetainedCertificateIsReported(t *testing.T) {
 }
 
 func TestMachineCertificatesAPI_RateLimited(t *testing.T) {
-	h, db, token := machineCertTestHandler(t, fakeProjectDomains{domains: map[string][2]string{
+	h, db, token := machineCertTestHandler(t, fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum": {"baum.hase.de", "hase.de"},
 	}})
 	ctx := context.Background()
@@ -165,7 +165,7 @@ func TestMachineCertificatesAPI_RateLimited(t *testing.T) {
 }
 
 func TestMachineCertificatesAPI_Refusals(t *testing.T) {
-	resolver := fakeProjectDomains{domains: map[string][2]string{
+	resolver := fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum":  {"baum.hase.de", "hase.de"},
 		"other/zulu": {"zulu.hase.de", "hase.de"},
 	}}
@@ -200,13 +200,15 @@ func TestMachineCertificatesAPI_Refusals(t *testing.T) {
 		t.Fatalf("other tenant = %d %q", res.Code, res.Body.String())
 	}
 
-	// Resolver failure surfaces as 500; no resolver at all as 501.
-	failing, _, failingToken := machineCertTestHandler(t, fakeProjectDomains{err: errors.New("claims unavailable")})
+	// Resolver failure surfaces as 500.
+	failing, _, failingToken := machineCertTestHandler(t, fakeProjectDomainResolver{err: errors.New("claims unavailable")})
 	if res := postMachineCertificate(failing, failingToken, `{"project":"baum","machine":"web"}`); res.Code != http.StatusInternalServerError {
 		t.Fatalf("resolver error = %d", res.Code)
 	}
+	// No injected resolver: the handler defaults to the Project Domain claims
+	// table (slice 3), which has no claim for baum, so the answer is 404.
 	none, _, noneToken := machineCertTestHandler(t, nil)
-	if res := postMachineCertificate(none, noneToken, `{"project":"baum","machine":"web"}`); res.Code != http.StatusNotImplemented {
+	if res := postMachineCertificate(none, noneToken, `{"project":"baum","machine":"web"}`); res.Code != http.StatusNotFound {
 		t.Fatalf("nil resolver = %d", res.Code)
 	}
 }
@@ -214,7 +216,7 @@ func TestMachineCertificatesAPI_Refusals(t *testing.T) {
 // The CLI client maps 202 and 409 rate-limited to a view, anything else to
 // an error.
 func TestDeviceClientRequestMachineCertificate(t *testing.T) {
-	h, _, token := machineCertTestHandler(t, fakeProjectDomains{domains: map[string][2]string{
+	h, _, token := machineCertTestHandler(t, fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum": {"baum.hase.de", "hase.de"},
 	}})
 	server := httptest.NewServer(h)

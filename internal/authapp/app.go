@@ -123,7 +123,7 @@ type HTTPRunner struct {
 	// ProjectDomains resolves a tenant project's Project Domain + zone for
 	// POST /api/machine-certificates (ADR-0027). nil until the install has
 	// Project Domain claims: the endpoint then answers 501.
-	ProjectDomains ProjectDomainResolver
+	ProjectDomainResolver ProjectDomainResolver
 	// AuthIngressMode is how the Auth Hostname itself is served (acme|cloudflare|
 	// none); it governs the login site in the regenerated Caddyfile so routes can
 	// coexist with a Cloudflare-tunnelled login hostname.
@@ -269,7 +269,7 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			RouteCaddy:                   r.RouteCaddy,
 			ACMEEmail:                    r.ACMEEmail,
 			ACMEDirectory:                plan.ACMEDirectory,
-			ProjectDomains:               r.ProjectDomains,
+			ProjectDomainResolver:        r.ProjectDomainResolver,
 			AuthIngressMode:              r.AuthIngressMode,
 			RouteBaseDomain:              r.RouteBaseDomain,
 			RouteIngress:                 r.RouteIngress,
@@ -833,15 +833,15 @@ type HandlerOptions struct {
 	ACMEEmail           string
 	// ACMEDirectory is the running --acme-directory (normalized); it is the
 	// directory_url stamped on machine_certificates rows.
-	ACMEDirectory     string
-	ProjectDomains    ProjectDomainResolver
-	AuthIngressMode   string
-	RouteBaseDomain   string
-	RouteIngress      string
-	RouteCNAMETarget  string
-	RouteTLS          string
-	RouteDNSProvider  string
-	RouteDNSWildcards []string
+	ACMEDirectory         string
+	ProjectDomainResolver ProjectDomainResolver
+	AuthIngressMode       string
+	RouteBaseDomain       string
+	RouteIngress          string
+	RouteCNAMETarget      string
+	RouteTLS              string
+	RouteDNSProvider      string
+	RouteDNSWildcards     []string
 	// RouteResolveHost overrides how a custom hostname's DNS is checked for the
 	// awaiting-dns status. Optional; nil uses a real DNS lookup. Injected in tests.
 	RouteResolveHost func(ctx context.Context, host string) bool
@@ -915,7 +915,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		routeCaddy:            handlerOptions.RouteCaddy,
 		acmeEmail:             strings.TrimSpace(handlerOptions.ACMEEmail),
 		acmeDirectory:         handlerACMEDirectory(handlerOptions.ACMEDirectory),
-		projectDomains:        handlerOptions.ProjectDomains,
+		projectDomainResolver: handlerOptions.ProjectDomainResolver,
 		authIngressMode:       strings.TrimSpace(handlerOptions.AuthIngressMode),
 		routeBaseDomain:       strings.Trim(strings.TrimSpace(handlerOptions.RouteBaseDomain), "."),
 		routeIngress:          strings.TrimSpace(handlerOptions.RouteIngress),
@@ -932,6 +932,10 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		cloudflareZones:       handlerOptions.CloudflareZones,
 		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
 		projectDomains:        handlerOptions.ProjectDomains,
+	}
+	if app.projectDomainResolver == nil && app.db != nil {
+		// Slice 3 landed the claims table: it is the production resolver.
+		app.projectDomainResolver = sqlProjectDomainClaims{db: app.db}
 	}
 	if app.githubClient == nil {
 		if app.simulateToken != "" {
@@ -1048,7 +1052,7 @@ type handler struct {
 	routeCaddy            CaddyController
 	acmeEmail             string
 	acmeDirectory         string
-	projectDomains        ProjectDomainResolver
+	projectDomainResolver ProjectDomainResolver
 	authIngressMode       string
 	routeBaseDomain       string
 	routeIngress          string
