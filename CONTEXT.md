@@ -31,6 +31,22 @@ _Avoid_: Short hostname, machine FQDN
 The alias `<machine>.<Tenant DNS Suffix>` that resolves to the default project's machine of that name; machines in other projects have no short form.
 _Avoid_: Unique-name short alias, first-wins short name
 
+**Public DNS Zone**:
+An admin-registered Cloudflare zone under which projects may claim a Project Domain; Sandcastle holds the zone's API token.
+_Avoid_: Tenant zone, DNS provider, wildcard route zone
+
+**Project Domain**:
+A public DNS name under a Public DNS Zone claimed by exactly one Project, install-wide, whole subtree; machines created afterwards in that project get Machine Public Hostnames beneath it.
+_Avoid_: Project zone, project suffix, custom domain
+
+**Machine Public Hostname**:
+The public DNS name `<machine>.<Project Domain>` of a Machine created in a project with a Project Domain; such a machine has no Machine Private Hostname.
+_Avoid_: Public FQDN, zone name, external hostname
+
+**Machine Certificate**:
+The publicly trusted certificate the Auth App obtains and holds for one Machine Public Hostname and its wildcard, and installs into that Machine. Its states are pending, issued, installed, renewing, and failed.
+_Avoid_: Machine cert, LE cert, Caddy cert, machine TLS
+
 **GitHub Username Tenant Name**:
 The normalized GitHub username form allowed for Personal Tenant names.
 _Avoid_: Generic tenant name validation
