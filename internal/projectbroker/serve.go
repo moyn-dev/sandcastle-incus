@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -93,7 +94,19 @@ type ProjectResult struct {
 	IncusProject string `json:"incusProject"`
 	Bridge       string `json:"bridge"`
 	DNSSuffix    string `json:"dnsSuffix"`
+	// Domain is the Project Domain claimed at create time (ADR-0027), empty
+	// for a private-mode project.
+	Domain string `json:"domain,omitempty"`
+	// Zone is the Public DNS Zone the Domain was claimed under.
+	Zone string `json:"zone,omitempty"`
+	// DryRun marks a validation-only create: nothing was claimed or created.
+	DryRun bool `json:"dryRun,omitempty"`
 }
+
+// ErrProjectNotFound is returned (wrapped) by the Project Domain seam when the
+// tenant has no such app project, so the Auth App can answer 404 instead of
+// 500.
+var ErrProjectNotFound = errors.New("project not found")
 
 type createRequest struct {
 	Project string `json:"project"`

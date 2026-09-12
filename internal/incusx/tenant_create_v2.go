@@ -564,7 +564,7 @@ func ensureV2AppProfile(server TenantResourceServer, plan tenant.CreatePlanV2, p
 	desired := api.ProfilePut{
 		Description: "Sandcastle v2 default profile for " + plan.Tenant,
 		Config: api.ConfigMap{
-			"cloud-init.user-data": tenant.V2DefaultProfileUserData(plan.DefaultProfileUser, plan.SSHPublicKey, projectShort, plan.DNSSuffix, fmt.Sprintf("http://%s:%d", plan.DNSAddress, SidecarTLSSignPort)),
+			"cloud-init.user-data": tenant.V2ProfileUserData(plan.DefaultProfileUser, plan.SSHPublicKey, projectShort, plan.DNSSuffix, plan.ProjectDomain, fmt.Sprintf("http://%s:%d", plan.DNSAddress, SidecarTLSSignPort)),
 			meta.KeyKind:           "profile",
 			meta.KeyTenant:         plan.Tenant,
 			meta.KeyVersion:        "2",

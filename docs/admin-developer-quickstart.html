@@ -440,7 +440,9 @@ sc status</code></pre>
       <h3>5. Create or select a lightweight project</h3>
       <pre><code>sc project create website
 sc config set project website
-sc project status website</code></pre>
+sc project status website
+sc project create zp --domain baum.hase.de     <span class="comment"># optional: a Project Domain under a registered Public DNS Zone (step 3b)</span></code></pre>
+      <p>With <code>--domain</code> (or <code>sc project set-domain &lt;name&gt; &lt;domain&gt;</code> later) the project claims a Project Domain at least one label below a zone from step 3b; every machine created in it afterwards gets the public name <code>&lt;machine&gt;.&lt;domain&gt;</code>. The claim is install-wide and first-come: an overlap with any other claim, a Public Route hostname or the install's own names is refused with a verbatim reason, and <code>sc project status</code> shows <code>Domain: baum.hase.de   (zone hase.de)</code>. <code>unset-domain</code> and <code>set-domain</code> are refused while the project has machines with a public name. See <a href="usage.html#project-domains">Project Domains</a>.</p>
       <p>Docker is installed in the base machine image, but the daemon is disabled by default. Use <code>sc project set-docker-autostart website on</code> only for projects where new machines should start Docker automatically; this also enables nested container tooling for those machines. Otherwise developers can run <code>sudo systemctl start docker</code> inside an individual machine.</p>
 
       <h3>6. Verify (or re-attach) the tenant's tailnet membership</h3>

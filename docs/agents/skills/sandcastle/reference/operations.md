@@ -51,9 +51,38 @@ sc project status backend
 sc project delete backend --yes
 ```
 
-`sc project delete` requires the project to be empty. Per-project settings:
-`set-cloud-identity` / `unset-cloud-identity` (default Cloud Identity Config for
-new machines) and `set-docker-autostart <name> on|off`.
+`sc project delete` requires the project to be empty. After `sc login` it goes
+through the Auth App (`DELETE /api/projects/<name>`), which releases the
+project's Project Domain claim and deletes the Incus project with admin rights;
+without a login it deletes directly, which a restricted tenant certificate
+cannot. Per-project settings: `set-cloud-identity` / `unset-cloud-identity`
+(default Cloud Identity Config for new machines) and
+`set-docker-autostart <name> on|off`.
+
+### Project Domains (ADR-0027)
+
+```bash
+sc project create zp --domain baum.hase.de   # claim + create; the admin must have registered hase.de
+sc project set-domain zp baum.hase.de        # claim for an existing project, or replace its domain
+sc project unset-domain zp                   # release it; new machines are private again
+sc project status zp                         # Domain: baum.hase.de   (zone hase.de) + MACHINE/PUBLIC NAME/CERT table
+```
+
+- Every machine created in the project **after** the claim gets the Machine
+  Public Hostname `<machine>.<domain>`; machines created before keep their
+  private name. Naming Mode is per machine and never changes.
+- Claims are install-wide and first-come. Refusals are verbatim: a cross-tenant
+  overlap never names the owner (`… overlaps a domain already claimed on this
+  install; choose another`); a same-tenant overlap does (`… overlaps "<d>"
+  claimed by project "<p>" in this tenant`); a Public Route hostname or the
+  install's own names give `… is reserved by this install`; no zone gives
+  `no Public DNS Zone covers <domain> — ask your admin`; the apex gives `… is a
+  zone apex; claim at least one label below <zone>`.
+- `set-domain`/`unset-domain` are refused while the project has machines with a
+  public name (`project <p> has machines with a public name: …; delete them
+  before changing the project domain`). Re-claiming the same domain is a no-op.
+- The verbs need `sc login`; on a broker-only install they print `--domain is
+  not available on this install`. All take `--dry-run`.
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

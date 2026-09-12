@@ -118,6 +118,7 @@ func ExecuteAdmin(name string, args []string) int {
 	authAppTenants := incusx.NewTenantStoreForSharedRemote(sharedRemote)
 	authAppMachines := incusx.NewHostOverrideManagerForSharedRemote(sharedRemote)
 	authAppCreator := incusx.NewTenantCreator(adminConfig.Remote).WithVerbose(verbose, os.Stderr)
+	authAppDeleter := incusx.NewTenantDeleter(adminConfig.Remote).WithVerbose(verbose, os.Stderr)
 	authAppTrust := incusx.NewTrustManager(adminConfig.Remote)
 	authAppSSHKeys := incusx.NewMachineSSHKeyReconciler(adminConfig.Remote, authAppMachines)
 	authAppMetadataUpdater := incusx.TenantSSHKeyManager{Remote: adminConfig.Remote}
@@ -138,6 +139,7 @@ func ExecuteAdmin(name string, args []string) int {
 			authAppTenants = incusx.NewTenantStoreForServer(socketServer)
 			authAppMachines = incusx.NewHostOverrideManagerForServer(socketServer)
 			authAppCreator = incusx.NewTenantCreatorForServer(socketServer).WithVerbose(verbose, os.Stderr)
+			authAppDeleter = incusx.NewTenantDeleterForServer(socketServer).WithVerbose(verbose, os.Stderr)
 			authAppTrust = incusx.NewTrustManagerForServer(socketServer)
 			authAppSSHKeys = incusx.NewMachineSSHKeyReconcilerForServer(socketServer, authAppMachines)
 			authAppMetadataUpdater = incusx.NewTenantSSHKeyManagerForServer(socketServer)
@@ -223,6 +225,14 @@ func ExecuteAdmin(name string, args []string) int {
 				Creator: authAppCreator,
 				Trust:   authAppTrust,
 				Prefix:  adminConfig.IncusProjectPrefix,
+			},
+			// The Project Domain seam (ADR-0027): the same scaffolder, plus a
+			// deleter for the tenant-plane DELETE /api/projects/{name}.
+			ProjectDomains: incusx.ProjectBrokerCreator{
+				Creator: authAppCreator,
+				Trust:   authAppTrust,
+				Prefix:  adminConfig.IncusProjectPrefix,
+				Deleter: &authAppDeleter,
 			},
 			DNSEvents: func(ctx context.Context, notify func()) {
 				if authAppSocketServer == nil {

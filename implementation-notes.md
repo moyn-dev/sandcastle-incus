@@ -5045,3 +5045,117 @@ public API does not allow:
 ## 2026-09-12 — merge of slice 5 onto slice 2: one purpose-keyed secret helper
 
 Slices 2 and 5 were built in parallel and each added a "32-byte AES key per purpose in `auth_app_meta`" helper (`secretEncryptionKey` in `secrets.go`, `purposeEncryptionKey` in `machine_certificates.go`) under the same `machine_cert_key` meta key. Kept the slice-2 one, since Public DNS Zone tokens already use it, and made `machineCertEncryptionKey` delegate to it; the slice-5 copy and its private base64/rand helpers were deleted. No behavioural difference: same key derivation, same `ON CONFLICT DO NOTHING` first-use race handling.
+
+## 2026-09-12 — Public DNS Zones slice 3: Project Domain claims
+
+Spec `docs/spec/public-dns-zones.md` §1.3, §2.2, §3.2/§3.3, §4.6, §5.1, §9 item 3
+(issue #165; decision record on #158). Things the spec left to the implementer:
+
+- **`BEGIN IMMEDIATE` through a dedicated `*sql.Conn`.** `database/sql` cannot
+  pick SQLite's transaction mode (`db.BeginTx` always issues a plain `BEGIN`,
+  which is deferred), so `ClaimProjectDomain` takes `db.Conn(ctx)`, runs
+  `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` by hand, and scans + inserts on
+  that connection. Alternatives: a `_txlock=immediate` DSN parameter (would
+  make *every* transaction on the pool take the write lock up front, including
+  the log sink's) or trusting the PK alone (loses the classified error: a
+  descendant/ancestor overlap has no unique constraint to fire). A concurrency
+  test (8 goroutines, one domain) pins the "exactly one wins, the rest see a
+  `DomainClaimError`" property.
+- **Same project, different domain = replace.** The spec fixes the identical
+  re-claim as a no-op and says `set-domain` refuses only while zone-mode
+  Machines exist, but never says what a second `set-domain` with a *different*
+  domain does. `UNIQUE (tenant, project)` forbids two rows, so the claim
+  transaction deletes the project's own row and inserts the new one, skipping
+  the project's own row in the conflict scan. The previous claim is returned
+  so the handler can restore it (`restoreProjectDomainClaim`, best-effort) when
+  the Incus write fails — otherwise a failed `set-domain` would leave the
+  project domain-less in the DB while Incus still carried the old key.
+- **Route conflicts read as install-reserved, whoever owns the route.** §2.2
+  lists "an existing Public Route hostname" under the install-reserved text,
+  while §3.3's message-selection rule would have sent a same-tenant route to
+  the "claimed by project …" wording (which names a *project*, and a route has
+  a machine). The install-reserved text wins for every route, own or foreign;
+  `DomainClaimError.Class` still distinguishes `route` from `install` for
+  callers.
+- **`no-zone` before everything else, apex is a validation error.** Validation
+  (zone lookup, apex, length) runs *before* the transaction — it only reads
+  `public_dns_zones`, and refusing early keeps the write lock short. These are
+  `*ProjectDomainError` (400), distinct from `*DomainClaimError` (409). The
+  admin wording ("registered zones: …") is selected by `AdminView`, which the
+  handler sets from `user.SandcastleAdmin` — the spec ties it to the admin
+  *roots*, but no admin root claims domains today, so an admin logging in with
+  the user CLI is the closest reading.
+- **Malformed domains are 400 with the `domain` package's text.** `_`/`*`
+  labels get an explicit "labels may not start with" reason (the spec names
+  them; `validateDomainLabels` would have rejected them with the generic
+  "invalid project domain"). The CLI runs the same `NormalizeProjectDomain`
+  before calling, so the obviously malformed never leave the client.
+- **`POST /api/projects` with a domain for an already-claimed project is a
+  conflict, not a no-op.** The project cannot exist yet (create), so a row
+  for it is an orphan the GC would drop; the "already claimed" no-op is
+  `set-domain`'s.
+- **`--dry-run` on `sc project create`.** The spec asks for `--dry-run` on
+  every mutating verb; `create` never had one. It now validates the name and
+  (with `--domain`) the claim server-side in a rolled-back transaction, and
+  prints `[dry-run] would have: …`; on the broker path it prints the same
+  without contacting the broker.
+- **`set-domain`/`unset-domain` without a login print the create flag's
+  text**, `--domain is not available on this install`, rather than a third
+  sentence: the cause is identical (no Auth App to claim through) and the
+  spec fixed only that wording.
+- **`sc project status` reads the zone from the Auth App.** The zone is stored
+  on the claim row, not on Incus (§1.1 has no key for it), so `status` calls a
+  new `GET /api/projects/{name}/domain` best-effort when logged in and omits
+  `(zone …)` otherwise — the status never fails on it. The per-machine table
+  is rendered from the slice-1 `meta.Machine` fields; `DETAIL` carries the
+  `failed:<reason>` token (the raw `last_error` lives in slice 5's table and
+  is not surfaced yet).
+- **Private profiles are byte-identical, no `MODE=private`.** §5.1 says
+  private projects "add `MODE=private` (explicit …)", the issue says "private
+  projects unchanged, golden-tested". The issue wins: `V2ProfileUserData` with
+  an empty domain renders exactly what `V2DefaultProfileUserData` always did
+  (a test diffs the two), and every consumer defaults an absent `MODE` to
+  private — which §5.1 itself requires for pre-feature Machines anyway.
+  `V2DefaultProfileUserData` is kept as a wrapper so no caller changed.
+- **`--bare` and dev user-data untouched.** Both are rendered by `sc create`
+  (slice 4's surface) from the profile's `fqdn:` line, which a zone project
+  now renders as `{{ v1.local_hostname }}.<domain>` — so a bare machine in a
+  zone project already boots with the right name; the `MODE=zone` line in its
+  own `machine.env` comes with slice 4's create path.
+- **The Incus seam is one interface, `TenantProjectDomainManager`**, next to
+  the existing `TenantProjectCreator` rather than widening it: the broker
+  (`projectbroker.Handler`) shares `CreateTenantProject`, and a four-method
+  interface would have forced every broker fake to grow. `ProjectBrokerCreator`
+  implements both; `ProjectDomains` on `HTTPRunner`/`HandlerOptions` is wired
+  in `admin_root.go` with a `TenantDeleter` (new `NewTenantDeleterForServer`
+  for the socket path). A missing app project wraps
+  `projectbroker.ErrProjectNotFound` → 404.
+- **`DELETE /api/projects/{name}` deletes unconditionally.** The "project must
+  be empty" rule stays client-side (`tenant.PlanDeleteProject`), as it always
+  was for the direct path; the endpoint mirrors `sc-adm project delete`
+  (machines, volumes, profiles go). The `default` project is refused. Order:
+  claim row → `onProjectDomainReleased` → Incus; a failure after the release
+  is left to the GC, never rolled back.
+- **`onProjectDomainReleased` is the slice-6 hook.** A no-op today, called on
+  `DELETE …/domain`, `DELETE /api/projects/{name}` and from the GC with the
+  released claim; slice 6 fills in "delete every A record under the domain,
+  drop its `machine_certificates` rows".
+- **GC rides the existing 5-minute suffix loop**, reusing its tenant listing
+  (`tenant.ListForPrefix` summaries carry `Projects[].Domain` since slice 1);
+  the empty-live-set guard is the same. "Incus key without row" is logged
+  once per project+domain (in-loop `map`, reset on restart), never claimed.
+  `unset-domain` on such a project clears the key even with no row, so a
+  tenant can repair it without admin help.
+- **`sc project delete` prefers the endpoint and falls back on 501 only.** Any
+  other error from the Auth App (409 machines, network) is surfaced, not
+  retried against Incus — a restricted certificate would only produce a worse
+  error. The old "no project-delete endpoint yet" hint is gone.
+- **`sqlProjectDomainClaims` replaces slice 2's stub as the default.**
+  `HandlerOptions.ProjectDomainClaims` stays for tests; `noProjectDomainClaims`
+  stays only as the nil-safe fallback inside `checkPublicDNSZoneRemovable`.
+  The FK `zone REFERENCES public_dns_zones(zone)` is live (`foreign_keys(1)`
+  is in the DSN), so a zone with claims cannot be deleted at the DB level
+  either.
+- **e2e:** Phase 12 is added with 12a/12b (this slice's user-visible surface)
+  and a note that 12c–12f land with slices 4–7; the `unset-domain` step
+  records that it is *allowed* until slice 4 stamps the Naming Mode.

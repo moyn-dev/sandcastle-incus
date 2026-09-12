@@ -99,6 +99,9 @@ type HTTPRunner struct {
 	// Projects performs the privileged project scaffolding for the token-gated
 	// POST /api/projects — the tunnel-friendly tenant plane (no broker port).
 	Projects TenantProjectCreator
+	// ProjectDomains is the Incus seam for Project Domains (ADR-0027); see
+	// HandlerOptions.ProjectDomains.
+	ProjectDomains TenantProjectDomainManager
 	// DNSEvents, when set, is started once and subscribes to instance lifecycle
 	// events, calling notify() whenever tenant machine DNS may have changed —
 	// the event-driven half of ADR-0018's registration. It should block until
@@ -258,6 +261,7 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			ShareStore:                   r.ShareStore,
 			ShareReconciler:              r.ShareReconciler,
 			Projects:                     r.Projects,
+			ProjectDomains:               r.ProjectDomains,
 			DebugDeviceUser:              plan.DebugDeviceUser,
 			SimulateGitHubToken:          plan.SimulateGitHubToken,
 			TailscaleAuthKey:             plan.TailscaleAuthKey,
@@ -291,7 +295,9 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 	if r.Tenants != nil {
 		// Garbage-collect DNS-suffix claims orphaned by tenants deleted out-of-band
 		// (ADR-0020); `sc-adm tenant delete` runs against Incus and cannot reach the
-		// auth database, so a periodic reconcile is the cleanup path.
+		// auth database, so a periodic reconcile is the cleanup path. The same
+		// loop prunes Project Domain claims of projects deleted out-of-band
+		// (ADR-0027 §4.6).
 		go r.runSuffixClaimReconcileLoop(ctx, db, logger)
 	}
 	if r.Routes != nil && r.RouteCaddy != nil {
@@ -624,6 +630,17 @@ CREATE TABLE IF NOT EXISTS public_dns_zones (
     updated_at         TEXT NOT NULL
 );
 -- ── end Public DNS Zones slice 2 ───────────────────────────────────────────
+-- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 3: Project Domain claims ──
+CREATE TABLE IF NOT EXISTS project_domain_claims (
+    domain     TEXT PRIMARY KEY,                  -- normalized Project Domain
+    tenant     TEXT NOT NULL,
+    project    TEXT NOT NULL,                     -- short project name
+    zone       TEXT NOT NULL REFERENCES public_dns_zones(zone),
+    user_key   TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (tenant, project)                      -- one domain per project
+);
+-- ── end Public DNS Zones slice 3 ───────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS logs_user_ts ON logs(user_key, ts);
 CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);
 INSERT INTO auth_app_meta (key, value, updated_at)
@@ -850,9 +867,14 @@ type HandlerOptions struct {
 	// (ADR-0027). nil uses the real Cloudflare API; tests inject a fake.
 	CloudflareZones CloudflareZoneValidator
 	// ProjectDomainClaims answers which Project Domains are claimed under a
-	// zone (the remove refusal, the list CLAIMS column). nil means "none" until
-	// slice 3 lands the project_domain_claims table.
+	// zone (the remove refusal, the list CLAIMS column). nil uses the
+	// project_domain_claims table; tests inject a fake.
 	ProjectDomainClaims ProjectDomainClaimSource
+	// ProjectDomains is the Incus seam for Project Domains (ADR-0027): it
+	// stamps KeyV2Domain + re-renders the profile, lists zone-mode machines,
+	// creates a project with a domain and deletes a project. nil means the
+	// domain verbs answer 501 ("not available on this deployment").
+	ProjectDomains TenantProjectDomainManager
 }
 
 // TenantProjectCreator creates an app project for a tenant and extends the
@@ -909,6 +931,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		resourceCacheRenderer: handlerOptions.ResourceCacheMachineRenderer,
 		cloudflareZones:       handlerOptions.CloudflareZones,
 		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
+		projectDomains:        handlerOptions.ProjectDomains,
 	}
 	if app.githubClient == nil {
 		if app.simulateToken != "" {
@@ -935,6 +958,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/cloud-identities", app.cloudIdentitiesAPI)
 	mux.HandleFunc("/api/tenants", app.tenantsAPI)
 	mux.HandleFunc("/api/projects", app.projectsAPI)
+	mux.HandleFunc("/api/projects/", app.projectAPI)
 	mux.HandleFunc("/api/resources", app.resourcesAPI)
 	// Tenant Storage Shares are not yet supported on v2 (#70): the registry lives
 	// in a user-writable /workspace file a tenant can forge, so every share
@@ -1040,6 +1064,7 @@ type handler struct {
 	resourceCacheRenderer ResourceCacheMachineRenderer
 	cloudflareZones       CloudflareZoneValidator
 	projectDomainClaims   ProjectDomainClaimSource
+	projectDomains        TenantProjectDomainManager
 }
 
 // projectsAPI is the tunnel-friendly tenant plane for project creation
@@ -1060,9 +1085,7 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	var request struct {
-		Project string `json:"project"`
-	}
+	var request ProjectCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1070,6 +1093,13 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 	project := strings.TrimSpace(request.Project)
 	if err := naming.ValidateNewProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(request.Domain) != "" || request.DryRun {
+		// The Project Domain path (ADR-0027 §3.2): claim first, then create
+		// with KeyV2Domain in the same Incus request; JSON error bodies so the
+		// CLI prints the verbatim refusal.
+		h.projectCreateWithDomain(w, r, user, project, request)
 		return
 	}
 	clientCertificatePEM, _ := GetUserClientCertificate(r.Context(), h.db, user.UserKey)

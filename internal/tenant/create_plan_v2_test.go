@@ -757,3 +757,55 @@ func TestPlanCreateV2InitialProject(t *testing.T) {
 		t.Fatalf("err = %v, want a terminal provision error", err)
 	}
 }
+
+// ADR-0027 §5.1: a private project's profile is byte-identical to the
+// pre-feature rendering — MODE is absent and every consumer defaults it to
+// private, so pre-feature Machines and private projects share one contract.
+func TestV2ProfileUserDataPrivateProjectUnchanged(t *testing.T) {
+	legacy := V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "default", "acme", "http://10.0.0.3:9443")
+	private := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "default", "acme", "", "http://10.0.0.3:9443")
+	if legacy != private {
+		t.Fatalf("private project rendering drifted from the legacy profile:\n%s\n---\n%s", legacy, private)
+	}
+	if strings.Contains(private, "MODE=") {
+		t.Fatalf("private profile carries a MODE line:\n%s", private)
+	}
+	if !strings.Contains(private, "fqdn: {{ v1.local_hostname }}.default.acme\n") || !strings.Contains(private, "      FQDN={{ v1.local_hostname }}.default.acme\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n") {
+		t.Fatalf("private identity lines changed:\n%s", private)
+	}
+}
+
+// A zone project's profile names the machine <machine>.<Project Domain> and
+// hands caddy-setup MODE=zone; SIGNER stays for the Tenant CA trust step.
+func TestV2ProfileUserDataZoneProject(t *testing.T) {
+	data := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", " baum.hase.de ", "http://10.0.0.3:9443")
+	if !strings.HasPrefix(data, "## template: jinja\n#cloud-config\nfqdn: {{ v1.local_hostname }}.baum.hase.de\nprefer_fqdn_over_hostname: true\n") {
+		t.Fatalf("zone identity header:\n%s", data)
+	}
+	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.baum.hase.de\n      MODE=zone\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n"
+	if !strings.Contains(data, wantEnv) {
+		t.Fatalf("zone machine.env:\n%s", data)
+	}
+	if strings.Contains(data, "zp.acme") {
+		t.Fatalf("zone profile still carries the private name:\n%s", data)
+	}
+	// Everything else — shims, generalize, caddy-setup, runcmd — is the same
+	// as the private profile once the identity lines are swapped back.
+	private := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", "", "http://10.0.0.3:9443")
+	normalized := strings.ReplaceAll(strings.ReplaceAll(data, ".baum.hase.de", ".zp.acme"), "      MODE=zone\n", "")
+	if normalized != private {
+		t.Fatalf("zone profile differs beyond identity + MODE:\n%s\n---\n%s", normalized, private)
+	}
+}
+
+// A zone project without a signer (no sidecar address) still gets the zone
+// identity: the Project Domain alone selects the jinja header.
+func TestV2ProfileUserDataZoneProjectWithoutSigner(t *testing.T) {
+	data := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "", "", "baum.hase.de", "")
+	if !strings.HasPrefix(data, "## template: jinja\n#cloud-config\nfqdn: {{ v1.local_hostname }}.baum.hase.de\n") {
+		t.Fatalf("header:\n%s", data)
+	}
+	if strings.Contains(data, "machine.env") {
+		t.Fatalf("no-signer profile wrote machine.env:\n%s", data)
+	}
+}

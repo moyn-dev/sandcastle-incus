@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,22 +203,29 @@ func (c DeviceClient) DebugApprove(ctx context.Context, userCode string) error {
 }
 
 // CreateProject drives the token-gated POST /api/projects — the
-// tunnel-friendly tenant plane for project creation (no broker port).
-func (c DeviceClient) CreateProject(ctx context.Context, project string) (projectbroker.ProjectResult, error) {
-	body, _ := json.Marshal(map[string]string{"project": project})
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/api/projects"), bytes.NewReader(body))
+// tunnel-friendly tenant plane for project creation (no broker port). A
+// Project Domain refusal's `{error}` body (ADR-0027) is returned verbatim.
+func (c DeviceClient) CreateProject(ctx context.Context, request ProjectCreateRequest) (projectbroker.ProjectResult, error) {
+	body, _ := json.Marshal(request)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/api/projects"), bytes.NewReader(body))
 	if err != nil {
 		return projectbroker.ProjectResult{}, err
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.AuthToken))
-	response, err := c.client().Do(request)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.AuthToken))
+	response, err := c.client().Do(httpRequest)
 	if err != nil {
 		return projectbroker.ProjectResult{}, err
 	}
 	defer response.Body.Close()
 	payload, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode != http.StatusOK {
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(payload, &refusal) == nil && strings.TrimSpace(refusal.Error) != "" {
+			return projectbroker.ProjectResult{}, errors.New(refusal.Error)
+		}
 		return projectbroker.ProjectResult{}, fmt.Errorf("create project: %s: %s", response.Status, strings.TrimSpace(string(payload)))
 	}
 	var result projectbroker.ProjectResult
@@ -259,6 +267,45 @@ func (c DeviceClient) RequestMachineCertificate(ctx context.Context, request Mac
 		}
 	}
 	return MachineCertificateView{}, fmt.Errorf("request machine certificate: %s: %s", response.Status, strings.TrimSpace(string(payload)))
+}
+
+// GetProjectDomain reads GET /api/projects/{name}/domain (ADR-0027).
+func (c DeviceClient) GetProjectDomain(ctx context.Context, project string) (ProjectDomainResult, error) {
+	var result ProjectDomainResult
+	err := c.publicDNSZoneCall(ctx, http.MethodGet, "/api/projects/"+url.PathEscape(strings.TrimSpace(project))+"/domain", nil, &result)
+	return result, err
+}
+
+// SetProjectDomain drives PUT /api/projects/{name}/domain (`sc project
+// set-domain`); the refusal text comes back verbatim.
+func (c DeviceClient) SetProjectDomain(ctx context.Context, project, domain string, dryRun bool) (ProjectDomainResult, error) {
+	var result ProjectDomainResult
+	err := c.publicDNSZoneCall(ctx, http.MethodPut, "/api/projects/"+url.PathEscape(strings.TrimSpace(project))+"/domain", ProjectDomainRequest{Domain: domain, DryRun: dryRun}, &result)
+	return result, err
+}
+
+// UnsetProjectDomain drives DELETE /api/projects/{name}/domain (`sc project
+// unset-domain`).
+func (c DeviceClient) UnsetProjectDomain(ctx context.Context, project string, dryRun bool) (ProjectDomainResult, error) {
+	var result ProjectDomainResult
+	err := c.publicDNSZoneCall(ctx, http.MethodDelete, "/api/projects/"+url.PathEscape(strings.TrimSpace(project))+"/domain"+dryRunQuery(dryRun), nil, &result)
+	return result, err
+}
+
+// DeleteProject drives DELETE /api/projects/{name} (`sc project delete` on an
+// Auth App install): releases the Project Domain claim, then deletes the
+// Incus project.
+func (c DeviceClient) DeleteProject(ctx context.Context, project string, dryRun bool) (ProjectDomainResult, error) {
+	var result ProjectDomainResult
+	err := c.publicDNSZoneCall(ctx, http.MethodDelete, "/api/projects/"+url.PathEscape(strings.TrimSpace(project))+dryRunQuery(dryRun), nil, &result)
+	return result, err
+}
+
+func dryRunQuery(dryRun bool) string {
+	if dryRun {
+		return "?dryRun=1"
+	}
+	return ""
 }
 
 // UpdateSidecar asks the deployment to update the caller's own tenant

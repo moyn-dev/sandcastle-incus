@@ -2587,3 +2587,58 @@ API-key path — approval is a tenant action on the tenant's tailnet.)
 > reachable from the **VM host** (host routing to the tenant bridge), which is handy for
 > validation; but a *real* remote client depends on the approved subnet route, so that is
 > what this appendix tests.
+
+
+## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027) ⚠️ not yet run
+
+Gate: `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` and `SANDCASTLE_E2E_PUBLIC_DNS_ZONE` (a real
+test zone the token can edit); absent → the phase is **skipped, not failed**. Phases 12c–12f
+(machine contract, certificates, reconciler) land with slices 4–7 of the spec
+(`docs/spec/public-dns-zones.md` §7); 12a is the slice-2 zone registry, 12b the slice-3
+Project Domain claims.
+
+```bash
+# 12a — zone registry (admin)
+sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")
+sc-adm public-dns-zone list
+# PASS: the zone lists with a Cloudflare id and a token fingerprint; a second `add` fails with
+#       "already registered"; `add` with a garbage token fails with "Cloudflare rejected the token"
+#       and `list` is unchanged; `add sub.$ZONE` fails with "zones may not nest".
+
+# 12b — Project Domain claims (tenant, after sc login)
+sc project create zp --domain e2e-$RUN.$ZONE
+sc project status zp
+# PASS: `Domain: e2e-$RUN.$ZONE   (zone $ZONE)` (no machine table yet — the project is empty);
+#       `sc incus project get <prefix>-<tenant>-zp user.sandcastle.v2.domain` = e2e-$RUN.$ZONE;
+#       the project's default profile cloud-init carries `fqdn: {{ v1.local_hostname }}.e2e-$RUN.$ZONE`
+#       and `MODE=zone` in machine.env; `sc-adm public-dns-zone list` shows CLAIMS = 1.
+# PASS: a second tenant's `sc project create x --domain e2e-$RUN.$ZONE` and `--domain a.e2e-$RUN.$ZONE`
+#       both fail with the flat "overlaps a domain already claimed on this install; choose another" text
+#       (no owner named); the same tenant's `sc project create y --domain a.e2e-$RUN.$ZONE` fails with
+#       `overlaps "e2e-$RUN.$ZONE" claimed by project "zp" in this tenant`; `--domain $ZONE` fails with
+#       the apex text; `--domain e2e-$RUN.nosuch.example` fails with "no Public DNS Zone covers … — ask
+#       your admin"; `--domain <auth-hostname>` fails with "is reserved by this install".
+# PASS: `sc project set-domain zp e2e-$RUN.$ZONE` prints `project domain "e2e-$RUN.$ZONE" already
+#       claimed by this project` and exits 0; `sc project set-domain zp e2e-$RUN-2.$ZONE --dry-run`
+#       prints `[dry-run] would have: …` and `sc project status zp` is unchanged.
+# PASS: `sc route publish <machine> --hostname x.e2e-$RUN.$ZONE` (any private machine) fails with
+#       `route hostname "x.e2e-$RUN.$ZONE" is inside project domain "e2e-$RUN.$ZONE" claimed on this install`.
+sc create old --project zp    # slice 3 only: unstamped (= private) until slice 4 ships the Naming Mode stamp
+sc project unset-domain zp
+# PASS (slice 3): allowed — `old` has no public name — and `sc project status zp` reads `Domain: (none)`;
+#       the Incus key is gone and the profile is back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>`.
+#       From slice 4 on `old` is a zone-mode machine and this is REFUSED with
+#       "project zp has machines with a public name: old; delete them before changing the project domain".
+sc project set-domain zp e2e-$RUN.$ZONE
+sc-adm public-dns-zone remove $ZONE
+# PASS: refused, lists e2e-$RUN.$ZONE (<tenant>/zp).
+sc delete old --yes; sc project delete zp --yes
+# PASS: claim row gone (`sc-adm public-dns-zone list` CLAIMS = 0), the Incus project is gone,
+#       and `sc-adm public-dns-zone remove $ZONE` now succeeds.
+# PASS (GC): re-create `zp --domain e2e-$RUN.$ZONE`, then `sc-adm project delete <tenant> zp --yes`
+#       (out-of-band, Incus only); within 5 minutes the auth-app log shows
+#       "pruned orphaned project domain claim e2e-$RUN.$ZONE (<tenant>/zp)" and CLAIMS = 0.
+# PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on
+#       the same install — DNS:/HTTPS: lines byte-identical, CERT column `-`, and the default
+#       profile's cloud-init has no MODE line.
+```

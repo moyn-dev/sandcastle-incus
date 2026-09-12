@@ -160,7 +160,8 @@ func (h handler) routePublish(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		var conflict *RouteConflictError
-		if errors.As(err, &conflict) {
+		var inside *RouteInsideProjectDomainError
+		if errors.As(err, &conflict) || errors.As(err, &inside) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
