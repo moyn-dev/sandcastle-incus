@@ -170,4 +170,3 @@ func (v SCVolume) Device(pool string) map[string]string {
 	}
 	return device
 }
-

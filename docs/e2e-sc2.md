@@ -2592,10 +2592,12 @@ API-key path — approval is a tenant action on the tenant's tailnet.)
 ## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027) ⚠️ not yet run
 
 Gate: `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` and `SANDCASTLE_E2E_PUBLIC_DNS_ZONE` (a real
-test zone the token can edit); absent → the phase is **skipped, not failed**. Phases 12c–12f
-(machine contract, certificates, reconciler) land with slices 4–7 of the spec
-(`docs/spec/public-dns-zones.md` §7); 12a is the slice-2 zone registry, 12b the slice-3
-Project Domain claims.
+test zone the token can edit); absent → the phase is **skipped, not failed**. 12a is the
+slice-2 zone registry, 12b the slice-3 Project Domain claims, 12c the slice-4 machine
+contract (stamp, output, caddy-setup marker/drop-in, connect). The A record, the
+certificate push, drift and GC (spec §7's 12c timing criteria, 12d–12f) land with slices
+6–7 of the spec (`docs/spec/public-dns-zones.md` §7) — until then a zone-mode machine sits
+at `CERT pending` with Caddy enabled-inactive by design.
 
 ```bash
 # 12a — zone registry (admin)
@@ -2623,12 +2625,13 @@ sc project status zp
 #       prints `[dry-run] would have: …` and `sc project status zp` is unchanged.
 # PASS: `sc route publish <machine> --hostname x.e2e-$RUN.$ZONE` (any private machine) fails with
 #       `route hostname "x.e2e-$RUN.$ZONE" is inside project domain "e2e-$RUN.$ZONE" claimed on this install`.
-sc create old --project zp    # slice 3 only: unstamped (= private) until slice 4 ships the Naming Mode stamp
+sc create old --project zp
 sc project unset-domain zp
-# PASS (slice 3): allowed — `old` has no public name — and `sc project status zp` reads `Domain: (none)`;
-#       the Incus key is gone and the profile is back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>`.
-#       From slice 4 on `old` is a zone-mode machine and this is REFUSED with
+# PASS: REFUSED — `old` was stamped zone-mode at create —
 #       "project zp has machines with a public name: old; delete them before changing the project domain".
+sc delete old --yes; sc project unset-domain zp
+# PASS: allowed now, and `sc project status zp` reads `Domain: (none)`; the Incus key is gone and the
+#       profile is back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>` with no MODE line.
 sc project set-domain zp e2e-$RUN.$ZONE
 sc-adm public-dns-zone remove $ZONE
 # PASS: refused, lists e2e-$RUN.$ZONE (<tenant>/zp).
@@ -2641,4 +2644,44 @@ sc delete old --yes; sc project delete zp --yes
 # PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on
 #       the same install — DNS:/HTTPS: lines byte-identical, CERT column `-`, and the default
 #       profile's cloud-init has no MODE line.
+
+# 12c — zone-mode machine: the machine contract (slice 4; the A record and the certificate itself
+#       land with slice 6 — until then "pending" is the expected steady state, not a failure)
+sc create web --project zp
+# PASS: output has "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
+#       in place of the DNS: line (the IP: line stands alone above it), and returns without waiting;
+#       `sc create --dry-run` prints the same Public name line and makes no Auth App request;
+#       with the Auth App stopped the parenthesis reads
+#       "certificate pending: Auth App unreachable — retried by the reconciler" and the machine is still created.
+# PASS (stamp): `sc incus config get web user.sandcastle.v2.public-hostname` = web.e2e-$RUN.$ZONE, set by the
+#       create call itself (no second write); a machine created in a private project reads `private`;
+#       `sc ls` shows FQDN web.e2e-$RUN.$ZONE and CERT `pending`.
+# PASS (machine side, once cloud-init finished — `sc incus exec web -- cloud-init status --wait`):
+#   sc incus exec web -- cat /etc/sandcastle/caddy.ready          # → MODE=zone / FQDN=web.e2e-$RUN.$ZONE (0644)
+#   sc incus exec web -- cat /etc/systemd/system/caddy.service.d/sandcastle-zone.conf
+#       # → [Unit] + ConditionPathExists=/etc/sandcastle/tls/cert.pem + ConditionPathExists=/etc/sandcastle/tls/key.pem
+#   sc incus exec web -- systemctl is-enabled caddy                # → enabled
+#   sc incus exec web -- systemctl is-active caddy                 # → inactive (condition unmet; no crash loop, no restart counter)
+#   sc incus exec web -- ls /etc/sandcastle/tls                    # → empty: no leaf was fetched from the sidecar
+#   sc incus exec web -- test -s /usr/local/share/ca-certificates/sandcastle-tenant.crt   # → tenant CA still trusted
+#   sc incus exec web -- head -1 /etc/caddy/Caddyfile              # → "web.e2e-$RUN.$ZONE, *.web.e2e-$RUN.$ZONE {"
+#   sc restart web; sc incus exec web -- systemctl is-active caddy # → inactive, journal shows the ConditionPathExists skip
+# PASS (connect): `sc c web -- hostname -f` prints web.e2e-$RUN.$ZONE, the ssh line is
+#       `Connecting: ssh dev@<bridge-ip>`, and ~/.ssh/known_hosts gains ONE line keyed `web.e2e-$RUN.$ZONE`
+#       with the `# sandcastle:<remote>/<tenant>` marker — no web.zp.<suffix> line, no short alias;
+#       `sc ssh-key purge --dry-run` reports nothing to do for it. `dig web.zp.<suffix> @<sidecar-ip>` is NXDOMAIN.
+sc create --bare b1 --project zp
+# PASS: prints the Public name line and "HTTPS: https://b1.e2e-$RUN.$ZONE   (Let's Encrypt, certificate pending)";
+#       its cloud-init machine.env carries MODE=zone (`sc incus exec b1 -- cat /etc/sandcastle/machine.env`),
+#       and the marker/drop-in/enabled-inactive checks above hold for b1 too.
+sc create devbox --project zp --image <dev-alias>
+# PASS: prints "Public name: devbox.e2e-$RUN.$ZONE (A record pending; no Caddy — no certificate)" plus the
+#       usual "Dev Image: no Caddy/TLS ingress — SSH only." line; the instance is stamped with the public name,
+#       but has no /etc/sandcastle/caddy.ready and no caddy unit.
+sc project unset-domain zp
+# PASS: refused, lists web, b1, devbox (devbox too — it has a public name).
+# PASS (private-mode regression): in a project without a domain, `sc create`, `sc create --bare` and
+#       `sc create --image <dev-alias>` print the pre-ADR-0027 lines byte for byte, the machine is stamped
+#       `private`, /etc/sandcastle/caddy.ready reads MODE=private / FQDN=<m>.<p>.<suffix>, there is no
+#       sandcastle-zone.conf drop-in, and Caddy is active with the tenant-CA leaf as in Phase 8c.
 ```

@@ -83,6 +83,23 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   before changing the project domain`). Re-claiming the same domain is a no-op.
 - The verbs need `sc login`; on a broker-only install they print `--domain is
   not available on this install`. All take `--dry-run`.
+- `sc create` in a zone project stamps `user.sandcastle.v2.public-hostname`
+  (= `<machine>.<domain>`; `private` in a private project) on the instance in
+  the create call and prints `Public name: <m>.<d> (A record pending,
+  certificate pending — see: sc project status <p>)` instead of the `DNS:`
+  line; `--bare` adds `HTTPS: https://<m>.<d>   (Let's Encrypt, certificate
+  pending)`; a Dev Image machine prints `(A record pending; no Caddy — no
+  certificate)`. Read the mode back with `sc ls` (FQDN + CERT columns) or
+  `sc incus config get <m> user.sandcastle.v2.public-hostname` — never guess it
+  from the project's current domain.
+- On the machine, `caddy-setup` (payload, `MODE=zone` from
+  `/etc/sandcastle/machine.env`) skips the sidecar leaf, writes the Caddyfile for
+  `<m>.<d>, *.<m>.<d>` against `/etc/sandcastle/tls/{cert,key}.pem`, adds a
+  `ConditionPathExists=` drop-in, enables Caddy, and writes the Caddy Setup
+  Marker `/etc/sandcastle/caddy.ready` (`MODE=`/`FQDN=`) last. Caddy stays
+  enabled-inactive until the Auth App pushes the certificate.
+- `sc connect` dials the bridge IP but keys `known_hosts` by the public name
+  (`HostKeyAlias=<m>.<d>`); a zone machine has no private name or short alias.
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

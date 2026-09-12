@@ -92,6 +92,42 @@ dig +short <machine>.<suffix>          @<tenant-cidr>.3
 - Nothing resolves at all → the sidecar or its tailnet route is down. Check
   `sc tailscale status`.
 
+## A zone-mode machine shows `CERT pending`, Caddy is inactive, or HTTPS refuses
+
+A machine in a project with a Project Domain (`sc ls` FQDN `<m>.<domain>`)
+gets its certificate **pushed by the Auth App**, not fetched at boot. Until
+that push, `pending` and an inactive Caddy are the designed state, not a fault
+— and on an install whose Auth App does not run the certificate reconciler yet
+(spec slices 6–7 not deployed), they are the *permanent* state: nothing on the
+machine is wrong.
+
+```bash
+sc ls                                                   # FQDN <m>.<domain>, CERT pending|ok|failed
+sc project status <project>                             # per-machine PUBLIC NAME / CERT / NOT AFTER / DETAIL
+sc incus config get <m> user.sandcastle.v2.public-hostname   # the Naming Mode record (never changes)
+sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: MODE=zone / FQDN=<m>.<domain>
+sc incus exec <m> -- systemctl is-enabled caddy         # enabled
+sc incus exec <m> -- systemctl is-active caddy          # inactive until the first push, then active
+sc incus exec <m> -- ls /etc/sandcastle/tls             # empty until the push; cert.pem + key.pem after
+```
+
+- **Marker missing** (`cat` fails) — cloud-init has not finished
+  (`sc incus exec <m> -- cloud-init status --wait`), the machine is a Dev Image
+  machine (no Caddy, no certificate — by design), or `caddy-setup` failed
+  (`sc incus exec <m> -- journalctl -u cloud-final`). The Auth App never pushes
+  without a marker naming the expected public hostname.
+- **Marker says `MODE=private`** — the machine was created before the domain
+  was claimed. Naming Mode is fixed at creation; recreate the machine.
+- **Caddy `inactive` with the marker present** — expected before the push: the
+  `sandcastle-zone.conf` drop-in makes the start conditional on the certificate
+  files (`systemctl status caddy` shows the `ConditionPathExists` skip, no crash
+  loop). `sc restart <m>` is safe and leaves it inactive again.
+- **`CERT failed`** — `sc project status <project>` DETAIL carries the reason
+  (`rate-limited`, `dns`, …); the reconciler retries with backoff.
+- **Private-mode siblings unreachable over HTTPS from the zone machine** — they
+  should not be: `caddy-setup` still installs the Tenant CA in zone mode. Check
+  `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists.
+
 ## A published route is `awaiting-dns` or serves no certificate
 
 ```bash

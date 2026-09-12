@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lxc/incus/v6/shared/api"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 )
 
 // hostKeyFiles are the sshd public host keys we try, in descending order of
@@ -108,6 +109,10 @@ func (c TenantCreator) MachineSubnetV2(ctx context.Context, incusProject string,
 type V2MachineRef struct {
 	Project string // short project name, e.g. "default"
 	Name    string
+	// PublicHostname is the machine's Naming Mode record (ADR-0027) read off
+	// its own instance config: the Machine Public Hostname, or "" for a
+	// private-mode (or unstamped) machine.
+	PublicHostname string
 }
 
 // ListMachinesV2 returns every live machine across all of a tenant's app
@@ -132,12 +137,16 @@ func (c TenantCreator) ListMachinesV2(ctx context.Context, infraProject string) 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		instances, err := server.UseProject(incusProject).GetInstanceNames(api.InstanceTypeAny)
+		instances, err := server.UseProject(incusProject).GetInstances(api.InstanceTypeAny)
 		if err != nil {
 			return nil, fmt.Errorf("list machines in project %s: %w", incusProject, err)
 		}
 		for _, instance := range instances {
-			machines = append(machines, V2MachineRef{Project: short, Name: instance})
+			machines = append(machines, V2MachineRef{
+				Project:        short,
+				Name:           instance.Name,
+				PublicHostname: meta.PublicHostnameFromConfig(instance.Config),
+			})
 		}
 	}
 	return machines, nil

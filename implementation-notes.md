@@ -5163,3 +5163,62 @@ Spec `docs/spec/public-dns-zones.md` §1.3, §2.2, §3.2/§3.3, §4.6, §5.1, §
 ## 2026-09-12 — merge of slice 3 onto slices 2+5: two seams called `ProjectDomains`
 
 Slice 5 (built before slice 3 existed) added `HTTPRunner.ProjectDomains` typed `ProjectDomainResolver` (the "which domain does this project have" lookup for `POST /api/machine-certificates`, left nil → 501). Slice 3 added a same-named field typed `TenantProjectDomainManager` (the Incus seam that writes `KeyV2Domain` and re-renders the profile). Textually the merge was clean; semantically it was a redeclaration. Resolution: the resolver seam is renamed `ProjectDomainResolver` / `projectDomainResolver`, and it now defaults to `sqlProjectDomainClaims` (which gained `ResolveProjectDomain` over `GetProjectDomainClaim`) whenever the handler has a database — so the 501 "no claims yet" path is gone and the machine-certificates endpoint answers 404 for a project without a domain. The test fake was renamed `fakeProjectDomainResolver` to avoid clashing with slice 3's `fakeProjectDomains`.
+
+## 2026-09-12 — Public DNS Zones slice 4: the machine contract
+
+Spec `docs/spec/public-dns-zones.md` §2.3, §5, §9 item 4 (issue #166; decision
+record on #159). Things the spec left to the implementer:
+
+- **The Caddyfile heredoc is its own constant** (`caddyfileHeredoc`), spliced
+  into `caddyIngressSetupScript`, so a test can pin it byte for byte against
+  the pre-slice-4 text. The script itself necessarily changes (the payload
+  version bumps once, as any payload edit does); what "private mode unchanged"
+  means here is the *behaviour* — leaf fetch, Caddyfile, override.conf, marker
+  aside, `systemctl restart` — and `TestCaddySetupPrivateMode` runs the real
+  script under bash with stubbed tools against a throwaway root to prove it.
+  The absolute paths are rebased textually for that run; the drop-in content
+  is compared in rebased form for the same reason.
+- **The private marker is written too.** §5.3 only needs the marker in zone
+  mode, but §5.2's script writes it unconditionally and it costs nothing; a
+  `MODE=private` marker is "no marker" for the push gate
+  (`CaddySetupMarker.ReadyFor`) and is a useful diagnostic on the machine.
+  `tenant.ParseCaddySetupMarker` / `ReadyFor` are provided for slice 6 so the
+  gate semantics (§4.4 step 1: parse failure, missing MODE, MODE=private, FQDN
+  mismatch → no marker) live next to the writer.
+- **`--bare` takes its MODE from the profile, not from the request.** The
+  bare document already reads the FQDN domain and signer back off the
+  project's default profile so a bare machine can never disagree with its
+  siblings; the `MODE=zone` line follows the same rule
+  (`v2ProfileModePattern` → `V2BareUserDataForMode`). The Naming Mode *stamp*
+  comes from the CLI's request (the tenant summary's `Domain`), as §2.3 says.
+  Both derive from `KeyV2Domain` and are written by the same Auth App
+  transaction, so they agree except across a stale profile — which
+  `set-domain` re-rendering already rules out. Dev Image machines run no
+  caddy-setup at all, so their cloud-init is untouched: public name stamp, no
+  marker, no certificate.
+- **The stamp is read back, not recomputed.** `CreateMachineV2Result` /
+  `EnsureMachineV2Result` / `V2MachineRef` all carry `PublicHostname` from the
+  instance (or from the request when the call created it), and the create
+  output, the certificate request and `sc connect`'s `HostKeyAlias` use that.
+  `zoneModePublicHostname` is now called exactly once per create (and once
+  in `dialV2Machine`, only for the ensure-creates case). `meta.KeyV2PublicHostname`
+  is used directly in `incusx`, like `meta.KeyV2Bare` — the `keyV2…` mirror
+  block is for infra-project keys.
+- **`ListMachinesV2` switched from `GetInstanceNames` to `GetInstances`** so
+  the purge sees each machine's Naming Mode record in one call per project
+  instead of one `GetInstance` per machine; `TenantResourceServer` gained
+  `GetInstances` (the two fakes embed the interface, so nothing else moved).
+- **Zone-mode `IP:` line stands alone.** Private mode prints
+  `IP: <ip>   DNS: … (auto-registers within seconds)` on one line; the zone
+  `Public name:` line is long and carries the certificate detail, so it gets
+  its own line under `IP: <ip>`. The still-booting and `--dry-run` forms
+  already had the name on its own line. A zone machine in the default project
+  shows no `(also: <m>.<suffix>)` alias — it has exactly one name.
+- **The certificate request runs in every output mode**, not text only as
+  slice 5 had it: creating the `machine_certificates` row is part of the
+  create, not of the rendering. `--json` carries `publicHostname`; the
+  outcome text is text-mode only. `--dry-run` never calls the Auth App and
+  prints the default pending text whatever a caller hands the formatter.
+- **e2e:** Phase 12c is written for what slice 4 can show (stamp, output,
+  marker, drop-in, enabled-inactive Caddy, connect keyed by the public name);
+  the A-record / certificate timing criteria and 12d–12f stay for slices 6–7.

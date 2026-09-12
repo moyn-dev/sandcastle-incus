@@ -162,4 +162,5 @@ carry the semantics and gotchas `--help` does not.
 - **`reference/internals.md`** — naming rules, Incus project and bridge layout,
   files on disk, environment variables, and JSON output shapes.
 - **`reference/troubleshooting.md`** — symptom → diagnosis → fix for connect,
-  DNS, tailnet, route, login, and listing failures.
+  DNS, tailnet, route, login, listing failures, and a zone-mode machine stuck
+  at `CERT pending` (expected before the certificate push).

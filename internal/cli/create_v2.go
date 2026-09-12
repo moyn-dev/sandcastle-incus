@@ -322,39 +322,39 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 	// HTTPS) — detected by the --image the machine launches from matching the
 	// admin-configured Dev Image alias, the only signal available here.
 	devImage := image == strings.TrimSpace(config.adminConfig.Images.Dev)
+	// Naming Mode (ADR-0027 §2.3): the project's Project Domain in the tenant
+	// summary decides it, once, here — the create call stamps it on the
+	// instance and everything downstream (output, certificate request,
+	// connect) reads the stamped value back rather than re-deriving it.
+	publicHostname := zoneModePublicHostname(summary, project, machine)
 	request := incusx.CreateMachineV2Request{
-		IncusProject: summary.V2IncusProjectName(project),
-		Name:         machine,
-		Image:        image,
-		VM:           options.VM,
-		HomeShare:    options.HomeShare,
-		Bare:         options.Bare,
-		DevImage:     devImage,
+		IncusProject:   summary.V2IncusProjectName(project),
+		Name:           machine,
+		Image:          image,
+		VM:             options.VM,
+		HomeShare:      options.HomeShare,
+		Bare:           options.Bare,
+		DevImage:       devImage,
+		PublicHostname: publicHostname,
 	}
 	if options.DryRun {
-		payload := incusx.CreateMachineV2Result{Name: machine, Type: machineTypeLabel(options.VM), Project: request.IncusProject, Image: image, HomeShare: options.HomeShare, Bare: options.Bare, DevImage: request.DevImage}
-		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, payload, true), payload)
+		payload := incusx.CreateMachineV2Result{Name: machine, Type: machineTypeLabel(options.VM), Project: request.IncusProject, Image: image, HomeShare: options.HomeShare, Bare: options.Bare, DevImage: request.DevImage && !options.Bare, PublicHostname: publicHostname}
+		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, payload, true, machineCertificateOutcome{}), payload)
 	}
 	result, err := config.tenantCreator.CreateMachineV2(ctx, request)
 	if err != nil {
 		return err
 	}
-	if err := writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false), result); err != nil {
-		return err
+	// Zone-mode machine: now that the instance exists, ask the Auth App to
+	// order its Machine Certificate — after the create, with a short timeout,
+	// never failing the create. Dev Image machines get no Caddy and therefore
+	// no certificate. Private-mode projects skip this entirely; their output
+	// is unchanged.
+	var outcome machineCertificateOutcome
+	if result.PublicHostname != "" && !result.DevImage {
+		outcome = requestMachineCertificate(ctx, config, summary.Tenant, project, machine)
 	}
-	// Zone-mode machine (ADR-0027): now that the instance exists, ask the Auth
-	// App to order its Machine Certificate — after the create, with a short
-	// timeout, never failing the create. Dev Image machines get no Caddy and
-	// therefore no certificate. Private-mode projects (no Project Domain) skip
-	// this entirely; their output above is unchanged.
-	if publicHostname := zoneModePublicHostname(summary, project, machine); publicHostname != "" && opts.output == outputText {
-		var outcome machineCertificateOutcome
-		if !request.DevImage {
-			outcome = requestMachineCertificate(ctx, config, summary.Tenant, project, machine)
-		}
-		fmt.Fprintln(config.stdout, formatPublicNameLine(publicHostname, project, request.DevImage, outcome))
-	}
-	return nil
+	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false, outcome), result)
 }
 
 // runConnectV2 implements `sc connect` (alias `c`) for v2 tenants: create the
@@ -468,6 +468,9 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 		Image:        v2DefaultMachineImage,
 		VM:           vm,
 		HomeShare:    launch.HomeShare,
+		// Only used when the ensure has to create: the Naming Mode a machine
+		// born here gets, decided exactly like `sc create` decides it.
+		PublicHostname: zoneModePublicHostname(summary, project, machineName),
 	}
 	if confirm := launch.ConfirmCreate; confirm != nil {
 		request.ConfirmCreate = func() error { return confirm(project, machineName) }
@@ -532,10 +535,11 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	// Names are stable; private IPs are recycled leases. With the true key
 	// already on disk we can demand StrictHostKeyChecking=yes, so a rebuilt
 	// machine never trips the MITM warning and a real impostor always does.
-	// The live connect path does not read the Naming Mode record off the
-	// instance yet (ADR-0027: `sc create` and connect are wired in a later
-	// slice); until then every machine it dials is private-mode.
-	const publicHostname = ""
+	// A zone-mode machine (ADR-0027) answers at its Machine Public Hostname
+	// only — the ensure read that record off the instance — so that is the
+	// name known_hosts is keyed by and HostKeyAlias checks against, while the
+	// dial still goes to the tenant-bridge IP.
+	publicHostname := ensured.PublicHostname
 	names := v2MachineNames(summary, project, machineName, publicHostname)
 	sshArgs := []string{"-o", "IdentitiesOnly=yes", "-i", privateKeyPath}
 	if len(names) > 0 && ensureV2HostKey(ctx, config, summary, project, machineName, publicHostname, ensured.PrivateIP, ensured.PrivateCIDR) {
@@ -601,7 +605,14 @@ func machineTypeLabel(vm bool) string {
 	return "container"
 }
 
-func formatCreateMachineV2(summary tenant.Summary, project string, result incusx.CreateMachineV2Result, dryRun bool) string {
+// formatCreateMachineV2 renders `sc create`'s text output. The Naming Mode
+// (ADR-0027 §2.3) is read off result.PublicHostname — the value stamped on
+// the instance. A private-mode machine (empty) renders exactly what it
+// always did; a zone-mode machine replaces the DNS: line with the "Public
+// name:" line (rendered from the create-time certificate outcome), and a
+// bare zone machine's HTTPS: line names Let's Encrypt instead of the
+// tenant-CA leaf. outcome is ignored for private mode and for --dry-run.
+func formatCreateMachineV2(summary tenant.Summary, project string, result incusx.CreateMachineV2Result, dryRun bool, outcome machineCertificateOutcome) string {
 	var builder strings.Builder
 	verb := "created"
 	if dryRun {
@@ -616,14 +627,32 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		fmt.Fprintf(&builder, "Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n")
 	}
 	// Canonical Machine Private Hostname; the default project also answers at
-	// the short alias (ADR-0018).
+	// the short alias (ADR-0018). A zone-mode machine has neither: its one
+	// name is the Machine Public Hostname.
+	zone := strings.TrimSpace(result.PublicHostname) != ""
 	canonical := result.Name + "." + project + "." + summary.DNSSuffix
 	fqdn := canonical
 	if project == naming.DefaultProjectName {
 		fqdn += " (also: " + result.Name + "." + summary.DNSSuffix + ")"
 	}
+	// nameLine is the line that tells the user how the machine will be
+	// reached by name: DNS: for private mode, Public name: for zone mode.
+	// --dry-run makes no certificate request, so its line carries the
+	// default "pending" detail.
+	nameLine := func(booted bool) string {
+		if zone {
+			if dryRun {
+				return formatPublicNameLine(result.PublicHostname, project, result.DevImage, machineCertificateOutcome{})
+			}
+			return formatPublicNameLine(result.PublicHostname, project, result.DevImage, outcome)
+		}
+		if booted {
+			return "DNS: " + fqdn + " (auto-registers within seconds)"
+		}
+		return "DNS: " + fqdn + " (auto-registers after boot)"
+	}
 	if dryRun {
-		fmt.Fprintf(&builder, "DNS: %s (auto-registers after boot)", fqdn)
+		builder.WriteString(nameLine(false))
 		if result.Bare {
 			fmt.Fprintf(&builder, "\nBare: no login user, no SSH key, no sshd — HTTPS only.")
 		}
@@ -632,16 +661,23 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		}
 		return builder.String()
 	}
-	if result.PrivateIP != "" {
-		fmt.Fprintf(&builder, "IP: %s   DNS: %s (auto-registers within seconds)\n", result.PrivateIP, fqdn)
-	} else {
+	switch {
+	case result.PrivateIP != "" && zone:
+		fmt.Fprintf(&builder, "IP: %s\n%s\n", result.PrivateIP, nameLine(true))
+	case result.PrivateIP != "":
+		fmt.Fprintf(&builder, "IP: %s   %s\n", result.PrivateIP, nameLine(true))
+	default:
 		fmt.Fprintf(&builder, "Still booting — no IP leased yet. Watch it with: sc list\n")
-		fmt.Fprintf(&builder, "DNS: %s (auto-registers after boot)\n", fqdn)
+		fmt.Fprintf(&builder, "%s\n", nameLine(false))
 	}
 	// A bare machine has no user to ssh as, so the usual SSH advice would be a
 	// dead end. Point at the two things it does offer instead.
 	if result.Bare {
-		fmt.Fprintf(&builder, "HTTPS: https://%s   (Caddy with the tenant-CA leaf, proxying to localhost:3000)\n", canonical)
+		if zone {
+			fmt.Fprintf(&builder, "HTTPS: https://%s   (Let's Encrypt, certificate pending)\n", result.PublicHostname)
+		} else {
+			fmt.Fprintf(&builder, "HTTPS: https://%s   (Caddy with the tenant-CA leaf, proxying to localhost:3000)\n", canonical)
+		}
 		fmt.Fprintf(&builder, "Bare: no login user, no sshd — `sc connect` will not work; get a shell with: sc incus exec %s -- /bin/sh", result.Name)
 		return builder.String()
 	}
