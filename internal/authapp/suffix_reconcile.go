@@ -3,6 +3,7 @@ package authapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -73,11 +74,17 @@ func (r HTTPRunner) reconcileProjectDomainClaimsOnce(ctx context.Context, db *sq
 		return nil, nil, fmt.Errorf("list tenants for project domain reconcile: %w", err)
 	}
 	liveProjects, liveDomains := liveProjectDomains(summaries)
+	var releaseErrs []error
 	dropped, err := ReconcileProjectDomainClaims(ctx, db, liveProjects, func(ctx context.Context, claim ProjectDomainClaim) {
-		onProjectDomainReleased(ctx, db, claim)
+		if rerr := onProjectDomainReleased(ctx, db, claim); rerr != nil {
+			releaseErrs = append(releaseErrs, fmt.Errorf("release %s: %w", claim.Domain, rerr))
+		}
 	})
 	if err != nil {
 		return dropped, nil, err
+	}
+	if len(releaseErrs) > 0 {
+		return dropped, nil, errors.Join(releaseErrs...)
 	}
 	unclaimed, err := UnclaimedProjectDomains(ctx, db, liveDomains)
 	if err != nil {

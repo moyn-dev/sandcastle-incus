@@ -5222,3 +5222,104 @@ record on #159). Things the spec left to the implementer:
 - **e2e:** Phase 12c is written for what slice 4 can show (stamp, output,
   marker, drop-in, enabled-inactive Caddy, connect keyed by the public name);
   the A-record / certificate timing criteria and 12d–12f stay for slices 6–7.
+
+## 2026-09-12 — Public DNS Zones slice 6: the zone reconciler
+
+Spec `docs/spec/public-dns-zones.md` §4 (+ §1.5, §3.5, §4.6), §9 item 6
+(issue #168; decision records on #157 and #159). Things the spec left to the
+implementer, and one thing it asks for that the library does not allow:
+
+- **ARI renewals go through `certmagic.ACMEIssuer.Issue` without the ACME
+  `replaces` field.** Slice 5 found the `Replaces` context key
+  (`ctxKeyARIReplaces`) unexported; the alternative was dropping to
+  `acmez.Client.ObtainCertificate` with `OrderParameters.Replaces` for
+  renewals. Rejected: it would mean re-implementing certmagic's account
+  lookup/registration over `acme_storage` (the account is certmagic's,
+  loaded by an unexported path), the DNS-01 solver wiring and the
+  propagation wait — a second issuance path that only runs at renewal time,
+  i.e. the least-exercised code in the system. It would also not have worked
+  as a certmagic feature anyway: certmagic only sends `replaces` when
+  `!usingTestCA`, and slice 5 pins `TestCA = CA`, so even certmagic's own
+  renew path suppresses it under our configuration. Cost of the decision:
+  ARI-timed renewals are *not* exempt from Let's Encrypt's
+  5-per-identifier-set/week duplicate limit (the exemption requires
+  `replaces`); a Machine renews once per ~60 days, so the limit is
+  unreachable through renewals — the budget consumer is delete/recreate,
+  which the retained row (§4.6) already defuses. `RenewalInfo` is still used
+  for *timing*, so the "renew when the CA asks" property holds. If certmagic
+  exports the key (or gains a `Replaces` field on `Issue`), the change is one
+  `context.WithValue` in `acmeIssuer.Issue` plus a "renewal of" parameter on
+  `certIssuer.Issue`; noted in `docs/usage.html`.
+- **Package split: logic in `authapp`, Incus in `incusx`.** `incusx` imports
+  `authapp`, not the reverse, so `zone_reconcile.go` in `authapp` holds the
+  whole pass behind a four-method `ZoneMachineServer` seam (`ListZoneMachines`,
+  `StampInstanceConfig`, `ReadInstanceFile`, `PushMachineCertificate`) that
+  `incusx.ZoneMachineServer` implements over the mounted socket; the DNS side
+  is a `zoneDNSProvider` (three libdns interfaces) built by a package-level
+  factory so tests never touch Cloudflare (`init()` in the test file replaces
+  the factory for the whole package — the release hook runs in existing
+  handler tests too). The `V2DNSReconciler` in `dns_v2.go` is untouched: the
+  spec's "private stage skips zone-mode Machines" is already true because a
+  zone Machine's private name is never rendered (slice 4), and threading the
+  zone stage into that function would have coupled two reconcilers with
+  different failure modes.
+- **One loop, not two.** The zone stage runs inside `runDNSReconcileLoop`
+  after `DNSReconcile`, sharing the 30 s ticker and the lifecycle-event
+  trigger (that is what makes `instance-started` push within seconds). A
+  finished order — success *or* failure — kicks the same trigger, so the
+  push (or the `failed:` mirror) never waits for the ticker; the loop now
+  also starts when only the zone stage is configured.
+- **Provider per pass, not per zone lifetime.** `libdns/cloudflare` caches
+  the zone id inside the `Provider`; building a fresh one per pass and zone
+  (one `GetRecords` each) means a rotated token (`set-token`) is live on the
+  next pass with no cache invalidation hook. The TXT sweep runs inside the
+  order goroutine with its own zone read: orders outlive the pass, and a
+  stale snapshot could miss a challenge record certmagic wrote meanwhile.
+- **Records under a claimed domain are the reconciler's, nothing else is.**
+  Stale-record deletion is scoped to A records whose relative name ends in
+  `.<claimed domain>` and whose Machine label is not live; anything else in
+  the zone (the admin's own `www`, other tenants' domains) is never read as
+  "stale". A stopped Machine has no lease, so its records are *kept*, not
+  re-set; a deleted Machine's two records go on the next pass.
+- **Unclaimed `KeyV2Domain` → nothing stamped.** §1.1 says the reconciler
+  stamps `private` on unstamped Machines in a project *without* a domain;
+  §4.6 says a project with the key but no claim is "treated as private for
+  DNS". Stamping is irreversible, and the tenant can still repair such a
+  project with `set-domain`, so its unstamped Machines are left unstamped
+  (logged once per project); a claim and key that disagree are handled the
+  same way.
+- **Drift = leaf fingerprint OR file content.** §4.5 compares the leaf
+  sha256; e2e 12e appends junk to `cert.pem` and expects a re-push, which a
+  leaf comparison alone would not notice (the first PEM block still parses).
+  Both are compared; a missing file on a *running* Machine is drift too
+  (`ErrInstanceFileNotFound`, the incusx seam maps Incus 404 onto it), which
+  is how a Freeform Machine rebuilt under a retained row gets its
+  certificate without an API call that clears `pushed_serial`. Any other
+  read error is "unreachable": skipped, retried next pass.
+- **`systemctl start caddy` only on the first push.** The push script is the
+  spec's `mv && mv && (reload || restart)`; `restart` already starts an
+  inactive unit, but the issue asks for an explicit `start` on the first
+  push, so it is appended when the row had no `pushed_serial` *before* the
+  pass (a drift re-push clears the serial and must not read as first).
+- **Mirror `cert-not-after` for `issued` keeps the previous value.** A renewed
+  but not yet pushed row is `issued` while the old certificate still serves;
+  clearing the expiry would flicker `sc project status`. The key is written
+  from the row only when `pushed_serial == serial`.
+- **GC in the fast pass, not the 5-minute loop.** Row GC is one `SELECT` over
+  a small table and needs the live fleet, which the pass already has; it runs
+  every pass under the same "empty fleet is never trusted" guard. Rules:
+  a row whose Machine is gone is dropped when it holds nothing worth
+  retaining (never issued, expired, or issued under another directory);
+  a valid retained row waits for its Machine. `onProjectDomainReleased`
+  (slice 3's hook) now returns an error: it drops every row under the domain
+  (`hostname LIKE '%.<domain>'`, escaped) *before* deleting the A and
+  `_acme-challenge` records, so a Cloudflare outage cannot leave
+  certificates behind a released claim; callers log the error.
+- **Rate limit → last backoff step by setting `attempts = 5`**, so the
+  ladder index lands on 6 h without a second field; the fixed-vocabulary
+  classifier (`acmeFailureReason`) decides "rate-limited" from the raw error.
+- **Not done here:** `sc project status` DETAIL still shows only the reason
+  token (the raw `last_error` is on the row, surfaced via the skill's
+  `sqlite3` recipe); the e2e phase's `sqlite3` steps assume the client is
+  present on the appliance image. Slice 7 owns the e2e run and the
+  `make e2e-safe` gate wiring for `SANDCASTLE_E2E_CLOUDFLARE_TOKEN`.

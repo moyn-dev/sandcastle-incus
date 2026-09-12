@@ -110,6 +110,10 @@ type HTTPRunner struct {
 	// DNSReconcile, when set, is invoked periodically to register tenant machine
 	// DNS records (auto-registration of freeform `incus launch` machines).
 	DNSReconcile func(context.Context) error
+	// ZoneMachines, when set (the serving appliance with the mounted socket),
+	// is the Incus seam of the Public DNS Zone reconciler (ADR-0027 §4): it
+	// runs as the zone stage of the same DNS loop, after DNSReconcile.
+	ZoneMachines ZoneMachineServer
 	// Routes, when set (ACME-ingress installs only), is the Incus seam for Public
 	// Routes: per-Route proxy devices + Machine state. Its presence is what makes
 	// `sc route` available on this install.
@@ -284,8 +288,21 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	if r.DNSReconcile != nil {
-		go r.runDNSReconcileLoop(ctx, logger)
+	// The zone stage (ADR-0027 §4) rides the DNS loop: same ticker, same
+	// lifecycle-event trigger, so instance-started pushes a certificate
+	// within seconds. The certmagic issuer is built here because only Serve
+	// holds the database the zone tokens are decrypted from.
+	var zones *zoneReconciler
+	if r.ZoneMachines != nil {
+		issuer := newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
+			return PublicDNSZoneToken(ctx, db, zone)
+		})
+		zones = newZoneReconciler(db, r.ZoneMachines, issuer, plan.ACMEDirectory, func(level, format string, args ...any) {
+			logger.Message(ctx, level, "auth-app "+format, args...)
+		})
+	}
+	if r.DNSReconcile != nil || zones != nil {
+		go r.runDNSReconcileLoop(ctx, logger, zones)
 	}
 	if resourceCache != nil {
 		go RunResourceCache(ctx, resourceCache, r.ResourceCacheServer, func(format string, args ...any) {
@@ -332,21 +349,36 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 // to catch the DHCP lease landing after the event), and a periodic pass every
 // 30s guarantees convergence across missed events and restarts. Errors are
 // logged and the loop continues; it stops when ctx is cancelled.
-func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger) {
+func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger, zones *zoneReconciler) {
 	const interval = 30 * time.Second
 	reconcile := func() {
-		if err := r.DNSReconcile(ctx); err != nil {
-			logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
+		if r.DNSReconcile != nil {
+			if err := r.DNSReconcile(ctx); err != nil {
+				logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
+			}
+		}
+		if zones != nil {
+			if err := zones.Reconcile(ctx); err != nil {
+				logger.Message(ctx, "ERROR", "auth-app zone reconcile: %v", err)
+			}
 		}
 	}
-	if r.DNSEvents != nil {
-		trigger := make(chan struct{}, 1)
-		go r.DNSEvents(ctx, func() {
-			select {
-			case trigger <- struct{}{}:
-			default:
-			}
-		})
+	trigger := make(chan struct{}, 1)
+	notify := func() {
+		select {
+		case trigger <- struct{}{}:
+		default:
+		}
+	}
+	if zones != nil {
+		// A finished order kicks the loop so the push does not wait for the
+		// ticker.
+		zones.kick = notify
+	}
+	if r.DNSEvents != nil || zones != nil {
+		if r.DNSEvents != nil {
+			go r.DNSEvents(ctx, notify)
+		}
 		go func() {
 			for {
 				select {

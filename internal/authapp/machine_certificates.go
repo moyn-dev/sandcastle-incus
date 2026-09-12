@@ -396,3 +396,124 @@ func parseCertTime(value string) time.Time {
 	}
 	return parsed
 }
+
+// ---------------------------------------------------------------------------
+// Reconciler-side row updates (spec §4.3–§4.6, slice 6)
+// ---------------------------------------------------------------------------
+
+// resetMachineCertificate returns a row to fresh pending under directoryURL
+// (certificate, key, schedule and backoff cleared) — the "treated as absent"
+// re-order of a row issued by another directory (spec §3.5).
+func resetMachineCertificate(ctx context.Context, db *sql.DB, hostname, directoryURL string, now time.Time) (machineCertificate, error) {
+	stamp := formatCertTime(now)
+	if _, err := db.ExecContext(ctx, `
+UPDATE machine_certificates
+SET directory_url = ?, cert_pem = '', key_pem = '', serial = '', fingerprint = '', not_before = '', not_after = '',
+    renew_after = '', ari_check_after = '', pushed_serial = '', last_error = '', attempts = 0,
+    next_attempt_at = '', requested_at = ?, updated_at = ?
+WHERE hostname = ?
+`, directoryURL, stamp, stamp, strings.ToLower(strings.TrimSpace(hostname))); err != nil {
+		return machineCertificate{}, err
+	}
+	return getMachineCertificate(ctx, db, hostname)
+}
+
+// updateMachineCertificateARI stores the ARI answer (spec §4.3): a non-zero
+// renewAfter replaces the fallback window start; ariCheckAfter is the next
+// ARI check (the CA's Retry-After, or now+6h).
+func updateMachineCertificateARI(ctx context.Context, db *sql.DB, hostname string, renewAfter, ariCheckAfter, now time.Time) (machineCertificate, error) {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if !renewAfter.IsZero() {
+		if _, err := db.ExecContext(ctx, `UPDATE machine_certificates SET renew_after = ?, updated_at = ? WHERE hostname = ?`,
+			formatCertTime(renewAfter), formatCertTime(now), hostname); err != nil {
+			return machineCertificate{}, err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE machine_certificates SET ari_check_after = ?, updated_at = ? WHERE hostname = ?`,
+		formatCertTime(ariCheckAfter), formatCertTime(now), hostname); err != nil {
+		return machineCertificate{}, err
+	}
+	return getMachineCertificate(ctx, db, hostname)
+}
+
+// setMachineCertificatePushedSerial records the serial confirmed on the
+// Machine ("" clears it, turning the row back into issued for a re-push).
+func setMachineCertificatePushedSerial(ctx context.Context, db *sql.DB, hostname, serial string, now time.Time) (machineCertificate, error) {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if _, err := db.ExecContext(ctx, `UPDATE machine_certificates SET pushed_serial = ?, updated_at = ? WHERE hostname = ?`,
+		serial, formatCertTime(now), hostname); err != nil {
+		return machineCertificate{}, err
+	}
+	return getMachineCertificate(ctx, db, hostname)
+}
+
+// recordMachineCertificateFailure persists an order failure with exponential
+// backoff (spec §4.3): attempts++, next_attempt_at = now + backoff[min(attempts-1, last)],
+// last_error = err. A rate-limit answer jumps straight to the last step.
+func recordMachineCertificateFailure(ctx context.Context, db *sql.DB, hostname string, orderErr error, now time.Time) (machineCertificate, error) {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	row, err := getMachineCertificate(ctx, db, hostname)
+	if err != nil {
+		return machineCertificate{}, err
+	}
+	message := strings.TrimSpace(orderErr.Error())
+	attempts := row.Attempts + 1
+	if acmeFailureReason(message) == certFailureRateLimited {
+		attempts = len(certOrderBackoff)
+	}
+	step := attempts - 1
+	if step >= len(certOrderBackoff) {
+		step = len(certOrderBackoff) - 1
+	}
+	if step < 0 {
+		step = 0
+	}
+	next := now.Add(certOrderBackoff[step])
+	if _, err := db.ExecContext(ctx, `
+UPDATE machine_certificates SET last_error = ?, attempts = ?, next_attempt_at = ?, updated_at = ? WHERE hostname = ?
+`, message, attempts, formatCertTime(next), formatCertTime(now), hostname); err != nil {
+		return machineCertificate{}, err
+	}
+	return getMachineCertificate(ctx, db, hostname)
+}
+
+// listAllMachineCertificates returns every row of the install.
+func listAllMachineCertificates(ctx context.Context, db *sql.DB) ([]machineCertificate, error) {
+	rows, err := db.QueryContext(ctx, "SELECT "+machineCertificateColumns+" FROM machine_certificates ORDER BY hostname")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []machineCertificate
+	for rows.Next() {
+		c, err := scanMachineCertificate(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// deleteMachineCertificate drops one row.
+func deleteMachineCertificate(ctx context.Context, db *sql.DB, hostname string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM machine_certificates WHERE hostname = ?`, strings.ToLower(strings.TrimSpace(hostname)))
+	return err
+}
+
+// deleteMachineCertificatesUnderDomain drops every row whose hostname is
+// under domain — a released Project Domain takes its certificates with it
+// (spec §4.6). Returns the count dropped.
+func deleteMachineCertificatesUnderDomain(ctx context.Context, db *sql.DB, domain string) (int, error) {
+	domain = strings.ToLower(strings.Trim(strings.TrimSpace(domain), "."))
+	if domain == "" {
+		return 0, nil
+	}
+	pattern := "%." + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(domain)
+	result, err := db.ExecContext(ctx, `DELETE FROM machine_certificates WHERE hostname LIKE ? ESCAPE '\'`, pattern)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}

@@ -513,12 +513,27 @@ func UnclaimedProjectDomains(ctx context.Context, db *sql.DB, liveDomains map[st
 	return unclaimed, nil
 }
 
-// onProjectDomainReleased is the hook slice 6 fills in: when a claim is
-// released (DELETE /api/projects/{name}, or the GC), delete every A record
-// under the domain and drop its machine_certificates rows — a released domain
-// can be re-claimed by another tenant, so its records and certificates must
-// not survive. Nothing to do until the reconciler exists.
-func onProjectDomainReleased(context.Context, *sql.DB, ProjectDomainClaim) {}
+// onProjectDomainReleased runs when a claim is released (DELETE …/domain,
+// DELETE /api/projects/{name}, or the GC): it drops the domain's
+// machine_certificates rows and deletes every A and challenge record under
+// the domain (spec §4.6) — a released domain can be re-claimed by another
+// tenant, so its records and certificates must not survive. The rows go
+// first (local, cannot fail on the network); a Cloudflare failure is returned
+// for the caller to log and is otherwise harmless: the zone reconciler never
+// touches an unclaimed domain again, and a re-claim converges the records.
+func onProjectDomainReleased(ctx context.Context, db *sql.DB, claim ProjectDomainClaim) error {
+	if db == nil {
+		return nil
+	}
+	var errs []error
+	if _, err := deleteMachineCertificatesUnderDomain(ctx, db, claim.Domain); err != nil {
+		errs = append(errs, fmt.Errorf("drop certificate rows under %s: %w", claim.Domain, err))
+	}
+	if err := releaseProjectDomainRecords(ctx, db, claim); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
 
 // sqlProjectDomainClaims is the ProjectDomainClaimSource over the table —
 // the default the zone registry consumes (replacing slice 2's stub).

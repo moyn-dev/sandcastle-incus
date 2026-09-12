@@ -98,6 +98,20 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   `ConditionPathExists=` drop-in, enables Caddy, and writes the Caddy Setup
   Marker `/etc/sandcastle/caddy.ready` (`MODE=`/`FQDN=`) last. Caddy stays
   enabled-inactive until the Auth App pushes the certificate.
+- The Auth App's zone reconciler (30 s + instance events) does the rest with
+  no operator step: public `A` records for `<m>.<d>` and `*.<m>.<d>` (DNS-only,
+  tenant-bridge IP; stopped machines keep them, deleted ones lose them), one
+  Let's Encrypt order per machine via DNS-01 (max 4 at once, backoff 1m → 6h
+  on failure, ARI-timed renewal with a fresh key), the cert + key push once the
+  marker names the hostname (`instance-started` re-pushes a stopped machine
+  within seconds), a per-pass fingerprint drift check, and the mirror into
+  `user.sandcastle.v2.cert-state` / `cert-not-after` that `sc ls` and
+  `sc project status` read. Freeform `incus launch` machines are stamped with
+  their public name on first sight and treated the same; a Dev Image machine
+  gets an A record but no certificate (no Caddy, no marker). Deleting a machine
+  retains its certificate row until expiry, so recreating it with the same
+  name reuses the certificate without a new order. Diagnosis:
+  `reference/troubleshooting.md`.
 - `sc connect` dials the bridge IP but keys `known_hosts` by the public name
   (`HostKeyAlias=<m>.<d>`); a zone machine has no private name or short alias.
 

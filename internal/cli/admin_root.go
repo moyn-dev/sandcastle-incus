@@ -133,10 +133,14 @@ func ExecuteAdmin(name string, args []string) int {
 	// assigned unconditionally would box into a non-nil interface even with a
 	// nil inner server, defeating HTTPRunner's `ResourceCacheServer != nil` gate.
 	var authAppResourceCache authapp.ResourceCacheServer
+	// Same nil-interface care for the Public DNS Zone reconciler seam
+	// (ADR-0027 §4): only the serving appliance runs it.
+	var authAppZoneMachines authapp.ZoneMachineServer
 	if authAppServeArgs(args) {
 		if socketServer, err := adminSocketServer(); err == nil && socketServer != nil {
 			authAppSocketServer = socketServer
 			authAppTenants = incusx.NewTenantStoreForServer(socketServer)
+			authAppZoneMachines = incusx.NewZoneMachineServer(socketServer, authAppTenants, adminConfig.IncusProjectPrefix)
 			authAppMachines = incusx.NewHostOverrideManagerForServer(socketServer)
 			authAppCreator = incusx.NewTenantCreatorForServer(socketServer).WithVerbose(verbose, os.Stderr)
 			authAppDeleter = incusx.NewTenantDeleterForServer(socketServer).WithVerbose(verbose, os.Stderr)
@@ -221,6 +225,7 @@ func ExecuteAdmin(name string, args []string) int {
 				}
 				return authAppDNSReconciler(authAppSocketServer, authAppTenants, adminConfig.IncusProjectPrefix).Reconcile(ctx)
 			},
+			ZoneMachines: authAppZoneMachines,
 			Projects: incusx.ProjectBrokerCreator{
 				Creator: authAppCreator,
 				Trust:   authAppTrust,

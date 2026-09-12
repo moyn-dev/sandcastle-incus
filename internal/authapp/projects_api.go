@@ -313,7 +313,9 @@ func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user
 	}
 	if found {
 		result.Released = claim.Domain
-		onProjectDomainReleased(r.Context(), h.db, claim)
+		if err := onProjectDomainReleased(r.Context(), h.db, claim); err != nil {
+			svclog.Logf(r.Context(), "project domain %s released with cleanup errors: %v", claim.Domain, err)
+		}
 	}
 	// Unset the Incus key even without a row: this is how an "Incus key
 	// without row" project (logged by the GC) is repaired by its tenant.
@@ -362,7 +364,9 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 	}
 	if found {
 		result.Released = claim.Domain
-		onProjectDomainReleased(r.Context(), h.db, claim)
+		if err := onProjectDomainReleased(r.Context(), h.db, claim); err != nil {
+			svclog.Logf(r.Context(), "project domain %s released with cleanup errors: %v", claim.Domain, err)
+		}
 	}
 	err = svclog.Span(r.Context(), "project.delete", func() error {
 		return h.projectDomains.DeleteTenantProject(r.Context(), user.UserKey, project)
