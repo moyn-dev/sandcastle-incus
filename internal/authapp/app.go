@@ -36,6 +36,9 @@ type ServeRequest struct {
 	SimulateGitHubToken string
 	DefaultUnixUser     string
 	TailscaleAuthKey    string
+	// ACMEDirectory is the install-level ACME directory URL for Machine
+	// Certificates (ADR-0027); empty selects Let's Encrypt production.
+	ACMEDirectory string
 }
 
 type ServePlan struct {
@@ -49,6 +52,7 @@ type ServePlan struct {
 	SimulateGitHubToken string   `json:"-"`
 	DefaultUnixUser     string   `json:"defaultUnixUser,omitempty"`
 	TailscaleAuthKey    string   `json:"-"`
+	ACMEDirectory       string   `json:"acmeDirectory,omitempty"`
 }
 
 type Runner interface {
@@ -110,8 +114,13 @@ type HTTPRunner struct {
 	// RouteCaddy writes the appliance Caddyfile and reloads Caddy for Route
 	// changes. Set alongside Routes.
 	RouteCaddy CaddyController
-	// ACMEEmail is the Let's Encrypt contact email, rendered into the Caddyfile.
+	// ACMEEmail is the Let's Encrypt contact email, rendered into the Caddyfile
+	// and the contact of the Machine Certificate ACME account (ADR-0027).
 	ACMEEmail string
+	// ProjectDomains resolves a tenant project's Project Domain + zone for
+	// POST /api/machine-certificates (ADR-0027). nil until the install has
+	// Project Domain claims: the endpoint then answers 501.
+	ProjectDomains ProjectDomainResolver
 	// AuthIngressMode is how the Auth Hostname itself is served (acme|cloudflare|
 	// none); it governs the login site in the regenerated Caddyfile so routes can
 	// coexist with a Cloudflare-tunnelled login hostname.
@@ -179,7 +188,12 @@ func PlanServe(request ServeRequest) (ServePlan, error) {
 			return ServePlan{}, err
 		}
 	}
+	acmeDirectory, err := NormalizeACMEDirectory(request.ACMEDirectory)
+	if err != nil {
+		return ServePlan{}, err
+	}
 	return ServePlan{
+		ACMEDirectory:       acmeDirectory,
 		Address:             address,
 		DatabasePath:        databasePath,
 		AuthHostname:        strings.Trim(strings.TrimSpace(request.AuthHostname), "."),
@@ -212,6 +226,7 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 		return err
 	}
 	logger.Message(ctx, "INFO", "auth database migrated in %dms", time.Since(migrateStart).Milliseconds())
+	logger.Message(ctx, "INFO", "machine certificates: acme directory %s", plan.ACMEDirectory)
 	if err := BootstrapAdmins(ctx, db, plan.BootstrapAdminUsers); err != nil {
 		return err
 	}
@@ -249,6 +264,8 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			Routes:                       r.Routes,
 			RouteCaddy:                   r.RouteCaddy,
 			ACMEEmail:                    r.ACMEEmail,
+			ACMEDirectory:                plan.ACMEDirectory,
+			ProjectDomains:               r.ProjectDomains,
 			AuthIngressMode:              r.AuthIngressMode,
 			RouteBaseDomain:              r.RouteBaseDomain,
 			RouteIngress:                 r.RouteIngress,
@@ -639,6 +656,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 	if err := migrateCloudIdentityConfigsTenantScope(ctx, db); err != nil {
 		return err
 	}
+	// Public DNS Zones slice 5 (ADR-0027): acme_storage + machine_certificates.
+	if err := migrateACME(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -783,13 +804,17 @@ type HandlerOptions struct {
 	Routes              RouteBackend
 	RouteCaddy          CaddyController
 	ACMEEmail           string
-	AuthIngressMode     string
-	RouteBaseDomain     string
-	RouteIngress        string
-	RouteCNAMETarget    string
-	RouteTLS            string
-	RouteDNSProvider    string
-	RouteDNSWildcards   []string
+	// ACMEDirectory is the running --acme-directory (normalized); it is the
+	// directory_url stamped on machine_certificates rows.
+	ACMEDirectory     string
+	ProjectDomains    ProjectDomainResolver
+	AuthIngressMode   string
+	RouteBaseDomain   string
+	RouteIngress      string
+	RouteCNAMETarget  string
+	RouteTLS          string
+	RouteDNSProvider  string
+	RouteDNSWildcards []string
 	// RouteResolveHost overrides how a custom hostname's DNS is checked for the
 	// awaiting-dns status. Optional; nil uses a real DNS lookup. Injected in tests.
 	RouteResolveHost func(ctx context.Context, host string) bool
@@ -850,6 +875,8 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		routes:                handlerOptions.Routes,
 		routeCaddy:            handlerOptions.RouteCaddy,
 		acmeEmail:             strings.TrimSpace(handlerOptions.ACMEEmail),
+		acmeDirectory:         handlerACMEDirectory(handlerOptions.ACMEDirectory),
+		projectDomains:        handlerOptions.ProjectDomains,
 		authIngressMode:       strings.TrimSpace(handlerOptions.AuthIngressMode),
 		routeBaseDomain:       strings.Trim(strings.TrimSpace(handlerOptions.RouteBaseDomain), "."),
 		routeIngress:          strings.TrimSpace(handlerOptions.RouteIngress),
@@ -906,6 +933,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/device/poll", app.devicePoll)
 	mux.HandleFunc("/api/workload/enable", app.workloadEnable)
 	mux.HandleFunc("/api/routes", app.routesAPI)
+	mux.HandleFunc("/api/machine-certificates", app.machineCertificatesAPI)
 	mux.HandleFunc("/api/routes/ask", app.routesAsk)
 	mux.HandleFunc("/api/routes/config", app.routesConfig)
 	mux.HandleFunc("/device", app.deviceApprove)
@@ -974,6 +1002,8 @@ type handler struct {
 	routes                RouteBackend
 	routeCaddy            CaddyController
 	acmeEmail             string
+	acmeDirectory         string
+	projectDomains        ProjectDomainResolver
 	authIngressMode       string
 	routeBaseDomain       string
 	routeIngress          string

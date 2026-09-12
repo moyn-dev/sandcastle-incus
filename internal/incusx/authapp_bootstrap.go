@@ -61,6 +61,10 @@ type BootstrapAuthAppRequest struct {
 	IngressMode string
 	ACMEEmail   string
 	TunnelToken string
+	// ACMEDirectory is the install-level ACME directory for Machine
+	// Certificates (ADR-0027; Let's Encrypt production or staging), stored on
+	// the appliance beside ACMEEmail, which doubles as the account contact.
+	ACMEDirectory string
 
 	// Public Route ingress (Spec #111 coexistence): when "acme", the appliance
 	// also binds host :80/:443 for native-ACME Public Route sites, independent of
@@ -438,6 +442,9 @@ func authAppEnv(req BootstrapAuthAppRequest) string {
 		// domain routes live under.
 		"SANDCASTLE_AUTH_INGRESS_MODE=" + q(strings.TrimSpace(req.IngressMode)),
 		"SANDCASTLE_AUTH_ACME_EMAIL=" + q(strings.TrimSpace(req.ACMEEmail)),
+		// Machine Certificates (ADR-0027): the ACME directory the Auth App
+		// orders from. Empty = Let's Encrypt production (auth-app serve default).
+		"SANDCASTLE_AUTH_ACME_DIRECTORY=" + q(strings.TrimSpace(req.ACMEDirectory)),
 		"SANDCASTLE_ROUTE_INGRESS=" + q(strings.TrimSpace(req.RouteIngress)),
 		"SANDCASTLE_ROUTE_BASE_DOMAIN=" + q(strings.TrimSpace(req.RouteBaseDomain)),
 		"SANDCASTLE_ROUTE_CNAME_TARGET=" + q(strings.TrimSpace(req.RouteCNAMETarget)),
@@ -484,7 +491,8 @@ func authAppUnit() string {
 		" --debug-device-user ${SANDCASTLE_AUTH_DEBUG_DEVICE_USER}" +
 		" --simulate-github-token ${SANDCASTLE_AUTH_SIMULATE_GITHUB_TOKEN}" +
 		" --default-unix-user ${SANDCASTLE_AUTH_DEFAULT_UNIX_USER}" +
-		" --tailscale-auth-key ${SANDCASTLE_AUTH_TAILSCALE_AUTHKEY}\n" +
+		" --tailscale-auth-key ${SANDCASTLE_AUTH_TAILSCALE_AUTHKEY}" +
+		" --acme-directory ${SANDCASTLE_AUTH_ACME_DIRECTORY}\n" +
 		"Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 

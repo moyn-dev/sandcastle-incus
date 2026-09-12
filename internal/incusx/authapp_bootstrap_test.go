@@ -49,6 +49,21 @@ func TestAuthAppDevices_NoIngressNoHostPorts(t *testing.T) {
 	}
 }
 
+// --acme-directory (ADR-0027) is stored on the appliance like --acme-email
+// and handed to `auth-app serve` by the unit.
+func TestAuthAppEnvAndUnitCarryACMEDirectory(t *testing.T) {
+	out := authAppEnv(BootstrapAuthAppRequest{ACMEDirectory: " https://acme-staging-v02.api.letsencrypt.org/directory "})
+	if !strings.Contains(out, "SANDCASTLE_AUTH_ACME_DIRECTORY='https://acme-staging-v02.api.letsencrypt.org/directory'") {
+		t.Fatalf("auth-app env missing the ACME directory:\n%s", out)
+	}
+	if !strings.Contains(authAppEnv(BootstrapAuthAppRequest{}), "SANDCASTLE_AUTH_ACME_DIRECTORY=''") {
+		t.Fatal("auth-app env must always define SANDCASTLE_AUTH_ACME_DIRECTORY (empty = production)")
+	}
+	if !strings.Contains(authAppUnit(), " --acme-directory ${SANDCASTLE_AUTH_ACME_DIRECTORY}") {
+		t.Fatalf("auth-app unit does not pass --acme-directory:\n%s", authAppUnit())
+	}
+}
+
 func TestAuthAppEnvConfiguresCloudflareDNS01WithoutEmbeddingItsToken(t *testing.T) {
 	req := BootstrapAuthAppRequest{
 		RouteDNSProvider:           RouteDNSProviderCloudflare,

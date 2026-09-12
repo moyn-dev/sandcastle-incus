@@ -891,8 +891,19 @@ sc-adm auth-app deploy \
   --auth-hostname "$PUBIC_URL" \
   --simulate-github-token "$SIMULATE_TOKEN" \
   --admin-github-users thieso2 \
-  --tailscale-auth-key "$TAILSCALE_AUTH_KEY"
+  --tailscale-auth-key "$TAILSCALE_AUTH_KEY" \
+  --acme-directory https://acme-staging-v02.api.letsencrypt.org/directory
 ```
+> `--acme-directory` (ADR-0027, also on `sc-adm install`) is the ACME directory
+> the Auth App orders Machine Certificates from for Public DNS Zone projects
+> (Phase 12, once it exists). e2e ALWAYS deploys with the Let's Encrypt
+> **staging** URL so no production budget is spent; the default is production.
+> PASS: the appliance's `/etc/sandcastle/auth-app/env` carries
+> `SANDCASTLE_AUTH_ACME_DIRECTORY='https://acme-staging-v02.api.letsencrypt.org/directory'`
+> and the auth-app journal logs `machine certificates: acme directory
+> https://acme-staging-v02.api.letsencrypt.org/directory` at startup. An
+> invalid value (not an absolute http(s) URL) is refused by deploy before any
+> appliance work.
 
 **Real OAuth app (alternative):**
 ```bash

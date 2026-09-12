@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 )
 
@@ -25,7 +26,7 @@ func newAdminAuthAppDeployCommand(config commandConfig) *cobra.Command {
 		simulateGitHubToken                                                   string
 		cidrPool, projectPrefix, infraProject, tlsMode                        string
 		tenantBaseImage, tenantAIImage                                        string
-		ingressMode, acmeEmail, tunnelToken                                   string
+		ingressMode, acmeEmail, acmeDirectory, tunnelToken                    string
 		routeIngress, routeBaseDomain, routeCNAMETarget, routeFront, routeTLS string
 		routeDNSCloudflareAPIToken                                            string
 		routeDNSCloudflareWildcards                                           []string
@@ -83,6 +84,9 @@ func newAdminAuthAppDeployCommand(config commandConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if acmeDirectory, err = authapp.NormalizeACMEDirectory(acmeDirectory); err != nil {
+				return err
+			}
 			if err := creator.BootstrapAuthApp(cmd.Context(), incusx.BootstrapAuthAppRequest{
 				Project:                    project,
 				Instance:                   instance,
@@ -106,6 +110,7 @@ func newAdminAuthAppDeployCommand(config commandConfig) *cobra.Command {
 				AIImageRef:                 tenantAIImage,
 				IngressMode:                strings.TrimSpace(ingressMode),
 				ACMEEmail:                  strings.TrimSpace(acmeEmail),
+				ACMEDirectory:              acmeDirectory,
 				TunnelToken:                strings.TrimSpace(tunnelToken),
 				RouteIngress:               routeIngress,
 				RouteBaseDomain:            strings.TrimSpace(routeBaseDomain),
@@ -146,7 +151,8 @@ func newAdminAuthAppDeployCommand(config commandConfig) *cobra.Command {
 	command.Flags().StringVar(&tenantBaseImage, "tenant-base-image", incusx.DefaultApplianceImage, "stock base image for tenant sidecars (pulled from the images: remote)")
 	command.Flags().StringVar(&tenantAIImage, "tenant-ai-image", "images:debian/13", "AI image tenants can use (default: stock; set a custom image if you built one)")
 	command.Flags().StringVar(&ingressMode, "ingress", "", "public ingress for the Auth Hostname: none, acme, or cloudflare (redeploy preserves the login front)")
-	command.Flags().StringVar(&acmeEmail, "acme-email", "", "Let's Encrypt contact email (acme or route ingress)")
+	command.Flags().StringVar(&acmeEmail, "acme-email", "", "Let's Encrypt contact email (acme or route ingress; also the ACME account contact for Machine Certificates)")
+	command.Flags().StringVar(&acmeDirectory, "acme-directory", "", "ACME directory URL for Machine Certificates (Public DNS Zones); default Let's Encrypt production, "+authapp.LetsEncryptStagingDirectory+" for staging")
 	command.Flags().StringVar(&tunnelToken, "cloudflare-tunnel-token", "", "connector token of a Cloudflare tunnel routing the Auth Hostname to http://localhost:8080 (cloudflare ingress)")
 	command.Flags().StringVar(&routeIngress, "route-ingress", "", "public ingress for `sc route`: acme (host :80/:443 + Let's Encrypt) or acme-proxied (an upstream SNI proxy owns the host ports and forwards to the appliance), independent of --ingress; empty disables")
 	command.Flags().StringVar(&routeBaseDomain, "route-base-domain", "", "domain published routes live under (<label>.<tenant>.<base>); defaults to the Auth Hostname")

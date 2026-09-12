@@ -4911,3 +4911,80 @@ Two small choices the spec left open:
 `incusx` does not yet mirror the new keys as `keyV2…` constants: nothing in
 `incusx` writes them in this slice (the stamp is slice 4, the mirror slice 6);
 the mirror is added with the first writer.
+
+## 2026-09-12 — Public DNS Zones slice 5: ACME issuer, `acme_storage`, `machine_certificates`
+
+Spec `docs/spec/public-dns-zones.md` §1.3, §3.4, §3.5, §9 item 5 (issue #167).
+Decisions the spec left open, and one thing it asks for that certmagic's
+public API does not allow:
+
+- **Dependency weight.** `github.com/caddyserver/certmagic v0.25.4` +
+  `github.com/libdns/cloudflare v0.2.2` add 15 modules to the graph
+  (`go list -m all`: 243 → 258): acmez/v3, libdns, zerossl, miekg/dns,
+  zeebo/blake3, klauspost/cpuid, zap + zap/exp + multierr, and x/mod, x/net,
+  x/sync, x/tools bumps. `go.uber.org/zap` is a *direct* require because the
+  issuer builds certmagic's mandatory `*zap.Logger` (stderr, Info) itself.
+  x/crypto moved v0.49 → v0.50 and x/term v0.41 → v0.42 as a side effect.
+- **`sqliteStorage` semantics** follow certmagic's `FileStorage` where the
+  interface doc is vague: keys are `/`-paths, a key that is a strict prefix
+  of others is a directory; `List` non-recursive returns immediate children
+  (files and directories), recursive returns every terminal key *and* every
+  intermediate directory; `List`/`Stat`/`Load` on an absent key wrap
+  `fs.ErrNotExist`; `Delete` of a directory removes the subtree and deleting
+  an absent key is not an error. LIKE patterns are escaped so `%`/`_` in a
+  key (certmagic keys contain the contact email) match literally.
+  `Lock`/`Unlock` are an in-process channel map honouring `ctx` (ADR-0021:
+  one Auth App per install, so no cross-process lock is needed); `Unlock` of
+  a lock that is not held is an error, as certmagic's contract says.
+- **`POST /api/machine-certificates` needs the Project Domain and its zone,
+  which live in slice 3's `project_domain_claims`.** Rather than reach into a
+  table that does not exist on this branch, the handler takes a
+  `ProjectDomainResolver` (`ResolveProjectDomain(ctx, tenant, project) →
+  (domain, zone)`) via `HandlerOptions.ProjectDomains` / `HTTPRunner.ProjectDomains`.
+  Slice 3 supplies the claims-backed implementation; until then the field is
+  nil and the endpoint answers 501, the same pattern as `Projects == nil`.
+  A project without a domain answers **404** `{"error":"project \"<p>\" has no
+  project domain"}` (the spec names no status).
+- **Zone tokens** likewise belong to slice 2's `public_dns_zones`. The
+  certmagic issuer takes a `zoneTokenSource func(ctx, zone) (token, error)`;
+  the reconciler (slice 6) wires slice 2's decryptor in. `acmeIssuer` is
+  therefore *not* instantiated in `Serve` yet — nothing orders in this slice.
+- **Secret-at-rest helper.** Spec §1.4 asks to generalize
+  `encryptOIDCPrivateKey`/`decryptOIDCPrivateKey` into `encryptSecret`/
+  `decryptSecret` with purpose-labelled keys — slice 2 owns that refactor
+  (same file, same functions). To merge cleanly this slice reuses the two
+  OIDC AES-GCM functions unchanged and adds only the purpose key
+  (`purposeEncryptionKey` → `auth_app_meta` key `machine_cert_key`).
+  Fold `machineCertEncryptionKey` onto slice 2's helper at merge.
+- **Retained row on re-request.** §3.4 says a retained valid certificate
+  returns `state: issued` with no order; §4.6 says reuse clears
+  `pushed_serial`. The upsert does exactly that (and updates
+  tenant/project/machine + `requested_at`). A row that is *not* usable —
+  never issued, expired, or issued under a different `directory_url` — is
+  reset to a fresh pending row (cert/key/serial/backoff cleared), which is
+  how a staging → production switch heals without a separate migration.
+- **`TestCA` is pinned to the configured directory.** certmagic's
+  `ACMEIssuer.Issue` retries against `TestCA` (defaulting to LE staging when
+  `CA` is LE production) on attempt > 0. We never set the attempts context
+  key, but pinning `TestCA = CA` makes "staging and production never mix" a
+  property of the issuer rather than of the caller.
+- **ARI `Replaces` cannot be set through certmagic's public API.** Spec §3.5
+  says renewals "set the ARI `Replaces` context value"; the key
+  (`ctxKeyARIReplaces`) is unexported and only certmagic's own renew path
+  sets it. The `certIssuer.Issue` signature is the spec's; slice 6 either
+  accepts ARI-timed renewals *without* `replaces` (still exempt from the
+  new-orders and per-registered-domain limits, but counted against the
+  5-per-identifier-set duplicate limit) or drops to `acmez.Client.
+  ObtainCertificate` with `OrderParameters.Replaces` for renewals. Noted
+  here so slice 6 does not rediscover it.
+- **The `Public name:` line lives in `runCreateMachineV2`, not in
+  `formatCreateMachineV2`.** Slice 4 owns the create output rewrite (it
+  replaces the `DNS:` line). This slice adds the certificate request behind
+  `zoneModePublicHostname(summary, project, machine)` — `""` for a project
+  without a domain, so nothing changes for today's fleet — and prints the
+  spec's `Public name: …` line *after* the existing output, text mode only,
+  Dev Image machines excluded. Slice 4 should move `formatPublicNameLine`
+  into the formatter and drop the `DNS:` line for zone mode.
+- **Failure-reason vocabulary** (`acmeFailureReason`) is a substring
+  classifier over `last_error` — good enough for the six fixed tokens; the
+  raw error is kept verbatim on the row for `sc project status`.
