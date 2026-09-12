@@ -677,7 +677,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 	}
 	fmt.Fprintf(&builder, "%s\n", multiListContext(payload))
 	table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "REMOTE\tPROJECT\tMACHINE\tTYPE\tFQDN\tIP\tCREATED\tSTATE")
+	fmt.Fprintln(table, "REMOTE\tPROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
 	for _, section := range payload.Remotes {
 		// The FQDN comes from each section's OWN tenant summary — installs have
 		// different DNS suffixes, so one shared summary would mislabel rows.
@@ -688,12 +688,13 @@ func formatMultiMachineList(payload multiListPayload) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				section.Remote,
 				machine.Project,
 				machine.Name,
 				machineTypeCell(machine),
 				machineFQDN(section.Tenant, machine),
+				machineCertCell(machine),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
 				state,
@@ -710,11 +711,12 @@ func formatMultiMachineList(payload multiListPayload) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				section.Remote,
 				"-",
 				unmanaged.Name,
 				machineTypeShort(unmanaged.Type),
+				"-",
 				"-",
 				displayValue(unmanaged.PrivateIP),
 				formatListCreatedAt(unmanaged.CreatedAt),
@@ -740,7 +742,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 	fmt.Fprintf(&builder, "%s\n", listContext(result))
 	if len(result.Machines) > 0 || len(result.Unmanaged) > 0 {
 		table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tIP\tCREATED\tSTATE")
+		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
 		for _, machine := range result.Machines {
 			state := "stopped"
 			if machine.Running {
@@ -748,11 +750,12 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				machine.Project,
 				machine.Name,
 				machineTypeCell(machine),
 				machineFQDN(result.Tenant, machine),
+				machineCertCell(machine),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
 				state,
@@ -769,10 +772,11 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				"-",
 				unmanaged.Name,
 				machineTypeShort(unmanaged.Type),
+				"-",
 				"-",
 				displayValue(unmanaged.PrivateIP),
 				formatListCreatedAt(unmanaged.CreatedAt),
@@ -914,7 +918,35 @@ func machineTypeShort(instanceType string) string {
 	}
 }
 
+// machineCertCell is the `sc ls` CERT column (ADR-0027 spec §1.5): a
+// private-mode machine has no Machine Certificate, so "-"; a zone-mode
+// machine's mirrored state collapses to pending / ok / failed. A zone-mode
+// machine the reconciler has not stamped yet is pending — `sc create` returns
+// before any certificate exists. An unrecognised state is shown verbatim
+// rather than guessed at.
+func machineCertCell(machine meta.Machine) string {
+	if machine.NamingMode() != meta.NamingModeZone {
+		return "-"
+	}
+	state := strings.TrimSpace(machine.CertState)
+	switch {
+	case state == "", state == meta.CertStatePending, state == meta.CertStateIssued:
+		return "pending"
+	case state == meta.CertStateInstalled, state == meta.CertStateRenewing:
+		return "ok"
+	case strings.HasPrefix(state, meta.CertStateFailedPrefix):
+		return "failed"
+	default:
+		return state
+	}
+}
+
+// machineFQDN is the `sc ls` FQDN column: the Machine Public Hostname for a
+// zone-mode machine (ADR-0027), else the canonical Machine Private Hostname.
 func machineFQDN(tenant tenant.Summary, machine meta.Machine) string {
+	if machine.NamingMode() == meta.NamingModeZone {
+		return machine.PublicHostname
+	}
 	suffix := strings.Trim(strings.TrimSpace(tenant.DNSSuffix), ".")
 	if suffix == "" {
 		suffix = strings.Trim(strings.TrimSpace(tenant.Tenant), ".")
@@ -969,14 +1001,14 @@ func formatTenantResources(result tenantResourcesPayload) string {
 	}
 	fmt.Fprintln(&b)
 	table := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tIP\tCREATED\tSTATE")
+	fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
 	for _, m := range result.Machines {
 		state := "stopped"
 		if m.Running {
 			state = "running"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Project, m.Name, machineTypeCell(m), machineFQDN(t, m), m.PrivateIP, formatListCreatedAt(m.CreatedAt), state)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Project, m.Name, machineTypeCell(m), machineFQDN(t, m), machineCertCell(m), m.PrivateIP, formatListCreatedAt(m.CreatedAt), state)
 	}
 	for _, u := range result.Unmanaged {
 		state := u.Status
@@ -987,8 +1019,8 @@ func formatTenantResources(result tenantResourcesPayload) string {
 				state = "stopped"
 			}
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			"-", u.Name, machineTypeShort(u.Type), "-", displayValue(u.PrivateIP), formatListCreatedAt(u.CreatedAt), "unmanaged:"+state)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			"-", u.Name, machineTypeShort(u.Type), "-", "-", displayValue(u.PrivateIP), formatListCreatedAt(u.CreatedAt), "unmanaged:"+state)
 	}
 	_ = table.Flush()
 	return strings.TrimRight(b.String(), "\n")

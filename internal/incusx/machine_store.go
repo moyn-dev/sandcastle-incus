@@ -188,7 +188,10 @@ func MachineFromInstance(tenantName string, project string, instance api.Instanc
 	if meta.IsManaged(instance.Config) && instance.Config[meta.KeyKind] == meta.KindSidecar {
 		return meta.Machine{}, false
 	}
-	return meta.Machine{
+	// Read from the instance's OWN config, so a project-wide profile key could
+	// never mark every machine bare — and likewise for the Naming Mode record
+	// and certificate mirror (ADR-0027), which meta.DecodeMachine fills.
+	return meta.DecodeMachine(instance.Config, meta.Machine{
 		Tenant:    tenantName,
 		Project:   project,
 		Name:      instance.Name,
@@ -196,10 +199,8 @@ func MachineFromInstance(tenantName string, project string, instance api.Instanc
 		PrivateIP: instanceGlobalIPv4(instance),
 		CreatedAt: formatInstanceCreatedAt(instance.CreatedAt),
 		Running:   instance.IsActive(),
-		// Read from the instance's OWN config, so a project-wide profile key
-		// could never mark every machine bare.
-		Bare: instanceIsBareV2(instance.Config),
-	}, true
+		Bare:      instanceIsBareV2(instance.Config),
+	}), true
 }
 
 // instanceGlobalIPv4 returns the global IPv4 of the instance's Incus-managed

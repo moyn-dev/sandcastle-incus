@@ -87,7 +87,9 @@ func purgeTenantHostKeys(ctx context.Context, config commandConfig, summary tena
 	machines := make([]hostkeys.Machine, 0, len(refs))
 	privateCIDR := ""
 	for _, ref := range refs {
-		names := v2MachineNames(summary, ref.Project, ref.Name)
+		// ListMachinesV2 yields bare references without the Naming Mode
+		// record; zone-mode names (ADR-0027) join the purge in a later slice.
+		names := v2MachineNames(summary, ref.Project, ref.Name, "")
 		if len(names) == 0 {
 			continue
 		}

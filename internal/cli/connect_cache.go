@@ -88,7 +88,7 @@ func dialV2MachineViaCache(ctx context.Context, config commandConfig, reference 
 		return dialedV2Machine{}, false
 	}
 	summary := result.Tenant
-	names := v2MachineNames(summary, project, machineName)
+	names := v2MachineNames(summary, project, machineName, cached.PublicHostname)
 	if len(names) == 0 {
 		logConnectCacheFallback(config, "cached tenant summary has no DNS suffix")
 		return dialedV2Machine{}, false

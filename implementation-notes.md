@@ -4879,3 +4879,35 @@ Alternatives considered:
 - **Read `/etc/os-release`.** Derivatives (Manjaro, EndeavourOS, Rocky) would
   need an ID/ID_LIKE table; the anchors directory is the thing that actually
   matters.
+
+## 2026-09-12 — Public DNS Zones slice 1: `meta.DecodeMachine` and the CERT column
+
+Spec `docs/spec/public-dns-zones.md` §1.2 says "`DecodeMachine` (and the
+resource-cache instance → `meta.Machine` conversion) fill them from the
+instance config". No `DecodeMachine` existed, and there is only ONE instance →
+`meta.Machine` conversion: `incusx.MachineFromInstance`, which the live
+per-project sweep calls and which is injected into the Auth App as the
+ADR-0023 `ResourceCacheMachineRenderer`.
+
+**Decision:** introduce `meta.DecodeMachine(config, machine) Machine` as the
+pure step that reads `KeyV2PublicHostname` / `KeyV2CertState` /
+`KeyV2CertNotAfter`, and have `MachineFromInstance` funnel through it. Both
+paths agree by construction rather than by a second copy of the decode. It
+ignores the two certificate keys unless the machine is in zone mode, so a
+stray `cert-state` on an unstamped machine can never leak into the listing.
+
+Two small choices the spec left open:
+
+- A zone-mode machine with **no** `cert-state` yet (`sc create` has stamped
+  the public hostname, the reconciler has not run) renders `CERT` as
+  `pending` — that is what `sc create`'s "certificate pending" promises. An
+  unrecognised state string is shown verbatim rather than mapped to a guess.
+- `v2MachineNames` gained a fourth parameter, `publicHostname`, instead of
+  taking a `meta.Machine`: two callers (`ssh_key_purge.go`, the live connect
+  path in `create_v2.go`) only have a name/project pair today and pass `""`
+  (private mode) until slice 4 wires the Naming Mode record through. The
+  connect-cache path already passes `cached.PublicHostname`.
+
+`incusx` does not yet mirror the new keys as `keyV2…` constants: nothing in
+`incusx` writes them in this slice (the stamp is slice 4, the mirror slice 6);
+the mirror is added with the first writer.

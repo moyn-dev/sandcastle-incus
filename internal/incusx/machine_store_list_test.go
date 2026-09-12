@@ -194,3 +194,39 @@ func TestListMachinesInProjectGlobQueriesOnlyMatchingProjects(t *testing.T) {
 		t.Fatalf("queried = %v, want only the docker Incus project", server.queried)
 	}
 }
+
+// MachineFromInstance is the one conversion both the live sweep and the
+// resource-cache renderer run, so the ADR-0027 keys must be decoded here: an
+// unstamped instance stays private (no public name, no cert fields), a
+// stamped one carries its Machine Public Hostname and mirrored state.
+func TestMachineFromInstanceDecodesZoneMode(t *testing.T) {
+	private := api.InstanceFull{}
+	private.Name = "web"
+	private.Type = "container"
+	got, ok := MachineFromInstance("acme", "sc2-acme-default", private)
+	if !ok {
+		t.Fatal("private instance filtered out")
+	}
+	if got.PublicHostname != "" || got.CertState != "" || got.CertNotAfter != "" || got.NamingMode() != meta.NamingModePrivate {
+		t.Fatalf("unstamped instance decoded as %#v, want private-mode", got)
+	}
+
+	zone := api.InstanceFull{}
+	zone.Name = "web"
+	zone.Type = "container"
+	zone.Config = map[string]string{
+		meta.KeyV2PublicHostname: "web.baum.hase.de",
+		meta.KeyV2CertState:      "installed",
+		meta.KeyV2CertNotAfter:   "2026-12-01T00:00:00Z",
+	}
+	got, ok = MachineFromInstance("acme", "sc2-acme-zp", zone)
+	if !ok {
+		t.Fatal("zone instance filtered out")
+	}
+	if got.PublicHostname != "web.baum.hase.de" || got.CertState != "installed" || got.CertNotAfter != "2026-12-01T00:00:00Z" {
+		t.Fatalf("zone instance decoded as %#v", got)
+	}
+	if got.NamingMode() != meta.NamingModeZone {
+		t.Fatalf("NamingMode = %q, want zone", got.NamingMode())
+	}
+}

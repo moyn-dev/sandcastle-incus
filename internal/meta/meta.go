@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -59,6 +60,28 @@ const (
 	// user, no SSH key, no sshd. `sc connect` reads it to pick an Incus exec
 	// session over SSH, which on such a machine could only ever time out.
 	KeyV2Bare = Prefix + "v2.bare"
+	// KeyV2Domain holds a project's Project Domain (ADR-0027), normalized, on
+	// its own kind=project Incus project. Written by the Auth App when the
+	// domain is claimed (`sc project create --domain`, `set-domain`), removed
+	// by `unset-domain`. Absent ⇒ a private-mode project.
+	KeyV2Domain = Prefix + "v2.domain"
+	// KeyV2PublicHostname is the INSTANCE's Naming Mode record (ADR-0027): the
+	// Machine Public Hostname `<machine>.<Project Domain>`, or the literal
+	// NamingModePrivate. Stamped once — by `sc create`, or by the reconciler on
+	// first sight of a Freeform Machine — and never rewritten. Absent covers
+	// every Machine created before the feature, so the fleet is private by
+	// default.
+	KeyV2PublicHostname = Prefix + "v2.public-hostname"
+	// KeyV2CertState mirrors a zone-mode Machine's Machine Certificate state
+	// (pending | issued | installed | renewing | failed:<reason>) into instance
+	// config, so the ADR-0023 cache path and the live Incus path render the
+	// same CERT column without any CLI code asking the Auth Database. Written
+	// by the reconciler, only for zone-mode Machines.
+	KeyV2CertState = Prefix + "v2.cert-state"
+	// KeyV2CertNotAfter is the RFC 3339 UTC expiry of the INSTALLED Machine
+	// Certificate; empty until one is installed. Reconciler-written, zone-mode
+	// Machines only.
+	KeyV2CertNotAfter = Prefix + "v2.cert-not-after"
 	// KeyBinaryVersion records the release version (vX.Y.Z) of the sandcastle
 	// binary last pushed into an instance (#124 §7) — auth-app, broker, tenant
 	// sidecars. Written on every binary push; missing means "unknown" and is
@@ -83,6 +106,21 @@ const (
 	MachineTypeContainer = "container"
 
 	TailscaleStateRunningLoggedOut = "running-logged-out"
+
+	// NamingModePrivate / NamingModeZone are the two Naming Modes (ADR-0027).
+	// NamingModePrivate is also the literal KeyV2PublicHostname value that
+	// pins a Machine to private mode; NamingModeZone is never stored — a zone
+	// Machine's record IS its Machine Public Hostname.
+	NamingModePrivate = "private"
+	NamingModeZone    = "zone"
+
+	// Machine Certificate states as mirrored into KeyV2CertState. A failed
+	// state carries a reason suffix: CertStateFailedPrefix + "<reason>".
+	CertStatePending      = "pending"
+	CertStateIssued       = "issued"
+	CertStateInstalled    = "installed"
+	CertStateRenewing     = "renewing"
+	CertStateFailedPrefix = "failed:"
 )
 
 type Project struct {
@@ -90,6 +128,9 @@ type Project struct {
 	CreatedBy       string `json:"createdBy,omitempty"`
 	CloudIdentity   string `json:"cloudIdentity,omitempty"`
 	DockerAutostart bool   `json:"dockerAutostart,omitempty"`
+	// Domain is the project's Project Domain (KeyV2Domain, ADR-0027); empty
+	// for a private-mode project.
+	Domain string `json:"domain,omitempty"`
 }
 
 type Tailscale struct {
@@ -159,6 +200,55 @@ type Machine struct {
 	// sshd, no shared storage. It changes how the machine is reached, so a
 	// listing says so rather than leaving `sc connect` to time out.
 	Bare bool `json:"bare,omitempty"`
+	// Zone mode (ADR-0027); all three are empty for a private-mode machine.
+	// PublicHostname is the Machine Public Hostname from KeyV2PublicHostname
+	// (empty when that key is absent or the literal "private"); CertState and
+	// CertNotAfter mirror KeyV2CertState / KeyV2CertNotAfter and are only read
+	// for a zone-mode machine.
+	PublicHostname string `json:"publicHostname,omitempty"`
+	CertState      string `json:"certState,omitempty"`
+	CertNotAfter   string `json:"certNotAfter,omitempty"`
+}
+
+// NamingMode derives the machine's Naming Mode from its PublicHostname:
+// NamingModeZone when it carries a Machine Public Hostname, else
+// NamingModePrivate (which covers every unstamped machine).
+func (m Machine) NamingMode() string {
+	if m.PublicHostname != "" {
+		return NamingModeZone
+	}
+	return NamingModePrivate
+}
+
+// PublicHostnameFromConfig reads the Naming Mode record off an instance's own
+// config: the Machine Public Hostname, or "" when the key is absent or holds
+// the literal NamingModePrivate.
+func PublicHostnameFromConfig(config map[string]string) string {
+	hostname := strings.TrimSpace(config[KeyV2PublicHostname])
+	if hostname == "" || hostname == NamingModePrivate {
+		return ""
+	}
+	return hostname
+}
+
+// DecodeMachine fills the zone-mode fields of machine from an instance's own
+// config (ADR-0027). It is the one place those keys are read, and every
+// instance → Machine conversion — the live per-project sweep and the
+// ADR-0023 resource-cache renderer alike — funnels through it, so the two
+// paths cannot disagree on a machine's public name or certificate state. A
+// private-mode machine comes back untouched: the certificate keys are ignored
+// unless the machine is in zone mode, so a stray cert-state on an unstamped
+// machine can never make it render as anything but private.
+func DecodeMachine(config map[string]string, machine Machine) Machine {
+	machine.PublicHostname = PublicHostnameFromConfig(config)
+	if machine.PublicHostname == "" {
+		machine.CertState = ""
+		machine.CertNotAfter = ""
+		return machine
+	}
+	machine.CertState = strings.TrimSpace(config[KeyV2CertState])
+	machine.CertNotAfter = strings.TrimSpace(config[KeyV2CertNotAfter])
+	return machine
 }
 
 type Route struct {

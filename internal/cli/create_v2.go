@@ -517,9 +517,13 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	// Names are stable; private IPs are recycled leases. With the true key
 	// already on disk we can demand StrictHostKeyChecking=yes, so a rebuilt
 	// machine never trips the MITM warning and a real impostor always does.
-	names := v2MachineNames(summary, project, machineName)
+	// The live connect path does not read the Naming Mode record off the
+	// instance yet (ADR-0027: `sc create` and connect are wired in a later
+	// slice); until then every machine it dials is private-mode.
+	const publicHostname = ""
+	names := v2MachineNames(summary, project, machineName, publicHostname)
 	sshArgs := []string{"-o", "IdentitiesOnly=yes", "-i", privateKeyPath}
-	if len(names) > 0 && ensureV2HostKey(ctx, config, summary, project, machineName, ensured.PrivateIP, ensured.PrivateCIDR) {
+	if len(names) > 0 && ensureV2HostKey(ctx, config, summary, project, machineName, publicHostname, ensured.PrivateIP, ensured.PrivateCIDR) {
 		sshArgs = append(sshArgs,
 			"-o", "HostKeyAlias="+names[0],
 			"-o", "StrictHostKeyChecking=yes",
