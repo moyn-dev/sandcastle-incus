@@ -5323,3 +5323,59 @@ implementer, and one thing it asks for that the library does not allow:
   `sqlite3` recipe); the e2e phase's `sqlite3` steps assume the client is
   present on the appliance image. Slice 7 owns the e2e run and the
   `make e2e-safe` gate wiring for `SANDCASTLE_E2E_CLOUDFLARE_TOKEN`.
+
+## 2026-09-12 — Public DNS Zones slice 7: e2e Phase 12 + docs sweep
+
+Spec `docs/spec/public-dns-zones.md` §7, §8, §9 item 7 (issue #169). No product
+code changed; the decisions are about how the phase is wired and run:
+
+- **Phase 12 is a shell driver, and the Go e2e test runs it.** The other
+  phases of `docs/e2e-sc2.md` are a manual runbook; the two hermetic variants
+  that exist (`scripts/e2e-route.sh`, `scripts/e2e-local-vm.sh`) are bash
+  over the CLIs. Phase 12 follows that shape: `scripts/e2e-pdz.sh` drives
+  `sc`/`sc admin` (one fat binary — `sc admin …` *is* the `sc-adm` tree, so the
+  script needs a single binary path) and asserts with `dig`, `openssl s_client`
+  and `curl --resolve`. `TestPublicDNSZonePhase12E2E` in `internal/e2e` is the
+  harness-side gate: it `t.Skip`s without `SANDCASTLE_E2E=1` or without the two
+  zone variables, builds the binary, and execs the script. Alternative
+  considered: reimplementing the phase in Go against the Auth App HTTP API and
+  the Incus client — rejected, it would test the API rather than the CLI the
+  operator runs, and it could not do the tailnet-side `openssl`/`curl` checks
+  any better than bash.
+- **Three-way gate, never a failure.** `scripts/e2e.sh pdz` sources
+  `.env.sc2` (where the other e2e secrets already live), then skips (exit 0)
+  when the token/zone are absent *and also* when they are present but
+  `SANDCASTLE_E2E` is not `1`. The issue asked only for the first skip; the
+  second keeps `make e2e-safe` from turning destructive (real Cloudflare
+  records, a real staging order) the moment the operator drops the credentials
+  into `.env.sc2`. The live run is therefore an explicit opt-in:
+  `SANDCASTLE_E2E=1 scripts/e2e.sh pdz` (or `SANDCASTLE_E2E=1 make e2e-safe`).
+- **The script covers the issue's core path; 12e stays manual.** Registry →
+  claim → create → A records → CERT ok → `openssl` (both SANs, STAGING issuer)
+  → wildcard vhost → unset/remove refusals → delete (records gone) → project
+  delete (claim released) → zone removed. The marker-gate, stopped-through-a-
+  push and drift checks of 12e need `sqlite3` inside the appliance (the stock
+  image has none) and wall-clock waits on the reconciler; they are written up
+  as manual steps marked **(DB)** rather than automated with an `apt-get`
+  inside the auth-app. Refusal checks use `--dry-run` so a failed assertion
+  never leaves a stray project behind; a zone that is already registered is
+  reused and left in place (so a run against a shared test install does not
+  unregister someone's zone).
+- **Docs fixed on the way.** The earlier slices' examples used
+  `sc create web --project zp`; `sc create` takes a machine reference
+  (`zp:web`) and has no `--project` flag — corrected in `docs/e2e-sc2.md` and
+  `docs/usage.html`. The skill's troubleshooting table claimed `DETAIL` shows
+  the raw `last_error`; it shows the reason token only (`project.go`), so the
+  raw error is documented as auth-app-log / `sqlite3` only. Phase 12 fragments
+  12a–12f from slices 3, 4 and 6 were merged into one section with a single
+  gate paragraph, the "until slice N" wording removed, and a pointer added to
+  Phase 8c (private-mode contract) and to the Phase 1 `--acme-directory` note.
+- **`docs/glossary.md` gained a Public DNS Zones section** (the seven
+  `CONTEXT.md` terms plus "zone reconciler" and "ACME directory", phrased for
+  the CLI reader); `CONTEXT.md` itself was already complete.
+- **ADR-0027 flipped to accepted**; the spec's §10 list is kept verbatim with
+  resolved markers pointing here (route-conflict wording, `project status`
+  layout, ARI without `replaces`, no `MODE=private` line).
+- **The installed skill copy** (`~/.claude/skills/sandcastle/`) was refreshed
+  from the tracked `docs/agents/skills/sandcastle/`; the tracked directory
+  remains the source.

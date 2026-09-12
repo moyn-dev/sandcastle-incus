@@ -124,6 +124,18 @@ nothing on rejection (`Cloudflare rejected the token for zone <zone>: …`). Zon
 may not nest (`… overlaps registered zone <other>; zones may not nest`). The
 token is encrypted at rest and never shown — `TOKEN` is an 8-hex fingerprint.
 
+Which Let's Encrypt the install orders machine certificates from is set at
+deploy time: `sc-adm install … --acme-directory
+https://acme-staging-v02.api.letsencrypt.org/directory` (staging: no budget
+spent, not browser-trusted — e2e and first runs) or the default production
+directory; also on `sc-adm auth-app deploy`. Switching re-orders every zone-mode
+certificate. `--acme-email` is the ACME account contact. A tenant provisioned by
+an older binary needs `sc-adm tenant payload-sync <tenant>` once before its
+projects claim a domain (the zone-aware `caddy-setup` lives in the payload).
+After a tenant claims a domain, nothing is asked of the admin: `sc ls` CERT
+goes `pending` → `ok` within ~5 minutes; the diagnosis path for anything else
+is `reference/troubleshooting.md`.
+
 ## Images
 
 ```bash

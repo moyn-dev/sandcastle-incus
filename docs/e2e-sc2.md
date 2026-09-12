@@ -21,7 +21,7 @@ starts from a clean slate.
 - **GitHub auth — two modes:**
   - **Simulated (no OAuth app, recommended for e2e):** deploy the auth-app with `--simulate-github-token <secret>`; log in with `sc login <auth-host> --simulate-token <secret> --as <username>`. No `GH_CLIENT_ID`/`GH_CLIENT_SECRET`, no browser, no network to GitHub. **Dev/e2e only.**
   - **Real OAuth app:** `.env.sc2` with `GH_CLIENT_ID`, `GH_CLIENT_SECRET`; the OAuth **callback URL is `https://<auth-host>/oauth/github/callback`** (note `/oauth/…`, not `/login/…`).
-- `.env.sc2` at repo root with: `PUBIC_URL=sc2.thieso2.dev`, `TAILSCALE_AUTH_KEY`, and (real-OAuth only) `GH_CLIENT_ID`/`GH_CLIENT_SECRET`. (An optional `TAILSCALE_API_KEY` is useful only for the harness's own tenant-side route-approval scripting — the product has no API-key flag.)
+- `.env.sc2` at repo root with: `PUBIC_URL=sc2.thieso2.dev`, `TAILSCALE_AUTH_KEY`, and (real-OAuth only) `GH_CLIENT_ID`/`GH_CLIENT_SECRET`. (An optional `TAILSCALE_API_KEY` is useful only for the harness's own tenant-side route-approval scripting — the product has no API-key flag.) For **Phase 12** add `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` and `SANDCASTLE_E2E_PUBLIC_DNS_ZONE` (a dedicated Cloudflare test zone the token can edit); without them Phase 12 is skipped, not failed.
 - **Tenant machine reachability (per-tenant tailnet, ADR-0017).** Every sandcastle is part of a tailnet by default — the tailnet is the main operation mode, and every access path (CLI, SSH, DNS, the Incus remote) rides it. The sidecar advertises the tenant `/24` as a subnet route; a client reaches tenant machines only once that route is **approved** and the client **accepts routes**. Every sidecar joins the tailnet tagged **`tag:sandcastle`** (`tailscale up --advertise-tags=tag:sandcastle`), so the **recommended zero-touch approval** is a Tailscale ACL `autoApprovers` rule that auto-approves any route advertised by that tag — no API key, no manual step. Add to the tailnet policy:
   ```jsonc
   "tagOwners":     { "tag:sandcastle": ["autogroup:admin"] },
@@ -896,7 +896,7 @@ sc-adm auth-app deploy \
 ```
 > `--acme-directory` (ADR-0027, also on `sc-adm install`) is the ACME directory
 > the Auth App orders Machine Certificates from for Public DNS Zone projects
-> (Phase 12, once it exists). e2e ALWAYS deploys with the Let's Encrypt
+> (Phase 12). e2e ALWAYS deploys with the Let's Encrypt
 > **staging** URL so no production budget is spent; the default is production.
 > PASS: the appliance's `/etc/sandcastle/auth-app/env` carries
 > `SANDCASTLE_AUTH_ACME_DIRECTORY='https://acme-staging-v02.api.letsencrypt.org/directory'`
@@ -1920,6 +1920,12 @@ the CA (no `-k`), 308-redirected HTTP→HTTPS, proxied to `:3000`, vhosted
 `/workspace`. The file routes were later scoped to `/_h`→`$HOME` (+ `/_w`), which
 also dropped the `/`-root bind-mount workaround.
 
+> This phase is the **private-mode** contract (Tenant CA leaf fetched from the
+> sidecar). A machine in a project with a Project Domain runs the same Caddy
+> against a Let's Encrypt certificate the Auth App pushes instead — that is
+> **Phase 12** (ADR-0027), which also re-runs this phase as its private-mode
+> regression check.
+
 ### Phase 8c-bare — `sc create --bare`: HTTPS and hostname, nothing else ✅
 
 `sc create --bare <machine>` creates a machine that boots with its canonical
@@ -2591,178 +2597,236 @@ API-key path — approval is a tenant action on the tenant's tailnet.)
 
 ## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027) ⚠️ not yet run
 
-Gate: `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` and `SANDCASTLE_E2E_PUBLIC_DNS_ZONE` (a real
-test zone the token can edit); absent → the phase is **skipped, not failed**. 12a is the
-slice-2 zone registry, 12b the slice-3 Project Domain claims, 12c the slice-4 machine
-contract (stamp, output, caddy-setup marker/drop-in, connect) plus the slice-6
-reconciler's A record, order and push; 12d–12f are the reconciler's marker gating,
-drift and GC (`docs/spec/public-dns-zones.md` §4, §7). The install deploys with the Let's
-Encrypt **staging** directory (Phase 1), so browser trust is never asserted — the
-`openssl s_client` check reads the issuer and the SANs. The reconciler logs every step as
-`auth-app zone reconcile: <hostname>: …`; read it with
+A project claims a **Project Domain** under a Cloudflare zone the admin
+registered; every machine created in it afterwards gets the **Machine Public
+Hostname** `<machine>.<domain>` — public `A` records (pointing at the
+tenant-bridge address, reachable over the tailnet only) and one Let's Encrypt
+certificate per machine, ordered centrally over DNS-01 and pushed into the
+machine's Caddy. Spec: `docs/spec/public-dns-zones.md`; user reference:
+`docs/usage.html#public-dns-zones`.
+
+**Gate: `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` + `SANDCASTLE_E2E_PUBLIC_DNS_ZONE`**
+(a real, *dedicated* test zone the token can edit — `Zone > DNS > Edit` +
+`Zone > Zone > Read` on that zone only). Put both in `.env.sc2`. **Absent →
+the phase is skipped, not failed** — `make e2e-safe` prints
+`SKIP: e2e Phase 12 …` and stays green; the Go test
+(`TestPublicDNSZonePhase12E2E`) `t.Skip`s with the same reason.
+
+The install is deployed with the Let's Encrypt **staging** directory (Phase 1:
+`--acme-directory https://acme-staging-v02.api.letsencrypt.org/directory`), so
+no production budget is spent and **browser trust is never asserted** — the
+`openssl s_client` check reads the issuer and the SANs. The reconciler logs
+every step as `auth-app zone reconcile: <hostname>: …`; read it with
 `sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- journalctl -u sandcastle-auth-app --no-pager`.
+Every step below reads `sc`/`sc-adm` output; the few that look into the Auth
+Database are marked **(DB)** and need `sqlite3` inside the appliance
+(`apt-get install -y sqlite3` there — the stock image does not carry it).
+
+Variables: `ZONE=$SANDCASTLE_E2E_PUBLIC_DNS_ZONE`, `RUN` a per-run id, the
+project `zp`, its domain `e2e-$RUN.$ZONE`, the machine `web`. Machine
+references are `<project>:<machine>` (`sc create zp:web`).
+
+### Non-interactive variant (`scripts/e2e-pdz.sh`) — the one CI runs
 
 ```bash
-# 12a — zone registry (admin)
+# from an enrolled client: `sc login` done as a Sandcastle Admin, tenant tailnet route approved,
+# dig/openssl/curl/jq on PATH, .env.sc2 carrying the two gate variables
+SANDCASTLE_E2E=1 scripts/e2e.sh pdz            # sources .env.sc2, runs TestPublicDNSZonePhase12E2E → scripts/e2e-pdz.sh
+SANDCASTLE_E2E=1 make e2e-safe                 # same, after the unit + gated tiers
+```
+The script drives 12a → 12b → 12c/12d (create, A records at `1.1.1.1`, CERT
+`ok`, `sc project status`, `openssl s_client`, wildcard vhost) → 12f
+(refusals, delete → records gone, project delete → claim released, zone
+removed) and prints **`ALL PASS — Phase 12 Public DNS Zones e2e`**. It skips
+(exit 0) without the variables, reuses a zone that is already registered (and
+then leaves it), and tears everything down on failure unless
+`SANDCASTLE_E2E_PDZ_KEEP=1`. 12e and the Freeform/Dev-Image checks of 12d are
+manual.
+
+### 12a — zone registry (admin)
+
+```bash
 sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")
 sc-adm public-dns-zone list
-# PASS: the zone lists with a Cloudflare id and a token fingerprint; a second `add` fails with
-#       "already registered"; `add` with a garbage token fails with "Cloudflare rejected the token"
-#       and `list` is unchanged; `add sub.$ZONE` fails with "zones may not nest".
+# PASS: the zone lists with a Cloudflare id, an 8-hex token fingerprint and CLAIMS 0.
+sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")   # again
+# PASS: "public DNS zone $ZONE is already registered (use set-token to rotate its token)".
+sc-adm public-dns-zone add garbage.$ZONE --token-file <(printf %s not-a-token)
+# PASS: "Cloudflare rejected the token for zone …" and `list` is unchanged (nothing stored).
+sc-adm public-dns-zone add sub.$ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")
+# PASS: "… overlaps registered zone $ZONE; zones may not nest".
+# PASS: `sc admin public-dns-zone list` prints the same table (both roots, one tree);
+#       `sc public-dns-zone` is "unknown command" — the verb is admin-only.
+```
 
-# 12b — Project Domain claims (tenant, after sc login)
+### 12b — Project Domain claims (tenant, after `sc login`)
+
+```bash
 sc project create zp --domain e2e-$RUN.$ZONE
 sc project status zp
-# PASS: `Domain: e2e-$RUN.$ZONE   (zone $ZONE)` (no machine table yet — the project is empty);
+# PASS: `Domain: e2e-$RUN.$ZONE   (zone $ZONE)` and no machine table (the project is empty);
 #       `sc incus project get <prefix>-<tenant>-zp user.sandcastle.v2.domain` = e2e-$RUN.$ZONE;
 #       the project's default profile cloud-init carries `fqdn: {{ v1.local_hostname }}.e2e-$RUN.$ZONE`
-#       and `MODE=zone` in machine.env; `sc-adm public-dns-zone list` shows CLAIMS = 1.
-# PASS: a second tenant's `sc project create x --domain e2e-$RUN.$ZONE` and `--domain a.e2e-$RUN.$ZONE`
-#       both fail with the flat "overlaps a domain already claimed on this install; choose another" text
-#       (no owner named); the same tenant's `sc project create y --domain a.e2e-$RUN.$ZONE` fails with
-#       `overlaps "e2e-$RUN.$ZONE" claimed by project "zp" in this tenant`; `--domain $ZONE` fails with
-#       the apex text; `--domain e2e-$RUN.nosuch.example` fails with "no Public DNS Zone covers … — ask
-#       your admin"; `--domain <auth-hostname>` fails with "is reserved by this install".
-# PASS: `sc project set-domain zp e2e-$RUN.$ZONE` prints `project domain "e2e-$RUN.$ZONE" already
-#       claimed by this project` and exits 0; `sc project set-domain zp e2e-$RUN-2.$ZONE --dry-run`
-#       prints `[dry-run] would have: …` and `sc project status zp` is unchanged.
-# PASS: `sc route publish <machine> --hostname x.e2e-$RUN.$ZONE` (any private machine) fails with
-#       `route hostname "x.e2e-$RUN.$ZONE" is inside project domain "e2e-$RUN.$ZONE" claimed on this install`.
-sc create old --project zp
-sc project unset-domain zp
-# PASS: REFUSED — `old` was stamped zone-mode at create —
-#       "project zp has machines with a public name: old; delete them before changing the project domain".
-sc delete old --yes; sc project unset-domain zp
-# PASS: allowed now, and `sc project status zp` reads `Domain: (none)`; the Incus key is gone and the
-#       profile is back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>` with no MODE line.
+#       and `MODE=zone` in machine.env; `sc-adm public-dns-zone list` shows CLAIMS 1.
+# PASS (refusals — all `--dry-run` so nothing is created):
+#   a second tenant's `sc project create x --domain e2e-$RUN.$ZONE` and `--domain a.e2e-$RUN.$ZONE`
+#     → the flat "overlaps a domain already claimed on this install; choose another" (no owner named);
+#   this tenant's  `sc project create y --domain a.e2e-$RUN.$ZONE`
+#     → `overlaps "e2e-$RUN.$ZONE" claimed by project "zp" in this tenant`;
+#   `--domain $ZONE`                     → "is a zone apex; claim at least one label below $ZONE";
+#   `--domain e2e-$RUN.nosuch.example`   → "no Public DNS Zone covers … — ask your admin";
+#   `--domain <auth-hostname>`           → "is reserved by this install".
 sc project set-domain zp e2e-$RUN.$ZONE
-sc-adm public-dns-zone remove $ZONE
-# PASS: refused, lists e2e-$RUN.$ZONE (<tenant>/zp).
-sc delete old --yes; sc project delete zp --yes
-# PASS: claim row gone (`sc-adm public-dns-zone list` CLAIMS = 0), the Incus project is gone,
-#       and `sc-adm public-dns-zone remove $ZONE` now succeeds.
-# PASS (GC): re-create `zp --domain e2e-$RUN.$ZONE`, then `sc-adm project delete <tenant> zp --yes`
-#       (out-of-band, Incus only); within 5 minutes the auth-app log shows
-#       "pruned orphaned project domain claim e2e-$RUN.$ZONE (<tenant>/zp)" and CLAIMS = 0.
-# PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on
-#       the same install — DNS:/HTTPS: lines byte-identical, CERT column `-`, and the default
-#       profile's cloud-init has no MODE line.
+# PASS: `project domain "e2e-$RUN.$ZONE" already claimed by this project`, exit 0.
+sc project set-domain zp e2e-$RUN-2.$ZONE --dry-run
+# PASS: `[dry-run] would have: …`; `sc project status zp` unchanged.
+sc route publish <any-private-machine> --hostname x.e2e-$RUN.$ZONE
+# PASS: `route hostname "x.e2e-$RUN.$ZONE" is inside project domain "e2e-$RUN.$ZONE" claimed on this install`.
+sc create zp:old; sc project unset-domain zp
+# PASS: REFUSED — "project zp has machines with a public name: old; delete them before changing the project domain".
+sc delete zp:old --yes; sc project unset-domain zp
+# PASS: allowed now; `sc project status zp` reads `Domain: (none)`; the Incus key is gone and the profile is
+#       back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>` with no MODE line.
+sc project set-domain zp e2e-$RUN.$ZONE            # re-claim for the rest of the phase
+```
 
-# 12c — zone-mode machine: the machine contract (slice 4) + A record and certificate (slice 6)
-sc create web --project zp
+### 12c — zone-mode machine: the machine contract
+
+```bash
+sc create zp:web
 # PASS: output has "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
-#       in place of the DNS: line (the IP: line stands alone above it), and returns without waiting;
-#       `sc create --dry-run` prints the same Public name line and makes no Auth App request;
+#       in place of the DNS: line (the IP: line stands alone above it) and returns without waiting;
+#       `sc create zp:web2 --dry-run` prints the same Public name line and makes no Auth App request;
 #       with the Auth App stopped the parenthesis reads
 #       "certificate pending: Auth App unreachable — retried by the reconciler" and the machine is still created.
 # PASS (stamp): `sc incus config get web user.sandcastle.v2.public-hostname` = web.e2e-$RUN.$ZONE, set by the
-#       create call itself (no second write); a machine created in a private project reads `private`;
-#       `sc ls` shows FQDN web.e2e-$RUN.$ZONE and CERT `pending`.
-# PASS (machine side, once cloud-init finished — `sc incus exec web -- cloud-init status --wait`):
+#       create call itself; a machine created in a private project reads `private`;
+#       `sc ls zp:web` shows FQDN web.e2e-$RUN.$ZONE and CERT `pending`.
+# PASS (machine side, once `sc incus exec web -- cloud-init status --wait` returns):
 #   sc incus exec web -- cat /etc/sandcastle/caddy.ready          # → MODE=zone / FQDN=web.e2e-$RUN.$ZONE (0644)
 #   sc incus exec web -- cat /etc/systemd/system/caddy.service.d/sandcastle-zone.conf
 #       # → [Unit] + ConditionPathExists=/etc/sandcastle/tls/cert.pem + ConditionPathExists=/etc/sandcastle/tls/key.pem
 #   sc incus exec web -- systemctl is-enabled caddy                # → enabled
-#   sc incus exec web -- systemctl is-active caddy                 # → inactive (condition unmet; no crash loop, no restart counter)
+#   sc incus exec web -- systemctl is-active caddy                 # → inactive (condition unmet; no crash loop)
 #   sc incus exec web -- ls /etc/sandcastle/tls                    # → empty: no leaf was fetched from the sidecar
 #   sc incus exec web -- test -s /usr/local/share/ca-certificates/sandcastle-tenant.crt   # → tenant CA still trusted
 #   sc incus exec web -- head -1 /etc/caddy/Caddyfile              # → "web.e2e-$RUN.$ZONE, *.web.e2e-$RUN.$ZONE {"
-#   sc restart web; sc incus exec web -- systemctl is-active caddy # → inactive, journal shows the ConditionPathExists skip
-# PASS (connect): `sc c web -- hostname -f` prints web.e2e-$RUN.$ZONE, the ssh line is
+#   sc restart zp:web; sc incus exec web -- systemctl is-active caddy   # → inactive, journal shows the ConditionPathExists skip
+# PASS (connect): `sc c zp:web -- hostname -f` prints web.e2e-$RUN.$ZONE, the ssh line is
 #       `Connecting: ssh dev@<bridge-ip>`, and ~/.ssh/known_hosts gains ONE line keyed `web.e2e-$RUN.$ZONE`
 #       with the `# sandcastle:<remote>/<tenant>` marker — no web.zp.<suffix> line, no short alias;
-#       `sc ssh-key purge --dry-run` reports nothing to do for it. `dig web.zp.<suffix> @<sidecar-ip>` is NXDOMAIN.
-# PASS (A records, ≤ 60s): `dig +short web.e2e-$RUN.$ZONE @1.1.1.1` and `dig +short x.web.e2e-$RUN.$ZONE @1.1.1.1`
-#       both answer the machine's tenant-bridge IPv4 (the IP column of `sc ls`); the Cloudflare dashboard
-#       shows both records DNS-only (grey cloud), TTL 60; the auth-app log has
+#       `sc ssh-key purge --dry-run` reports nothing to do for it.
+# PASS (negative): `dig web.zp.<suffix> @<sidecar-tailscale-ip>` is NXDOMAIN — a zone-mode machine has
+#       no Machine Private Hostname.
+```
+
+### 12d — A records and the certificate (Let's Encrypt staging)
+
+```bash
+dig +short web.e2e-$RUN.$ZONE @1.1.1.1; dig +short x.web.e2e-$RUN.$ZONE @1.1.1.1
+# PASS (≤ 60s): both answer the machine's tenant-bridge IPv4 (the IP column of `sc ls`); the Cloudflare
+#       dashboard shows both records DNS-only (grey cloud), TTL 60; the auth-app log has
 #       "zone reconcile: zone $ZONE: set 2 A record(s)" exactly once — later passes make no writes.
-# PASS (certificate, ≤ 5 min): the auth-app log shows, in order, "web.e2e-$RUN.$ZONE: certificate <serial> issued"
-#       and "certificate <serial> installed on <prefix>-<tenant>-zp/web"; `sc ls` CERT reads `ok`;
+sc ls zp:web; sc project status zp
+# PASS (≤ 5 min): the auth-app log shows, in order, "web.e2e-$RUN.$ZONE: certificate <serial> issued" and
+#       "certificate <serial> installed on <prefix>-<tenant>-zp/web"; `sc ls` CERT reads `ok`;
 #       `sc project status zp` shows `installed` with a NOT AFTER ~90 days out;
 #       `sc incus config get web user.sandcastle.v2.cert-state` = installed and
 #       `… user.sandcastle.v2.cert-not-after` equals that NOT AFTER (RFC 3339 UTC).
 # PASS (machine side after the push): /etc/sandcastle/tls holds cert.pem (0644) and key.pem (0600), no *.new
 #       leftovers; `systemctl is-active caddy` → active (the first push's `systemctl start`);
 #       `journalctl -u caddy` shows one start, no reload failure loop.
-# PASS: from the client (on the tenant tailnet):
-#   openssl s_client -connect <bridge-ip>:443 -servername web.e2e-$RUN.$ZONE </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName -issuer
-#   shows both SANs `DNS:web.e2e-$RUN.$ZONE, DNS:*.web.e2e-$RUN.$ZONE` and an issuer from the
-#   Let's Encrypt STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
-# PASS: `curl --resolve x.web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://x.web.e2e-$RUN.$ZONE/_w/` serves
-#       the /workspace listing (wildcard vhost reaches the same Caddy).
-# PASS (no TXT leftovers): `dig +short TXT _acme-challenge.web.e2e-$RUN.$ZONE @1.1.1.1` is empty once
-#       installed (certmagic cleans up; the reconciler sweeps before every order).
-sc create --bare b1 --project zp
+openssl s_client -connect <bridge-ip>:443 -servername web.e2e-$RUN.$ZONE </dev/null 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName -issuer
+# PASS: both SANs `DNS:web.e2e-$RUN.$ZONE, DNS:*.web.e2e-$RUN.$ZONE` and an issuer from the Let's Encrypt
+#       STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
+curl --resolve x.web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://x.web.e2e-$RUN.$ZONE/_w/
+# PASS: the /workspace listing (wildcard vhost reaches the same Caddy).
+dig +short TXT _acme-challenge.web.e2e-$RUN.$ZONE @1.1.1.1
+# PASS: empty once installed (certmagic cleans up; the reconciler sweeps before every order).
+sc create --bare zp:b1
 # PASS: prints the Public name line and "HTTPS: https://b1.e2e-$RUN.$ZONE   (Let's Encrypt, certificate pending)";
-#       its cloud-init machine.env carries MODE=zone (`sc incus exec b1 -- cat /etc/sandcastle/machine.env`),
-#       and the marker/drop-in/enabled-inactive checks above hold for b1 too; it reaches CERT ok like web.
-sc create devbox --project zp --image <dev-alias>
-# PASS: prints "Public name: devbox.e2e-$RUN.$ZONE (A record pending; no Caddy — no certificate)" plus the
-#       usual "Dev Image: no Caddy/TLS ingress — SSH only." line; the instance is stamped with the public name,
-#       but has no /etc/sandcastle/caddy.ready and no caddy unit.
-sc project unset-domain zp
-# PASS: refused, lists web, b1, devbox (devbox too — it has a public name).
-# PASS (private-mode regression): in a project without a domain, `sc create`, `sc create --bare` and
-#       `sc create --image <dev-alias>` print the pre-ADR-0027 lines byte for byte, the machine is stamped
-#       `private`, /etc/sandcastle/caddy.ready reads MODE=private / FQDN=<m>.<p>.<suffix>, there is no
-#       sandcastle-zone.conf drop-in, and Caddy is active with the tenant-CA leaf as in Phase 8c.
-#       The zone stage never touches such a machine: no A record, no cert-state key, no log line for it.
-
-# 12d — marker gating + freeform + dev image
+#       its cloud-init machine.env carries MODE=zone; the 12c marker/drop-in/enabled-inactive checks hold for b1
+#       too; it reaches CERT ok like web.
+sc create zp:devbox --image <dev-alias>
+# PASS: prints "Public name: devbox.e2e-$RUN.$ZONE (A record pending; no Caddy — no certificate)" plus the usual
+#       "Dev Image: no Caddy/TLS ingress — SSH only." line; the instance is stamped with the public name, gets an
+#       A record, but has no /etc/sandcastle/caddy.ready and no caddy unit; CERT stays `pending` and the auth-app
+#       log has exactly one "devbox: no caddy setup marker" line and no order for devbox.e2e-$RUN.$ZONE.
 incus launch <ct-image> ff --project <prefix>-<tenant>-zp     # Freeform Machine, profile = default
 # PASS (≤ 60s): the auth-app log shows "stamped <prefix>-<tenant>-zp/ff user.sandcastle.v2.public-hostname=ff.e2e-$RUN.$ZONE"
-#       (once, never again); `dig +short ff.e2e-$RUN.$ZONE @1.1.1.1` answers its bridge IP.
-# PASS: while cloud-init runs, the log has ONE "ff: no caddy setup marker; A record only" line (not one per pass);
-#       once /etc/sandcastle/caddy.ready exists the log shows "certificate row created", then issued, then
-#       installed — CERT ok, with no `sc create` involved.
-# PASS (devbox): CERT stays `pending` forever; `sc incus config get devbox user.sandcastle.v2.cert-state` =
-#       pending; the auth-app log has exactly one "devbox: no caddy setup marker" line and no order for
-#       devbox.e2e-$RUN.$ZONE; its A record exists.
-# PASS (gate refuses a wrong marker): `sc incus exec ff -- sh -c 'printf "MODE=zone\nFQDN=other.e2e-$RUN.$ZONE\n" > /etc/sandcastle/caddy.ready'`,
-#       then clear pushed_serial (12e) — the log shows "caddy setup marker does not name ff.e2e-$RUN.$ZONE"
-#       once, CERT reads `pending` (state issued), nothing is pushed; restore the marker → pushed within 60s.
+#       (once); `dig +short ff.e2e-$RUN.$ZONE @1.1.1.1` answers its bridge IP; while cloud-init runs the log has
+#       ONE "ff: no caddy setup marker; A record only" line; once /etc/sandcastle/caddy.ready exists the log shows
+#       "certificate row created", then issued, then installed — CERT ok with no `sc create` involved.
+```
 
-# 12e — stopped through a push, reboot before cert, drift
-sc stop web
+### 12e — marker gate, stopped machines, reboot before the cert, drift
+
+```bash
+# marker gate refuses a wrong hostname
+sc incus exec ff -- sh -c 'printf "MODE=zone\nFQDN=other.e2e-$RUN.$ZONE\n" > /etc/sandcastle/caddy.ready'
 sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
-  sqlite3 /var/lib/sandcastle/auth/auth.db "UPDATE machine_certificates SET pushed_serial='' WHERE hostname='web.e2e-$RUN.$ZONE'"
+  sqlite3 /var/lib/sandcastle/auth/auth.db "UPDATE machine_certificates SET pushed_serial='' WHERE hostname='ff.e2e-$RUN.$ZONE'"   # (DB)
+# PASS: the log shows "caddy setup marker does not name ff.e2e-$RUN.$ZONE" once, CERT reads `pending`
+#       (state issued), nothing is pushed; restore the marker → pushed within 60s.
+# stopped through a push
+sc stop zp:web
+sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
+  sqlite3 /var/lib/sandcastle/auth/auth.db "UPDATE machine_certificates SET pushed_serial='' WHERE hostname='web.e2e-$RUN.$ZONE'"   # (DB)
 # PASS: the next passes log nothing for web (stopped: no push, no drift check); `sc ls` CERT `pending`
 #       (state issued), `sc project status zp` DETAIL empty.
-sc start web
-# PASS (≤ 15s of instance-started): the log shows "certificate <serial> installed on …/web" (same serial as
-#       before — a re-push, no new order), CERT ok again.
-sc create late --project zp; sc restart late      # restart BEFORE the cert lands (within ~60s of create)
-# PASS: caddy is enabled, inactive, `systemctl status caddy` reports the ConditionPathExists skip, no crash
-#       loop; once pushed, caddy is active and `openssl s_client` serves the certificate.
+sc start zp:web
+# PASS (≤ 15s of instance-started): "certificate <serial> installed on …/web" with the SAME serial (a re-push,
+#       no new order); CERT ok again.
+# reboot before the certificate lands
+sc create zp:late; sc restart zp:late          # within ~60s of create
+# PASS: caddy is enabled, inactive, `systemctl status caddy` reports the ConditionPathExists skip, no crash loop;
+#       once pushed, caddy is active and `openssl s_client` serves the certificate.
+# drift
 sc incus exec web -- sh -c 'echo x >> /etc/sandcastle/tls/cert.pem'
 # PASS (≤ 60s): the log shows "certificate on …/web differs from the issued one; re-pushing" and a new
-#       "installed" line with the SAME serial; cert.pem is byte-identical to the Auth App's copy again and
-#       Caddy serves the correct chain. No new order in the log.
-# PASS (renewal timing is not spent): the row's renew_after is ~60 days out (2/3 of the 90-day lifetime) or the
-#       ARI window start once ari_check_after (6h) has passed — `SELECT renew_after, ari_check_after FROM
-#       machine_certificates` — and the log shows no order for web after the first one.
-
-# 12f — set-domain / unset-domain / remove guards, delete + GC
-sc project unset-domain zp
-# PASS: refused, lists web, ff, b1, late (devbox too — it has a public name).
-sc-adm public-dns-zone remove $ZONE
-# PASS: refused, lists e2e-$RUN.$ZONE (<tenant>/zp).
-sc delete web --yes
-# PASS (≤ 60s): both A records gone (`dig` empty; log "deleted 2 stale A record(s)"); the
-#       machine_certificates row for web.e2e-$RUN.$ZONE is RETAINED (`SELECT hostname, serial FROM …`).
-sc create web --project zp
-# PASS: `sc create` prints the usual Public name line; CERT reaches ok with NO new "issued" line in the
-#       auth-app log — the retained certificate (same serial) is pushed once the marker appears.
-sc project delete zp --yes
-# PASS: claim row gone, `SELECT count(*) FROM machine_certificates WHERE hostname LIKE '%.e2e-$RUN.$ZONE'` = 0,
-#       no A records under the domain remain (including *.<m> and any _acme-challenge TXT), the zone is
-#       removable, and `sc-adm public-dns-zone remove $ZONE` now succeeds.
-# PASS (GC, out-of-band): re-create zp --domain, a machine, wait for CERT ok, then `sc-adm project delete
-#       <tenant> zp --yes`; within 5 minutes the log shows the pruned claim AND the A records are gone; the
-#       certificate row is dropped with the claim.
-# PASS (staging → production switch heals): redeploy the auth-app with the production directory on a
-#       throwaway install — every zone-mode row logs "certificate issued by <staging>, running <production>;
-#       re-ordering" once and is re-issued (spends production budget: only on a dedicated test zone).
-# PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on the
-#       same install — DNS:/HTTPS: lines byte-identical, CERT column `-`.
+#       "installed" line with the SAME serial; cert.pem is byte-identical to the Auth App's copy again and Caddy
+#       serves the correct chain. No new order in the log.
+# PASS (renewal timing is not spent) (DB): `SELECT renew_after, ari_check_after FROM machine_certificates` — renew_after
+#       is ~60 days out (2/3 of the 90-day lifetime) or the ARI window start once ari_check_after (6h) has passed;
+#       the log shows no order for web after the first one.
 ```
+
+### 12f — refusals, then cleanup (delete → records gone → claim released → zone removed)
+
+```bash
+sc project unset-domain zp
+# PASS: refused, lists web, ff, b1, late and devbox (it has a public name too).
+sc-adm public-dns-zone remove $ZONE
+# PASS: refused — "public DNS zone $ZONE still has claimed project domains: e2e-$RUN.$ZONE (<tenant>/zp); unset them first".
+sc delete zp:web --yes
+# PASS (≤ 60s): both A records gone (`dig` empty; log "deleted 2 stale A record(s)"); (DB) the
+#       machine_certificates row for web.e2e-$RUN.$ZONE is RETAINED (`SELECT hostname, serial FROM machine_certificates`).
+sc create zp:web
+# PASS: the usual Public name line; CERT reaches ok with NO new "issued" line in the auth-app log — the retained
+#       certificate (same serial) is pushed once the marker appears (the 5-per-identifier-set budget is not spent).
+sc delete 'zp:*' --yes; sc project delete zp --yes
+# PASS: the Incus project is gone; `sc-adm public-dns-zone list` shows CLAIMS 0; no A records under
+#       e2e-$RUN.$ZONE remain (including *.<m> and any _acme-challenge TXT); (DB)
+#       `SELECT count(*) FROM machine_certificates WHERE hostname LIKE '%.e2e-$RUN.$ZONE'` = 0.
+sc-adm public-dns-zone remove $ZONE
+# PASS: succeeds now; `list` no longer shows it.
+# PASS (GC, out-of-band): register the zone again, re-create zp --domain and a machine, wait for CERT ok, then
+#       `sc-adm project delete <tenant> zp --yes` (Incus only); within 5 minutes the auth-app log shows
+#       "pruned orphaned project domain claim e2e-$RUN.$ZONE (<tenant>/zp)", the A records are gone and the
+#       certificate row is dropped with the claim; CLAIMS 0 and the zone is removable.
+# PASS (staging → production switch heals): redeploy the auth-app with the production directory on a throwaway
+#       install — every zone-mode row logs "certificate issued by <staging>, running <production>; re-ordering"
+#       once and is re-issued (spends production budget: only on a dedicated test zone).
+# PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on the same
+#       install — DNS:/HTTPS: lines byte-identical, CERT column `-`, the machine stamped `private`,
+#       /etc/sandcastle/caddy.ready reads MODE=private / FQDN=<m>.<p>.<suffix>, no sandcastle-zone.conf drop-in,
+#       Caddy active with the tenant-CA leaf, and the zone stage never touches such a machine (no A record,
+#       no cert-state key, no log line for it).
+```
+
+**PASS (phase):** `scripts/e2e-pdz.sh` ends with `ALL PASS`, and the manual
+12d/12e extras above hold. Tenants provisioned before this feature keep working
+unchanged; their `/.sc` payload (the new `caddy-setup`) converges on the next
+`sc payload-sync` / `sc-adm tenant payload-sync <tenant>` — needed only before
+*their* projects claim a domain.

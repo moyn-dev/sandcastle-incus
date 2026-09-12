@@ -13,9 +13,9 @@ type fakeTrustDeleteServer struct {
 	deleted      []string
 }
 
-func (f *fakeTrustDeleteServer) GetProjects() ([]api.Project, error)  { return nil, nil }
-func (f *fakeTrustDeleteServer) DeleteProject(string) error           { return nil }
-func (f *fakeTrustDeleteServer) DeleteStoragePool(string) error       { return nil }
+func (f *fakeTrustDeleteServer) GetProjects() ([]api.Project, error) { return nil, nil }
+func (f *fakeTrustDeleteServer) DeleteProject(string) error          { return nil }
+func (f *fakeTrustDeleteServer) DeleteStoragePool(string) error      { return nil }
 func (f *fakeTrustDeleteServer) UseProject(string) TenantDeleteResourceServer {
 	return nil
 }

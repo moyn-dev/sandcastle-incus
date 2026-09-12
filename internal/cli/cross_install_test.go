@@ -50,10 +50,10 @@ func TestResolveConnectTarget(t *testing.T) {
 		cases := []struct{ pinned, project, want string }{
 			{"sc2-thieso2-web", "web", "thieso2"},
 			{"sc2-e2edns-default", "default", "e2edns"},
-			{"id-e2edns-default", "default", "e2edns"},   // non-default install prefix
-			{"sc2-foo-bar-web", "web", "foo-bar"},         // dashed tenant
-			{"sc2-t-web-app", "web-app", "t"},             // dashed project
-			{"sc2-thieso2-web", "other", ""},              // project mismatch -> ""
+			{"id-e2edns-default", "default", "e2edns"}, // non-default install prefix
+			{"sc2-foo-bar-web", "web", "foo-bar"},      // dashed tenant
+			{"sc2-t-web-app", "web-app", "t"},          // dashed project
+			{"sc2-thieso2-web", "other", ""},           // project mismatch -> ""
 			{"", "web", ""},
 		}
 		for _, c := range cases {

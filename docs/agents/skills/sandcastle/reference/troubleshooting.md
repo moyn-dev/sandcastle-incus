@@ -126,7 +126,7 @@ Reading the states (`sc project status` CERT column; `sc ls` folds them):
 | `issued` | certificate held by the Auth App, not on the machine yet | machine stopped, or the marker gate refused — start it / check the marker |
 | `installed` | pushed and confirmed; `NOT AFTER` is its expiry | nothing |
 | `renewing` | installed and past the ARI renewal window; a renewal order is due or failing | the old certificate still serves; a `DETAIL` here is the last renewal error |
-| `failed:<reason>` | no valid certificate and the last order failed; in backoff (1m, 5m, 30m, 2h, 6h) | read `DETAIL` (the raw `last_error`) and the auth-app log; fix the cause, the reconciler retries on schedule |
+| `failed:<reason>` | no valid certificate and the last order failed; in backoff (1m, 5m, 30m, 2h, 6h) | read `DETAIL` (the `<reason>` token) and the auth-app log for the full ACME problem; fix the cause, the reconciler retries on schedule |
 
 `<reason>` is one of `rate-limited` (Let's Encrypt budget — 50 per zone per
 week, 5 per identifier set per week; wait for the window), `dns-propagation`
@@ -147,9 +147,17 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
   files (`systemctl status caddy` shows the `ConditionPathExists` skip, no crash
   loop). `sc restart <m>` is safe and leaves it inactive again.
 - **`CERT failed`** — `sc project status <project>` DETAIL carries the reason
-  token and the raw `last_error`; the reconciler retries with backoff (see the
-  table above). The auth-app log line `zone reconcile: <m>.<domain>: order
-  failed: …` has the full ACME problem.
+  token only; the reconciler retries with backoff (see the table above). The
+  raw error is in the auth-app log line `zone reconcile: <m>.<domain>: order
+  failed: …` (the full ACME problem). No CLI command reads the Auth Database;
+  the row's `last_error` is reachable only with `sqlite3` inside the appliance
+  (`/var/lib/sandcastle/auth/auth.db`, table `machine_certificates`), which the
+  stock image does not carry.
+- **`CERT pending` for every machine of the tenant, with A records present and
+  no marker anywhere** — the tenant's `/.sc` payload predates the zone-aware
+  `caddy-setup` (provisioned by an older binary). Converge it once:
+  `sc payload-sync` (tenant, after `sc update`) or `sc-adm tenant payload-sync
+  <tenant>`; then recreate the affected machines (their setup already ran).
 - **`issued` that never becomes `installed`** — the machine is stopped (start
   it; `instance-started` pushes within seconds) or the push failed: the log
   shows `push certificate to … : command exited with status …`; run the

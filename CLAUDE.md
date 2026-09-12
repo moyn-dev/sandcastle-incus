@@ -29,7 +29,7 @@ These graphs reflect the commit they were generated at (`meta.json` records it);
 - Lint: `go vet ./...` (no separate lint step; format with `gofmt`)
 - Integration tests (real Incus): `SANDCASTLE_INCUS_INTEGRATION=1 go test ./internal/integration`
 - E2E tests (creates/destroys real tenants): `SANDCASTLE_INCUS_E2E=1 go test ./internal/e2e`
-- Safe E2E suite: `make e2e-safe` (unit + gated + local stages via `scripts/e2e.sh`)
+- Safe E2E suite: `make e2e-safe` (unit + gated + `pdz` stages via `scripts/e2e.sh`). The `pdz` stage is e2e Phase 12 (Public DNS Zones against Let's Encrypt staging); it sources `.env.sc2` and runs only with `SANDCASTLE_E2E=1` + `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` + `SANDCASTLE_E2E_PUBLIC_DNS_ZONE`, otherwise it is skipped, never failed
 - Build base image locally: `mise run image:base:build-upload` (docker on the host; requires `SANDCASTLE_REMOTE`)
 - Build AI image locally: `mise run image:ai:build-upload` (resolves latest npm versions, requires `SANDCASTLE_REMOTE`)
 - Build + publish to GHCR via the Image Builder appliance: `mise run image:all:build-remote` (requires `SANDCASTLE_REMOTE` and `SANDCASTLE_GHCR_TOKEN`; see `docs/adr/0010-image-builder-appliance.md`). **Produces OCI images** — good for registry distribution, *not* for machine images (Incus runs OCI images as application containers; systemd never boots)

@@ -1,6 +1,6 @@
 # Public DNS Zones: Machine Public Hostnames with Let's Encrypt Certificates via Central DNS-01
 
-> Status: **proposed** (2026-09-12). Map: issue #155 (tickets #156–#161). Spec: `docs/spec/public-dns-zones.md`. Builds on ADR-0018 (Machine Private Hostnames, Auth App DNS reconciler), ADR-0021 (one Incus remote, one Auth App per install), ADR-0022 (`/.sc` platform payload), ADR-0023 (resource cache). **Amends** ADR-0025 (the Auth App now holds a DNS-edit token) and ADR-0011 decision 6 (cert delivery is inverted for zone mode). Leaves ADR-0013 untouched.
+> Status: **accepted** (2026-09-12). Implemented on branch `feat/public-dns-zones`, 2026-09-12 (slices 1–7, issues #163–#169; deviations recorded in `implementation-notes.md`). Map: issue #155 (tickets #156–#161). Spec: `docs/spec/public-dns-zones.md`. Builds on ADR-0018 (Machine Private Hostnames, Auth App DNS reconciler), ADR-0021 (one Incus remote, one Auth App per install), ADR-0022 (`/.sc` platform payload), ADR-0023 (resource cache). **Amends** ADR-0025 (the Auth App now holds a DNS-edit token) and ADR-0011 decision 6 (cert delivery is inverted for zone mode). Leaves ADR-0013 untouched.
 
 ## Context
 

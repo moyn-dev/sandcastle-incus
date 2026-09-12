@@ -698,7 +698,13 @@ since its Machines would sit `pending` indefinitely.
 
 ## 10. Open
 
-Left open by the tickets; not decided here.
+Left open by the tickets; not decided here. Items the implementation slices
+*did* settle are marked **resolved** with a pointer to the dated entry in
+`implementation-notes.md` (2026-09-12); the list itself is kept as written.
+Settled outside this list: ARI-timed renewals run **without** the ACME
+`replaces` field (§3.5 asked for it; certmagic keeps the key unexported — see
+"slice 6: the zone reconciler"), and private-mode profiles carry no
+`MODE=private` line (§5.1 — see "slice 3: Project Domain claims").
 
 - **Budget exhaustion up front.** The reconciler's backoff absorbs LE rate-limit errors as
   `failed:rate-limited` (#157), and §3.4 lets `sc create` print the reason. Whether `sc create` should
@@ -710,5 +716,10 @@ Left open by the tickets; not decided here.
 - **Public Routes targeting a Machine Public Hostname** instead of a machine port.
 - **Folding the ADR-0025 route-DNS token into Public DNS Zones**; they coexist for now.
 - **Certificate profile** (`classic` vs `tlsserver`) — default `classic`; ARI handles either.
+  (Unchanged by the slices: no profile is requested, so the CA's default applies.)
 - **`UpsertRoute` reverse-check wording** (§3.3) and the **`project status` table layout** (§2.2) are
   proposed here, not fixed by a ticket; implementers may adjust the wording, not the check.
+  **Resolved** (slice 3, `implementation-notes.md` "Project Domain claims"): every route
+  conflict — own tenant or foreign — reads as install-reserved, and the `project status` table is
+  `MACHINE / PUBLIC NAME / CERT / NOT AFTER / DETAIL` with `DETAIL` carrying the `failed:` reason
+  token only (the raw `last_error` stays on the row).
