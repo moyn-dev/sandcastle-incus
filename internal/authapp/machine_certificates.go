@@ -2,11 +2,9 @@ package authapp
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -351,60 +349,11 @@ func machineCertificateKeyPEM(ctx context.Context, db *sql.DB, row machineCertif
 	return string(plain), nil
 }
 
-// machineCertEncryptionKeyKey is the auth_app_meta key holding the AES key
-// machine private keys are sealed under (spec §1.4). Same mechanism as the
-// OIDC signing keys, separate purpose-labelled key.
-const machineCertEncryptionKeyKey = "machine_cert_key"
-
 // machineCertEncryptionKey returns the machine_cert_key, creating it on first
-// use exactly like oidcEncryptionKey does for its purpose.
+// use; the purpose-keyed mechanism is shared with Public DNS Zone tokens and
+// OIDC signing keys (secrets.go).
 func machineCertEncryptionKey(ctx context.Context, db *sql.DB) ([]byte, error) {
-	return purposeEncryptionKey(ctx, db, machineCertEncryptionKeyKey)
-}
-
-func purposeEncryptionKey(ctx context.Context, db *sql.DB, metaKey string) ([]byte, error) {
-	var encoded string
-	err := db.QueryRowContext(ctx, "SELECT value FROM auth_app_meta WHERE key = ?", metaKey).Scan(&encoded)
-	if err == nil {
-		key, err := decodeEncryptionKey(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", metaKey, err)
-		}
-		return key, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	fresh, err := newEncryptionKey()
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO auth_app_meta (key, value, updated_at) VALUES (?, ?, datetime('now'))
-ON CONFLICT(key) DO NOTHING
-`, metaKey, fresh); err != nil {
-		return nil, err
-	}
-	return purposeEncryptionKey(ctx, db, metaKey)
-}
-
-func newEncryptionKey() (string, error) {
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(key), nil
-}
-
-func decodeEncryptionKey(encoded string) ([]byte, error) {
-	key, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("decode encryption key: %w", err)
-	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("encryption key has invalid length %d", len(key))
-	}
-	return key, nil
+	return secretEncryptionKey(ctx, db, machineCertEncryptionKeyKey)
 }
 
 // parseLeafCertificate returns the first certificate of a PEM chain.

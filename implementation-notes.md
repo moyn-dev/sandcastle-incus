@@ -5041,3 +5041,7 @@ public API does not allow:
 - **Failure-reason vocabulary** (`acmeFailureReason`) is a substring
   classifier over `last_error` — good enough for the six fixed tokens; the
   raw error is kept verbatim on the row for `sc project status`.
+
+## 2026-09-12 — merge of slice 5 onto slice 2: one purpose-keyed secret helper
+
+Slices 2 and 5 were built in parallel and each added a "32-byte AES key per purpose in `auth_app_meta`" helper (`secretEncryptionKey` in `secrets.go`, `purposeEncryptionKey` in `machine_certificates.go`) under the same `machine_cert_key` meta key. Kept the slice-2 one, since Public DNS Zone tokens already use it, and made `machineCertEncryptionKey` delegate to it; the slice-5 copy and its private base64/rand helpers were deleted. No behavioural difference: same key derivation, same `ON CONFLICT DO NOTHING` first-use race handling.
