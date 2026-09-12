@@ -120,6 +120,11 @@ keeps a child from carrying the source machine's identity.
 
 ## DNS, trust, tailnet
 
+Tailnet membership is the default state, not an opt-in: every sandcastle is on
+its Tenant Tailnet — tenant creation attaches the sidecar, and all access (CLI,
+SSH, DNS, the Incus remote itself) rides it. `sc tailscale up` re-attaches or
+repairs a detached sidecar; it does not enable an optional feature.
+
 The tenant's sidecar runs CoreDNS for the tenant zone at the tenant CIDR's `.3`
 address, reachable over the tailnet subnet route.
 

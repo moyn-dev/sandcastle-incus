@@ -356,7 +356,7 @@ SANDCASTLE_CLAUDE_VERSION=2.1.145 \
 
       <h3>4. Create the tenant</h3>
       <pre><code>./bin/sc-adm tenant create acme</code></pre>
-      <p>This creates the tenant Incus project with an initial <code>default</code> lightweight project, tenant-local Sandcastle image aliases, tenant-private bridge network, isolated home/workspace/CA volumes, CoreDNS sidecar, and Tailscale sidecar. Both sidecars start immediately, but <strong>Tailscale is not yet activated</strong> — the container is running but <code>tailscaled</code> has not been started.</p>
+      <p>This creates the tenant Incus project with an initial <code>default</code> lightweight project, tenant-local Sandcastle image aliases, tenant-private bridge network, isolated home/workspace/CA volumes, CoreDNS sidecar, and Tailscale sidecar. <strong>The sidecar joins the Tenant Tailnet as part of creation</strong> — every sandcastle is part of a tailnet by default; this is the main operation mode. With <code>--tailscale-authkey tskey-…</code> it joins unattended; without one, the command prints a <code>login.tailscale.com</code> URL to open and approve.</p>
 
       <h3>5. Create the developer certificate token</h3>
       <p>Generate the token on the admin host while <code>SANDCASTLE_REMOTE</code> points at the Incus server the developer can reach. The join token contains the server address, so the developer does not pass a separate host when adding the remote.</p>
@@ -437,9 +437,10 @@ sc config set project website
 sc project status website</code></pre>
       <p>Docker is installed in the base machine image, but the daemon is disabled by default. Use <code>sc project set-docker-autostart website on</code> only for projects where new machines should start Docker automatically; this also enables nested container tooling for those machines. Otherwise developers can run <code>sudo systemctl start docker</code> inside an individual machine.</p>
 
-      <h3>6. Attach the tenant to the developer's Tailscale network</h3>
-      <pre><code>sc tailscale up</code></pre>
-      <p>The command runs <code>tailscale up --timeout=60s</code> inside the current tenant's Tailscale sidecar and advertises the tenant private CIDR. For unattended environments, pass an auth key with <code>--auth-key tskey-auth-...</code>; without one, Tailscale may print a browser auth URL but the command remains bounded by the timeout.</p>
+      <h3>6. Verify (or re-attach) the tenant's tailnet membership</h3>
+      <pre><code>sc tailscale status
+sc tailscale up            <span class="comment"># only if the sidecar is detached</span></code></pre>
+      <p>Every sandcastle is part of a tailnet by default — tenant creation already attached the sidecar, so this step normally only verifies. If the sidecar is detached, <code>sc tailscale up</code> runs <code>tailscale up --timeout=60s</code> inside the current tenant's Tailscale sidecar and advertises the tenant private CIDR. For unattended environments, pass an auth key with <code>--auth-key tskey-auth-...</code>; without one, Tailscale may print a browser auth URL but the command remains bounded by the timeout.</p>
 
       <h3>7. Local DNS resolver</h3>
       <p>The standalone <code>sc dns setup</code> command was removed. The local resolver for the tenant suffix is now installed automatically during <code>sc login</code> (pass <code>--skip-setup</code> to suppress it), pointing directly at the tenant CoreDNS sidecar. The remaining <code>sc dns</code> subcommands are <code>teardown</code> and <code>uninstall</code>, which remove that resolver config again.</p>

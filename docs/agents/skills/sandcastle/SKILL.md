@@ -37,6 +37,13 @@ Tenant                          the ownership / identity / DNS / tailnet boundar
       └── Machine               a container (CT) or VM; native Incus instance name
 ```
 
+- **Every sandcastle is part of a tailnet by default — that is the main
+  operation mode, not an add-on.** Tenant creation brings the tenant's sidecar
+  onto the Tenant Tailnet (via auth key, or the printed `login.tailscale.com`
+  URL), the Incus remote lives at the sidecar's tailnet IP, and every access
+  path — `sc` commands, SSH, tenant DNS — rides the tailnet. There is no
+  non-tailnet path; `sc login` refuses a client that is not itself a tailnet
+  node.
 - A **machine reference** is `[[remote:]project:]machine`. Omitted parts fall
   back to the active install and project.
 - A machine's DNS name is `<machine>.<project>.<suffix>`. Machines in the

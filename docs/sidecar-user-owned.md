@@ -146,3 +146,26 @@ converge run **with** `--tailscale-authkey` does re-run `tailscale up` with
   (tailnet egress).
 - `docs/research/shared-tailscale-node-egress-2026-09-03.md` — the evidence,
   the options considered, and the measurements.
+
+## Applied a second time: skorfmann on obelix, 2026-09-04
+
+Same procedure, run from the operator's admin remote (`incus … big:`), with
+egress switched on first — that tenant never had it:
+
+```sh
+incus project set big:obelix-skorfmann user.sandcastle.v2.tailnet-egress=true
+# bridge + sidecar artifacts applied by hand from internal/tenant/egress.go
+# rather than running a full `sc-adm tenant create` converge against a tenant
+# holding live prod machines (the converge also touches suffix, profiles,
+# payload and the sidecar's tailnet hostname).
+```
+
+Observed: the sidecar kept its tailnet IPv4 (100.84.214.28) and its hostname,
+so no duplicate device row appeared and no `sc` client needed re-enrolling;
+the `/24` came back approved without a manual click; peers 17 → 18 with the
+shared node present. During the ~1 minute the node is logged out the admin
+console shows the route as no longer advertised — that is the window, not a
+failure; check `tailscale debug netmap | SelfNode.AllowedIPs` afterwards.
+
+Still owed on every switch: **disable key expiry** in the console (the fresh
+node came back with a 180-day expiry).

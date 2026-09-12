@@ -147,7 +147,7 @@
     <li><a href="#machines">Create &amp; manage machines</a></li>
     <li><a href="#routes">Publish public routes</a></li>
     <li><a href="#trust">Install local CA trust</a></li>
-    <li><a href="#tailscale">Attach Tailscale</a></li>
+    <li><a href="#tailscale">Tailscale — the Tenant Tailnet</a></li>
     <li><a href="#infra">Auth App service</a></li>
     <li><a href="#images">Manage images</a></li>
     <li><a href="#e2e">E2E scripts</a></li>
@@ -762,19 +762,18 @@ Publish a machine's port to the public Internet.
 
 <!-- ─── 6. Tailscale ─────────────────────────────────────────────────── -->
 <section id="tailscale">
-  <h2>6. Attach Tailscale</h2>
+  <h2>6. Tailscale — the Tenant Tailnet</h2>
 
   <div class="step">
     <h3>How it works</h3>
-    <p>Every tenant gets an <code>sc-tailscale</code> sidecar container created automatically during <code>tenant create</code>. It sits on the tenant's private bridge at <code>.2</code> (e.g. <code>10.248.0.2</code>) and has a <code>/dev/net/tun</code> device.</p>
-    <p>The container is started but <strong>Tailscale is not activated yet</strong> — <code>tailscaled</code> and <code>tailscale up</code> are only run when you explicitly call <code>tailscale up</code>. The shared base image keeps <code>tailscaled.service</code> masked by default; the sidecar setup unmasks it for this role only.</p>
-    <p>Once activated, the sidecar acts as a <strong>subnet router</strong>: it advertises the entire tenant private CIDR (e.g. <code>10.248.0.0/24</code>) to your Tailnet. Any device on your Tailnet can then reach all machines in the tenant directly by their private IP, without needing Tailscale installed in each machine.</p>
-    <div class="note"><strong>Tailscale admin console step:</strong> After running <code>tailscale up</code>, approve the advertised route in your Tailscale admin console under the machine's routing settings.</div>
+    <p><strong>Every sandcastle is part of a Tailscale tailnet by default — this is the main operation mode, not an optional add-on.</strong> Tenant creation brings the tenant's sidecar onto the Tenant Tailnet (unattended with <code>--tailscale-authkey</code>, or interactively via the printed <code>login.tailscale.com</code> URL), and all tenant access rides it: the restricted Incus remote lives at the sidecar's tailnet IP (the Incus Reach), machine SSH and tenant DNS travel over the sidecar's advertised subnet route, and <code>sc login</code> refuses a client that is not itself a tailnet node.</p>
+    <p>The sidecar sits on the tenant's private bridge at <code>.2</code> (e.g. <code>10.248.0.2</code>) and acts as a <strong>subnet router</strong>: it advertises the entire tenant private CIDR (e.g. <code>10.248.0.0/24</code>) to your Tailnet. Any device on your Tailnet can then reach all machines in the tenant directly by their private IP, without needing Tailscale installed in each machine.</p>
+    <div class="note"><strong>Tailscale admin console step:</strong> The advertised route must be approved in your Tailscale admin console — or zero-touch via an ACL <code>autoApprovers</code> rule on <code>tag:sandcastle</code> (see <code>docs/e2e-sc2.md</code>).</div>
   </div>
 
   <div class="step">
-    <h3>Activate Tailscale on a tenant (interactive)</h3>
-    <p>Starts <code>tailscaled</code> inside the sidecar and runs <code>tailscale up --timeout=60s --advertise-routes=&lt;tenant-cidr&gt;</code>. Without an auth key, Tailscale may print a browser auth URL; the command is still bounded by the timeout so unattended flows fail cleanly.</p>
+    <h3>Re-attach Tailscale on a tenant (interactive)</h3>
+    <p>Tenant creation already attaches the sidecar; use this to re-attach or repair a detached one. Starts <code>tailscaled</code> inside the sidecar and runs <code>tailscale up --timeout=60s --advertise-routes=&lt;tenant-cidr&gt;</code>. Without an auth key, Tailscale may print a browser auth URL; the command is still bounded by the timeout so unattended flows fail cleanly.</p>
     <pre><code><span class="cmd">sandcastle tailscale up</span>
 <span class="cmd">sandcastle tailscale up</span> <span class="arg">acme</span>  <span class="comment"># explicit tenant</span></code></pre>
   </div>

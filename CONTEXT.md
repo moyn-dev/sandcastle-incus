@@ -203,7 +203,10 @@ _Avoid_: Project sidecars
 The Tailscale network dedicated to exactly one Tenant. It is **bring-your-own**: the
 Tenant supplies their own Tailscale auth key at registration and the Tenant's own
 Sidecar joins that network. Sandcastle hosts no coordinator of its own (no Headscale).
-_Avoid_: Shared Sandcastle tailnet, project tailnet, platform-hosted tailnet
+Tailnet membership is the **default and main operation mode** of every Sandcastle,
+not an optional add-on: the Sidecar joins at tenant creation and every access path
+(CLI, SSH, DNS, Incus Reach) rides the tailnet.
+_Avoid_: Shared Sandcastle tailnet, project tailnet, platform-hosted tailnet, optional tailnet
 
 **Sidecar** (Tenant Sidecar):
 The per-Tenant instance that joins the Tenant Tailnet and is the Tenant's single
