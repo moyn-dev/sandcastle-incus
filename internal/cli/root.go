@@ -75,6 +75,7 @@ type commandConfig struct {
 	authShares         authShareClient
 	authRoutes         authRouteClient
 	authResources      authResourceClient
+	authPublicDNSZones authPublicDNSZoneClient
 	// routeHostResolver overrides the DNS probe `sc route` uses to warn about a
 	// missing wildcard. nil = a real lookup; injected in tests so they never
 	// touch the network. Mirrors authapp's RouteResolveHost seam.

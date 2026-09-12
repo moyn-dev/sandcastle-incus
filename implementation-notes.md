@@ -4911,3 +4911,57 @@ Two small choices the spec left open:
 `incusx` does not yet mirror the new keys as `keyV2…` constants: nothing in
 `incusx` writes them in this slice (the stamp is slice 4, the mirror slice 6);
 the mirror is added with the first writer.
+
+## 2026-09-12 — Public DNS Zones slice 2: the zone registry
+
+Spec `docs/spec/public-dns-zones.md` §1.3/§1.4, §2.1, §3.1, §9 item 2
+(issue #164). Things the spec left to the implementer:
+
+- **Claims are a seam, not a table, in this slice.** `remove` must refuse
+  while a Project Domain is claimed under the zone and `list` shows a CLAIMS
+  count, but `project_domain_claims` is slice 3's. The registry consumes a
+  `ProjectDomainClaimSource` interface (`ClaimsUnderZone(ctx, zone)`), wired
+  through `HandlerOptions.ProjectDomainClaims`; the default is
+  `noProjectDomainClaims{}`, which truthfully answers "none" because no claim
+  can exist yet. **Slice 3 must replace that default** with the SQL-backed
+  implementation over `project_domain_claims` (and can keep the option for
+  tests). The refusal text and the 409 mapping are already in place and
+  tested against a fake source.
+- **`encryptSecret`/`decryptSecret` live in `internal/authapp/secrets.go`**
+  with `secretEncryptionKey(ctx, db, metaKey)`; the OIDC functions became
+  one-line wrappers so `oidc.go` barely changed. The `machine_cert_key`
+  constant is declared there too so slice 5 only has to call
+  `secretEncryptionKey(ctx, db, machineCertEncryptionKeyKey)`, not add a
+  constant beside mine.
+- **Admin gate is bearer-only.** The spec says "admin bearer token
+  (`requireAdmin`)", but the existing `requireAdmin` is the web-session
+  cookie gate for the HTML admin pages. `/api/public-dns-zones` uses a new
+  `requireAdminBearer` (= `requireBearerUser` + `SandcastleAdmin`, 401 / 403)
+  and does not accept the session cookie — the endpoint exists for the CLI.
+- **Cloudflare validation is a small in-package client**, not
+  `libdns/cloudflare`: the spec offered both, and pulling certmagic's
+  dependency tree into `go.mod` is slice 5's job (parallel branch — avoiding
+  a `go.mod` conflict). `CloudflareZoneClient{BaseURL}` does exactly the two
+  calls the spec names; a fake server tests it. A success envelope with zero
+  (or several) zones has no API message, so the "rejected" text carries a
+  Sandcastle-written reason there ("the token cannot see a zone named …").
+  A transport failure is **not** a rejection: 502 `cloudflare: …`, nothing
+  stored — so an outage can never read as "your token is bad".
+- **`sc admin` and `sc-adm` are one tree.** `cmd/sandcastle/main.go` already
+  routes `sc admin …` to `ExecuteAdmin("sc admin", …)`, so mounting on
+  `NewAdminRootCommand` serves both names; the command is also added to the
+  legacy `newAdminCommand` subcommand tree in `admin.go` (unmounted today)
+  for parity with `tenant`/`user`/`image`/`tld`. The CLI tests run each verb
+  under both `config.name`s and assert it is *not* a top-level user command.
+- **`list [-o json]`** in the spec is rendered as `--output json` / `--json`:
+  neither root has an `-o` shorthand and adding one globally is out of scope.
+- **Token fingerprint** = first 8 hex characters of `sha256(token)`
+  (`sha256[:8]` read as characters of the hex digest).
+- **Dry-run responses** are 200 with `{zone, cloudflareZoneID, dryRun:true}`
+  for all three mutating verbs (the spec only fixes 201/200/204 for the real
+  thing); the CLI prints `[dry-run] would have: …`. A dry-run `add`/`set-token`
+  still calls Cloudflare — that is the point of it.
+- **Zone shape**: `domain.NormalizePublicDNSZone` requires at least two
+  labels (a bare TLD is never an admin's zone) on top of `validateDomainLabels`.
+- **No `e2e-sc2.md` change**: the spec's §7 e2e phase (Phase 12) is slice 7's
+  and nothing user-visible changes for tenants until slice 3.

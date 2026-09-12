@@ -30,6 +30,7 @@ func newAdminCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	admin.AddCommand(newAdminImageCommand(config, opts))
 	admin.AddCommand(newAdminTLDCommand(config, opts))
 	admin.AddCommand(newAdminAuthAppCommand(config))
+	admin.AddCommand(newPublicDNSZoneCommand(config, opts))
 	return admin
 }
 

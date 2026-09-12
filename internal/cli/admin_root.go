@@ -423,6 +423,7 @@ func NewAdminRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newAdminInstallCommand(config))
 	root.AddCommand(newAdminInstallIncusCommand(config))
 	root.AddCommand(newAdminAuthAppCommand(config))
+	root.AddCommand(newPublicDNSZoneCommand(config, opts))
 	root.AddCommand(newAdminMachineWorkloadCommand(config, opts))
 	root.AddCommand(newConfigCommand(config, opts))
 	root.AddCommand(newSidecarCommand())

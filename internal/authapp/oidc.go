@@ -2,8 +2,6 @@ package authapp
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -212,73 +210,18 @@ LIMIT 1
 	return key, nil
 }
 
+// oidcEncryptionKey is the OIDC-signing-key purpose of secretEncryptionKey
+// (secrets.go); the wrappers below keep the historical names.
 func oidcEncryptionKey(ctx context.Context, db *sql.DB) ([]byte, error) {
-	row := db.QueryRowContext(ctx, "SELECT value FROM auth_app_meta WHERE key = ?", oidcEncryptionKeyKey)
-	var encoded string
-	if err := row.Scan(&encoded); err == nil {
-		key, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("decode OIDC encryption key: %w", err)
-		}
-		if len(key) != 32 {
-			return nil, fmt.Errorf("OIDC encryption key has invalid length")
-		}
-		return key, nil
-	} else if err != sql.ErrNoRows {
-		return nil, err
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	_, err := db.ExecContext(ctx, `
-INSERT INTO auth_app_meta (key, value, updated_at)
-VALUES (?, ?, datetime('now'))
-ON CONFLICT(key) DO NOTHING
-`, oidcEncryptionKeyKey, base64.StdEncoding.EncodeToString(key))
-	if err != nil {
-		return nil, err
-	}
-	return oidcEncryptionKey(ctx, db)
+	return secretEncryptionKey(ctx, db, oidcEncryptionKeyKey)
 }
 
 func encryptOIDCPrivateKey(key []byte, plaintext []byte) (string, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return "", err
-	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
-	payload := append(nonce, ciphertext...)
-	return base64.StdEncoding.EncodeToString(payload), nil
+	return encryptSecret(key, plaintext)
 }
 
 func decryptOIDCPrivateKey(key []byte, encoded string) ([]byte, error) {
-	payload, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	if len(payload) < gcm.NonceSize() {
-		return nil, fmt.Errorf("encrypted OIDC private key is truncated")
-	}
-	nonce := payload[:gcm.NonceSize()]
-	ciphertext := payload[gcm.NonceSize():]
-	return gcm.Open(nil, nonce, ciphertext, nil)
+	return decryptSecret(key, encoded)
 }
 
 func activeOIDCPrivateKey(ctx context.Context, db *sql.DB, tenantName string) (oidcSigningKey, *rsa.PrivateKey, error) {

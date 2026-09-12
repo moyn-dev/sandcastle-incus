@@ -597,6 +597,16 @@ CREATE TABLE IF NOT EXISTS routes (
     local_port INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+-- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 2: zone registry ─────────
+CREATE TABLE IF NOT EXISTS public_dns_zones (
+    zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)
+    cloudflare_zone_id TEXT NOT NULL,             -- resolved at add time
+    encrypted_token    TEXT NOT NULL,             -- AES-GCM under the public_dns_zone_key deployment key (secrets.go)
+    created_by         TEXT NOT NULL DEFAULT '',  -- admin user key
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+-- ── end Public DNS Zones slice 2 ───────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS logs_user_ts ON logs(user_key, ts);
 CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);
 INSERT INTO auth_app_meta (key, value, updated_at)
@@ -811,6 +821,13 @@ type HandlerOptions struct {
 	// ResourceCacheMachineRenderer converts a cached instance into a
 	// meta.Machine; required whenever ResourceCache is set.
 	ResourceCacheMachineRenderer ResourceCacheMachineRenderer
+	// CloudflareZones validates a Public DNS Zone token at add/set-token
+	// (ADR-0027). nil uses the real Cloudflare API; tests inject a fake.
+	CloudflareZones CloudflareZoneValidator
+	// ProjectDomainClaims answers which Project Domains are claimed under a
+	// zone (the remove refusal, the list CLAIMS column). nil means "none" until
+	// slice 3 lands the project_domain_claims table.
+	ProjectDomainClaims ProjectDomainClaimSource
 }
 
 // TenantProjectCreator creates an app project for a tenant and extends the
@@ -863,6 +880,8 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		releases:              &releaseCache{resolve: handlerOptions.ReleaseResolver},
 		resourceCache:         handlerOptions.ResourceCache,
 		resourceCacheRenderer: handlerOptions.ResourceCacheMachineRenderer,
+		cloudflareZones:       handlerOptions.CloudflareZones,
+		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
 	}
 	if app.githubClient == nil {
 		if app.simulateToken != "" {
@@ -908,6 +927,8 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/routes", app.routesAPI)
 	mux.HandleFunc("/api/routes/ask", app.routesAsk)
 	mux.HandleFunc("/api/routes/config", app.routesConfig)
+	mux.HandleFunc("/api/public-dns-zones", app.publicDNSZonesAPI)
+	mux.HandleFunc("/api/public-dns-zones/", app.publicDNSZoneAPI)
 	mux.HandleFunc("/device", app.deviceApprove)
 	if app.debugDeviceUser != "" {
 		mux.HandleFunc("/debug/device/approve", app.debugDeviceApprove)
@@ -987,6 +1008,8 @@ type handler struct {
 	releases              *releaseCache
 	resourceCache         *ResourceCache
 	resourceCacheRenderer ResourceCacheMachineRenderer
+	cloudflareZones       CloudflareZoneValidator
+	projectDomainClaims   ProjectDomainClaimSource
 }
 
 // projectsAPI is the tunnel-friendly tenant plane for project creation
