@@ -141,8 +141,14 @@ type authResourceClient interface {
 	ListResources(context.Context, authapp.ResourceListRequest) (authapp.ResourceListResult, error)
 }
 
+// authProjectClient is the token-gated tenant plane for projects: creation
+// (with an optional Project Domain, ADR-0027), the domain verbs and deletion.
 type authProjectClient interface {
-	CreateProject(context.Context, string) (projectbroker.ProjectResult, error)
+	CreateProject(context.Context, authapp.ProjectCreateRequest) (projectbroker.ProjectResult, error)
+	GetProjectDomain(context.Context, string) (authapp.ProjectDomainResult, error)
+	SetProjectDomain(ctx context.Context, project, domain string, dryRun bool) (authapp.ProjectDomainResult, error)
+	UnsetProjectDomain(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
+	DeleteProject(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
 }
 
 type authRouteClient interface {

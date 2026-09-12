@@ -81,7 +81,7 @@ func (h handler) domainClaimSource() ProjectDomainClaimSource {
 	if h.projectDomainClaims != nil {
 		return h.projectDomainClaims
 	}
-	return noProjectDomainClaims{}
+	return sqlProjectDomainClaims{db: h.db}
 }
 
 // publicDNSZonesAPI serves the collection: GET (list) and POST (add).

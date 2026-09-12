@@ -27,15 +27,37 @@ import (
 // <machine>.<project>.<suffix> (ADR-0018) — identity only; resolution comes
 // from the sidecar CoreDNS zone.
 func V2DefaultProfileUserData(user string, sshKey string, project string, suffix string, signerURL string) string {
+	return V2ProfileUserData(user, sshKey, project, suffix, "", signerURL)
+}
+
+// V2ProfileUserData is V2DefaultProfileUserData with the project's Naming Mode
+// (ADR-0027 §5.1). projectDomain == "" is a private project: identical output
+// to before the feature, byte for byte — machine.env carries no MODE and every
+// consumer defaults an absent MODE to private. A non-empty projectDomain is a
+// zone project: the machine's fqdn becomes <machine>.<projectDomain> and
+// machine.env gains MODE=zone, so caddy-setup (slice 4) skips the sidecar leaf
+// and waits for the Auth App's Let's Encrypt push. SIGNER stays in both modes
+// for the Tenant CA trust step.
+func V2ProfileUserData(user string, sshKey string, project string, suffix string, projectDomain string, signerURL string) string {
 	header := "#cloud-config\n"
 	identity := ""
 	project = strings.TrimSpace(project)
 	suffix = strings.TrimSpace(suffix)
+	projectDomain = strings.TrimSpace(projectDomain)
 	signerURL = strings.TrimRight(strings.TrimSpace(signerURL), "/")
 	jinja := project != "" && suffix != ""
+	// fqdnSuffix is what follows "{{ v1.local_hostname }}." — the Machine
+	// Private Hostname's "<project>.<suffix>" or the Project Domain.
+	fqdnSuffix := project + "." + suffix
+	mode := ""
+	if projectDomain != "" {
+		jinja = true
+		fqdnSuffix = projectDomain
+		mode = "MODE=zone\n      "
+	}
 	if jinja {
 		header = "## template: jinja\n#cloud-config\n"
-		identity = fmt.Sprintf("fqdn: {{ v1.local_hostname }}.%s.%s\nprefer_fqdn_over_hostname: true\n", project, suffix)
+		identity = fmt.Sprintf("fqdn: {{ v1.local_hostname }}.%s\nprefer_fqdn_over_hostname: true\n", fqdnSuffix)
 	}
 	body := fmt.Sprintf(`users:
   - name: %s
@@ -68,8 +90,8 @@ packages:
 		body += "write_files:\n" + scShimWriteFiles + fmt.Sprintf(`  - path: /etc/sandcastle/machine.env
     permissions: '0644'
     content: |
-      FQDN={{ v1.local_hostname }}.%s.%s
-      SIGNER=%s
+      FQDN={{ v1.local_hostname }}.%s
+      %sSIGNER=%s
       HOME=/home/%s
   - path: /usr/local/sbin/sandcastle-generalize
     permissions: '0755'
@@ -83,7 +105,7 @@ runcmd:
   - [/usr/local/sbin/sandcastle-generalize]
   - [systemctl, enable, --now, ssh]
   - [/usr/local/sbin/sandcastle-caddy-setup]
-`, project, suffix, signerURL, user, generalize, script)
+`, fqdnSuffix, mode, signerURL, user, generalize, script)
 		return header + identity + body
 	}
 
@@ -454,6 +476,10 @@ type CreatePlanV2 struct {
 	SidecarImage       string     `json:"sidecarImage"`
 	DefaultProfileUser string     `json:"defaultProfileUser"`
 	SSHPublicKey       string     `json:"sshPublicKey"`
+	// ProjectDomain is the app project's Project Domain (ADR-0027) when the
+	// plan renders one project's profile; empty for private projects and for
+	// tenant creation (a fresh tenant's initial project has no domain).
+	ProjectDomain      string     `json:"projectDomain,omitempty"`
 	ImageAliases       []string   `json:"imageAliases"`
 	DNSFiles           []dns.File `json:"dnsFiles"`
 	TenantCA           TenantCA   `json:"tenantCA"`

@@ -42,6 +42,12 @@ type TenantDeleter struct {
 	Log        func(string)
 }
 
+// NewTenantDeleterForServer binds a deleter to an already-connected Incus
+// server (the auth-app appliance's mounted host socket).
+func NewTenantDeleterForServer(server incus.InstanceServer) TenantDeleter {
+	return TenantDeleter{Server: sdkDeleteServer{inner: server}}
+}
+
 func NewTenantDeleter(remote string) TenantDeleter {
 	return TenantDeleter{Remote: remote}
 }

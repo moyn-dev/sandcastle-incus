@@ -79,14 +79,14 @@ type ProjectDomainClaimRef struct {
 }
 
 // ProjectDomainClaimSource answers "which Project Domains are claimed under
-// this zone". The registry (this slice) only consumes it; the
-// project_domain_claims table and its SQL implementation arrive with slice 3,
-// which replaces noProjectDomainClaims as the default. Until then no claim can
-// exist, so the stub truthfully answers "none".
+// this zone". The registry only consumes it; the default is
+// sqlProjectDomainClaims over project_domain_claims
+// (project_domain_claims.go), and tests inject a fake.
 type ProjectDomainClaimSource interface {
 	ClaimsUnderZone(ctx context.Context, zone string) ([]ProjectDomainClaimRef, error)
 }
 
+// noProjectDomainClaims answers "none" — for callers without a database.
 type noProjectDomainClaims struct{}
 
 func (noProjectDomainClaims) ClaimsUnderZone(context.Context, string) ([]ProjectDomainClaimRef, error) {

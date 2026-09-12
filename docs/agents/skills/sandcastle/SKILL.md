@@ -48,6 +48,10 @@ Tenant                          the ownership / identity / DNS / tailnet boundar
   back to the active install and project.
 - A machine's DNS name is `<machine>.<project>.<suffix>`. Machines in the
   tenant's **default project only** also answer to `<machine>.<suffix>`.
+  A project with a **Project Domain** (`sc project create zp --domain
+  baum.hase.de`, under a Public DNS Zone the admin registered) instead names
+  machines created afterwards `<machine>.<domain>` — see
+  `reference/operations.md`. Naming Mode is per machine and never changes.
 - The same machine name may exist in several projects. A bare name that matches
   more than one is ambiguous — qualify it as `project:machine`.
 - Machines are **not** tailnet nodes. They sit on the tenant's private bridge and

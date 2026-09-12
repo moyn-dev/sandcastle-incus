@@ -31,23 +31,47 @@ import (
 // can `incus launch` into sc2-<tenant>-<project> natively.
 func newProjectCreateV2Command(config commandConfig, opts *rootOptions) *cobra.Command {
 	var broker, certFile, keyFile string
-	var writeRemote bool
-	var incusEndpoint, incusConf, remoteName string
+	var writeRemote, dryRun bool
+	var incusEndpoint, incusConf, remoteName, domainFlag string
 	command := &cobra.Command{
 		Use:   "create name",
-		Short: "Create a project in the current tenant (self-service via the broker)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Create a project in the current tenant (self-service via the Auth App or the broker)",
+		Long: `Create a project in the current tenant. After sc login the request rides the
+Auth App's token-gated API; pass --broker to use the client-certificate broker.
+
+--domain <domain> claims a Project Domain under a registered Public DNS Zone
+(ADR-0027): every machine created in the project gets the Machine Public
+Hostname <machine>.<domain> with a Let's Encrypt certificate. The domain must
+sit at least one label below a registered zone and may not overlap another
+claim, a Public Route hostname, or the install's own names. Only the Auth App
+path can claim a domain.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project := strings.TrimSpace(args[0])
 			if err := naming.ValidateNewProjectName(project); err != nil {
 				return err
 			}
+			domainValue := strings.TrimSpace(domainFlag)
+			if domainValue != "" {
+				normalized, err := authapp.NormalizeProjectDomain(domainValue)
+				if err != nil {
+					return err
+				}
+				domainValue = normalized
+			}
 			// Preferred tenant plane: the auth-app API over the public
 			// hostname, authenticated by the saved login token — works through
 			// a tunnel, needs no broker port and no client certificate. The
 			// broker path below remains for --broker/BYO setups.
-			if strings.TrimSpace(broker) == "" && strings.TrimSpace(config.adminConfig.AuthToken) != "" && commandAuthHostname(config, "") != "" {
-				return runProjectCreateViaAuthApp(cmd.Context(), config, opts, project, writeRemote, incusEndpoint, incusConf, remoteName)
+			if projectAuthAppAvailable(config, broker) {
+				return runProjectCreateViaAuthApp(cmd.Context(), config, opts, authapp.ProjectCreateRequest{Project: project, Domain: domainValue, DryRun: dryRun}, writeRemote, incusEndpoint, incusConf, remoteName)
+			}
+			if domainValue != "" {
+				return fmt.Errorf("--domain is not available on this install")
+			}
+			if dryRun {
+				fmt.Fprintf(config.stdout, "[dry-run] would have: created project %s via the broker\n", project)
+				return nil
 			}
 			conn, err := resolveBrokerConnection(config.adminConfig, broker, certFile, keyFile, incusConf)
 			if err != nil {
@@ -115,29 +139,59 @@ func newProjectCreateV2Command(config commandConfig, opts *rootOptions) *cobra.C
 	command.Flags().StringVar(&incusEndpoint, "incus-endpoint", "", "Incus HTTPS endpoint for the remote (default: broker host on :8443)")
 	command.Flags().StringVar(&incusConf, "incus-conf", "", "INCUS_CONF dir to write the remote into (default: $INCUS_CONF or the incus default)")
 	command.Flags().StringVar(&remoteName, "remote-name", "", "name for the per-project remote (default: <tenant>-<project>)")
+	command.Flags().StringVar(&domainFlag, "domain", "", "claim this Project Domain for the project (one label or more below a registered Public DNS Zone; Auth App path only)")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate (including the domain claim) without creating anything")
 	return command
+}
+
+// projectAuthAppAvailable reports whether project verbs can ride the Auth
+// App's token-gated tenant plane: no --broker override, a saved login token
+// and a resolvable Auth Hostname (or an injected client, in tests).
+func projectAuthAppAvailable(config commandConfig, broker string) bool {
+	if strings.TrimSpace(broker) != "" {
+		return false
+	}
+	if config.authProjects != nil {
+		return true
+	}
+	return strings.TrimSpace(config.adminConfig.AuthToken) != "" && commandAuthHostname(config, "") != ""
+}
+
+// projectAuthClient returns the Auth App project client — the injected one
+// (tests) or a DeviceClient at the resolved Auth Hostname. Resolve the Auth
+// Hostname the same way the rest of the CLI does: flag → env →
+// installs[<current-remote>] (recorded by sc login) → inferred → top-level
+// config fallback. This tracks the active install after `incus remote switch`
+// instead of trusting the raw top-level config.AuthHostname, which is a stale
+// placeholder on installs where login recorded the real hostname only in the
+// installs map.
+func projectAuthClient(config commandConfig) authProjectClient {
+	if config.authProjects != nil {
+		return config.authProjects
+	}
+	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
 }
 
 // runProjectCreateViaAuthApp creates the project through the auth-app's
 // token-gated /api/projects and drops the per-project incus remote, reusing
 // the enrolled tenant remote's endpoint (the sidecar Incus Reach).
-func runProjectCreateViaAuthApp(ctx context.Context, config commandConfig, opts *rootOptions, project string, writeRemote bool, incusEndpoint, incusConf, remoteName string) error {
-	client := config.authProjects
-	if client == nil {
-		// Resolve the Auth Hostname the same way the rest of the CLI does:
-		// flag → env → installs[<current-remote>] (recorded by sc login) →
-		// inferred → top-level config fallback. This tracks the active install
-		// after `incus remote switch` instead of trusting the raw top-level
-		// config.AuthHostname, which is a stale placeholder on installs where
-		// login recorded the real hostname only in the installs map.
-		client = authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
-	}
-	result, err := client.CreateProject(ctx, project)
+func runProjectCreateViaAuthApp(ctx context.Context, config commandConfig, opts *rootOptions, request authapp.ProjectCreateRequest, writeRemote bool, incusEndpoint, incusConf, remoteName string) error {
+	result, err := projectAuthClient(config).CreateProject(ctx, request)
 	if err != nil {
 		return err
 	}
+	if request.DryRun {
+		what := "created project " + request.Project
+		if result.Domain != "" {
+			what += " with project domain " + result.Domain + " (zone " + result.Zone + ")"
+		}
+		return writeOutput(config.stdout, opts.output, "[dry-run] would have: "+what, result)
+	}
 	payload, _ := json.Marshal(result)
 	fmt.Fprintln(config.stdout, string(payload))
+	if result.Domain != "" {
+		fmt.Fprintf(config.stdout, "Project domain: %s (zone %s) — machines created in %s get the public name <machine>.%s\n", result.Domain, result.Zone, result.Project, result.Domain)
+	}
 	if writeRemote && result.IncusProject != "" {
 		name := strings.TrimSpace(remoteName)
 		if name == "" {
