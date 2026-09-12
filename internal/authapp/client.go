@@ -227,6 +227,40 @@ func (c DeviceClient) CreateProject(ctx context.Context, project string) (projec
 	return result, nil
 }
 
+// RequestMachineCertificate drives POST /api/machine-certificates (ADR-0027):
+// it asks the Auth App to record the Machine Certificate order for a
+// zone-mode machine `sc create` just made. A 202 and a 409 rate-limited answer
+// both return the view (the latter with Reason set — the row exists either
+// way); any other status is an error.
+func (c DeviceClient) RequestMachineCertificate(ctx context.Context, request MachineCertificateRequest) (MachineCertificateView, error) {
+	body, _ := json.Marshal(request)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/api/machine-certificates"), bytes.NewReader(body))
+	if err != nil {
+		return MachineCertificateView{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.AuthToken))
+	response, err := c.client().Do(httpRequest)
+	if err != nil {
+		return MachineCertificateView{}, err
+	}
+	defer response.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	var view MachineCertificateView
+	switch response.StatusCode {
+	case http.StatusAccepted:
+		if err := json.Unmarshal(payload, &view); err != nil {
+			return MachineCertificateView{}, err
+		}
+		return view, nil
+	case http.StatusConflict:
+		if err := json.Unmarshal(payload, &view); err == nil && view.Reason != "" {
+			return view, nil
+		}
+	}
+	return MachineCertificateView{}, fmt.Errorf("request machine certificate: %s: %s", response.Status, strings.TrimSpace(string(payload)))
+}
+
 // UpdateSidecar asks the deployment to update the caller's own tenant
 // sidecar to the deployment's running binary (#124 §5) via the
 // token-authenticated POST /api/sidecar/update.

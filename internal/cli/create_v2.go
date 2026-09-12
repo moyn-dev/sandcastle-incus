@@ -339,7 +339,22 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 	if err != nil {
 		return err
 	}
-	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false), result)
+	if err := writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false), result); err != nil {
+		return err
+	}
+	// Zone-mode machine (ADR-0027): now that the instance exists, ask the Auth
+	// App to order its Machine Certificate — after the create, with a short
+	// timeout, never failing the create. Dev Image machines get no Caddy and
+	// therefore no certificate. Private-mode projects (no Project Domain) skip
+	// this entirely; their output above is unchanged.
+	if publicHostname := zoneModePublicHostname(summary, project, machine); publicHostname != "" && opts.output == outputText {
+		var outcome machineCertificateOutcome
+		if !request.DevImage {
+			outcome = requestMachineCertificate(ctx, config, summary.Tenant, project, machine)
+		}
+		fmt.Fprintln(config.stdout, formatPublicNameLine(publicHostname, project, request.DevImage, outcome))
+	}
+	return nil
 }
 
 // runConnectV2 implements `sc connect` (alias `c`) for v2 tenants: create the
