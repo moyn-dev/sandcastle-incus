@@ -1801,8 +1801,14 @@ Let's Encrypt cert from `sc-edge` in Phase 7), the client must trust the tenant 
 The sandcastle utility installs it with **`sc trust install <tenant>`**
 (`internal/localtrust`), and the mechanism **differs by OS**:
 
-- **Linux:** writes the CA PEM to `/usr/local/share/ca-certificates/<name>.crt` and runs
-  `update-ca-certificates`.
+- **Linux:** writes the CA PEM into the distro's anchors directory and refreshes the
+  bundle, detected by which anchors directory exists:
+  - Arch: `/etc/ca-certificates/trust-source/anchors/<name>.crt` + `update-ca-trust`
+  - Fedora/RHEL: `/etc/pki/ca-trust/source/anchors/<name>.crt` + `update-ca-trust`
+  - openSUSE: `/etc/pki/trust/anchors/<name>.crt` + `update-ca-certificates`
+  - Debian/Ubuntu (default): `/usr/local/share/ca-certificates/<name>.crt` + `update-ca-certificates`
+
+  **PASS (Arch):** `trust list | grep -i sandcastle` shows the CA after install.
 - **macOS:** `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db <ca.pem>`
   (system-wide uses `/Library/Keychains/System.keychain`). Uninstall:
   `security delete-certificate -c <trust-name>`.
@@ -1825,8 +1831,8 @@ install (Let's Encrypt is already trusted).
 > ✅ **Runs unprivileged** (fixed 2026-07-09, [#56](https://github.com/thieso2/sandcastle-incus/issues/56); validated on `majestix`).
 > The system trust directory is root-owned but `sc` is a user command, so
 > `internal/localtrust` escalates **only the two privileged operations** — writing
-> `/usr/local/share/ca-certificates/<name>.crt` and running
-> `update-ca-certificates` — via `sudo`, and only after the direct attempt is
+> the CA into the anchors directory and running the refresh command
+> (`update-ca-certificates` / `update-ca-trust`) — via `sudo`, and only after the direct attempt is
 > refused. Everything else keeps running as the invoking user, so `$HOME` (and the
 > Sandcastle login config in it) stays reachable. `sudo` may prompt for a password.
 >
@@ -2268,7 +2274,10 @@ sc update --yes
 # expect: sidecar updated via the deployment (auth-app token plane on tunnel
 #   installs, broker mTLS otherwise); ONLY sandcastle-tls-sign.service
 #   restarts (verify: coredns/tailscaled uptime unchanged, tenant DNS + SSH
-#   still work mid-update); sidecar stamp = deployment version afterwards.
+#   still work mid-update); the update reconciles Incus Reach, so
+#   `tailscale serve status --json` in the sidecar contains raw TCP :8443 →
+#   the tenant bridge gateway :8443 even when Serve state was empty before;
+#   sidecar stamp = deployment version afterwards.
 
 # 10c-i — install script (curl | bash), the install `sc update` can self-replace
 curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh \
@@ -2301,8 +2310,9 @@ sc update --yes                         # …and forward to latest again
 ```
 
 **PASS:** 10a table complete and truthful (unknown ⇒ outdated); 10b idempotent
-with stamps written; 10c restarts only the leaf signer with connectivity
-untouched and the sidecar never ahead of the deployment; 10c-i installs a
+with stamps written; 10c restarts only the leaf signer, restores missing Incus
+Reach without restarting Tailscale, keeps connectivity intact, and leaves the
+sidecar never ahead of the deployment; 10c-i installs a
 checksum-verified binary into the requested directory as `sandcastle` + `sc`
 symlink, and `sc update` then reports that install as self-updatable (not
 Homebrew-managed); 10d atomic replace with `.bak` rollback artifact through the

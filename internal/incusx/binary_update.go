@@ -117,9 +117,9 @@ func restartUnitScript(unit string) string {
 }
 
 // UpdateTenantSidecar pushes the given binary into the tenant's sidecar,
-// restarts the TLS leaf signer, verifies it is active, and stamps the
-// version. Unlike the create path there is no "binary already exists" skip —
-// updates push unconditionally (#124 §7).
+// restarts the TLS leaf signer, restores Incus Reach, verifies both operations,
+// and stamps the version. Unlike the create path there is no "binary already
+// exists" skip — updates push unconditionally (#124 §7).
 func (c TenantCreator) UpdateTenantSidecar(prefix, tenantName string, binary []byte, binaryVersion string) (ComponentVersion, error) {
 	infraProject, err := naming.V2TenantInfraProjectName(prefix, tenantName)
 	if err != nil {
@@ -134,6 +134,15 @@ func (c TenantCreator) UpdateTenantSidecar(prefix, tenantName string, binary []b
 	if _, _, err := psrv.GetInstance(instance); err != nil {
 		return ComponentVersion{}, fmt.Errorf("sidecar of tenant %s (%s/%s): %w", tenantName, infraProject, instance, err)
 	}
+	project, _, err := server.GetProject(infraProject)
+	if err != nil {
+		return ComponentVersion{}, fmt.Errorf("read tenant network for sidecar of %s: %w", tenantName, err)
+	}
+	privateCIDR := project.Config[meta.KeyV2CIDR]
+	gateway, err := gatewayIPFromCIDR(privateCIDR)
+	if err != nil {
+		return ComponentVersion{}, fmt.Errorf("read tenant network for sidecar of %s: %w", tenantName, err)
+	}
 	c.log("push binary into sidecar " + infraProject + "/" + instance)
 	if err := writeApplianceFile(psrv, instance, applianceFile{SandcastleBinaryPath, binary, 0o755}); err != nil {
 		return ComponentVersion{}, fmt.Errorf("push binary into sidecar %s: %w", infraProject, err)
@@ -144,6 +153,10 @@ func (c TenantCreator) UpdateTenantSidecar(prefix, tenantName string, binary []b
 	c.log("restart " + TLSSignUnit)
 	if err := execSidecar(psrv, instance, restartUnitScript(TLSSignUnit)); err != nil {
 		return ComponentVersion{}, fmt.Errorf("restart %s on sidecar of %s: %w", TLSSignUnit, tenantName, err)
+	}
+	c.log("ensure Incus Reach on sidecar " + infraProject + "/" + instance)
+	if err := execSidecar(psrv, instance, "tailscale serve --bg --tcp=8443 tcp://"+gateway+":8443"); err != nil {
+		return ComponentVersion{}, fmt.Errorf("ensure Incus Reach on sidecar of %s: %w", tenantName, err)
 	}
 	version := update.NormalizeTag(binaryVersion)
 	return ComponentVersion{

@@ -4833,3 +4833,49 @@ form the script exists for.
 **CI lints it.** `ci.yml` runs `bash -n` + `shellcheck --severity=warning`:
 the file is served straight from `main`, so a syntax error there breaks every
 new install immediately, with no release to gate it.
+
+## 2026-09-04 — sidecar updates reconcile Incus Reach
+
+An `obelix` tenant sidecar remained healthy on Tailscale but had an empty
+Tailscale Serve configuration, so its enrolled Incus remote received immediate
+TCP refusals on `:8443`. Sidecar updates previously replaced the binary and
+restarted only the TLS signer; they never checked the Incus Reach invariant
+established during tenant creation.
+
+**Decision:** every sidecar update now derives the tenant bridge gateway from
+the infra project's authoritative `user.sandcastle.v2.cidr` metadata and
+idempotently runs the same raw-TCP `tailscale serve` command as provisioning.
+The update fails if the metadata is missing/invalid or Serve cannot be
+configured, rather than claiming success while the tenant cannot reach Incus.
+This repairs drift without restarting `tailscaled` or CoreDNS.
+
+Alternatives considered:
+
+- **Only repair the live sidecars.** This restores access once but leaves every
+  tenant vulnerable to the same undetected drift.
+- **Install a new systemd unit.** Useful eventual hardening across arbitrary
+  Tailscale state loss, but broader than the reported update regression. The
+  existing update convergence point provides immediate fleet repair with no
+  additional long-running component.
+
+## 2026-09-10 — `sc trust install` detects the Linux trust layout
+
+`localtrust` hardcoded Debian's `/usr/local/share/ca-certificates` +
+`update-ca-certificates`. On Arch that command does not exist and p11-kit never
+reads that directory, so the install failed after leaving a stray cert there.
+
+**Decision:** pick the layout by which anchors directory exists — Arch
+`/etc/ca-certificates/trust-source/anchors` and Fedora/RHEL
+`/etc/pki/ca-trust/source/anchors` (both `update-ca-trust`), openSUSE
+`/etc/pki/trust/anchors` (`update-ca-certificates`), else Debian. The
+`sc tenant` trust-status check uses the same detection.
+
+Alternatives considered:
+
+- **Probe the refresh command on PATH.** Unreliable: `update-ca-certificates`
+  lives in `/usr/sbin`, off an unprivileged PATH, so absence proves nothing.
+- **`trust anchor --store` (p11-kit CLI).** Arch/Fedora only, and its removal
+  semantics differ; the plain file + refresh keeps one code path for all distros.
+- **Read `/etc/os-release`.** Derivatives (Manjaro, EndeavourOS, Rocky) would
+  need an ID/ID_LIKE table; the anchors directory is the thing that actually
+  matters.

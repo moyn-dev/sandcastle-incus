@@ -57,8 +57,11 @@ func (s FileStore) UninstallCA(ctx context.Context, plan Plan) (Result, error) {
 }
 
 type CommandStore struct {
-	GOOS         string
+	GOOS string
+	// LinuxDir and LinuxUpdate override the detected LinuxTrustLayout;
+	// LinuxUpdate defaults to update-ca-certificates when only LinuxDir is set.
 	LinuxDir     string
+	LinuxUpdate  string
 	RunCommand   func(context.Context, string, ...string) ([]byte, error)
 	EffectiveUID func() int
 }
@@ -229,12 +232,58 @@ func (s CommandStore) removeTrustFile(ctx context.Context, target string) (bool,
 	return true, true, nil
 }
 
-func (s CommandStore) linuxTrustPath(plan Plan) string {
-	dir := s.LinuxDir
-	if dir == "" {
-		dir = "/usr/local/share/ca-certificates"
+// LinuxTrustLayout is where a distribution keeps locally added trust anchors and
+// the command that folds them into the system bundle. The two families differ:
+// Debian's ca-certificates reads /usr/local/share/ca-certificates via
+// update-ca-certificates, while p11-kit based distros (Arch, Fedora/RHEL) read
+// their own anchors directory via update-ca-trust — and on those, a file in the
+// Debian directory is silently ignored.
+type LinuxTrustLayout struct {
+	Dir    string
+	Update string
+}
+
+var linuxTrustLayouts = []LinuxTrustLayout{
+	{Dir: "/etc/ca-certificates/trust-source/anchors", Update: "update-ca-trust"}, // Arch
+	{Dir: "/etc/pki/ca-trust/source/anchors", Update: "update-ca-trust"},          // Fedora, RHEL
+	{Dir: "/etc/pki/trust/anchors", Update: "update-ca-certificates"},             // openSUSE
+}
+
+var debianTrustLayout = LinuxTrustLayout{Dir: "/usr/local/share/ca-certificates", Update: "update-ca-certificates"}
+
+// DetectLinuxTrustLayout picks the layout whose anchors directory exists,
+// falling back to Debian's. Probe the anchors directory rather than the refresh
+// command: update-ca-certificates sits in /usr/sbin, off an unprivileged PATH,
+// and Debian's own directory can exist on other distros as a stray.
+func DetectLinuxTrustLayout() LinuxTrustLayout {
+	return detectLinuxTrustLayout(func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && info.IsDir()
+	})
+}
+
+func detectLinuxTrustLayout(isDir func(string) bool) LinuxTrustLayout {
+	for _, layout := range linuxTrustLayouts {
+		if isDir(layout.Dir) {
+			return layout
+		}
 	}
-	return filepath.Join(dir, CertFilename(plan))
+	return debianTrustLayout
+}
+
+func (s CommandStore) linuxLayout() LinuxTrustLayout {
+	if s.LinuxDir != "" {
+		update := s.LinuxUpdate
+		if update == "" {
+			update = debianTrustLayout.Update
+		}
+		return LinuxTrustLayout{Dir: s.LinuxDir, Update: update}
+	}
+	return DetectLinuxTrustLayout()
+}
+
+func (s CommandStore) linuxTrustPath(plan Plan) string {
+	return filepath.Join(s.linuxLayout().Dir, CertFilename(plan))
 }
 
 // runUpdateCACertificates refreshes the system bundle. When the trust file
@@ -254,9 +303,9 @@ func (s CommandStore) runUpdateCACertificates(ctx context.Context, escalated boo
 }
 
 func (s CommandStore) updateCACertificates(ctx context.Context, escalated bool) error {
-	name, args := "update-ca-certificates", []string(nil)
+	name, args := s.linuxLayout().Update, []string(nil)
 	if escalated {
-		name, args = "sudo", []string{"update-ca-certificates"}
+		name, args = "sudo", []string{name}
 	}
 	output, err := s.runCommand(ctx, name, args...)
 	if err != nil {

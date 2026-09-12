@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -506,5 +507,70 @@ func v2AcmeProjects() []tenant.IncusProject {
 	return []tenant.IncusProject{
 		{Name: "sc2-acme", Config: config(meta.KindInfra)},
 		{Name: "sc2-acme-default", Config: config(meta.KindV2Project)},
+	}
+}
+
+// Arch (and Fedora) use p11-kit: anchors in their own directory, refreshed by
+// update-ca-trust. Writing Debian's /usr/local/share/ca-certificates there is
+// silently ignored, and update-ca-certificates does not exist.
+func TestDetectLinuxTrustLayout(t *testing.T) {
+	cases := []struct {
+		name string
+		dirs []string
+		want LinuxTrustLayout
+	}{
+		{"arch", []string{"/etc/ca-certificates/trust-source/anchors", "/usr/local/share/ca-certificates"}, LinuxTrustLayout{"/etc/ca-certificates/trust-source/anchors", "update-ca-trust"}},
+		{"fedora", []string{"/etc/pki/ca-trust/source/anchors"}, LinuxTrustLayout{"/etc/pki/ca-trust/source/anchors", "update-ca-trust"}},
+		{"opensuse", []string{"/etc/pki/trust/anchors"}, LinuxTrustLayout{"/etc/pki/trust/anchors", "update-ca-certificates"}},
+		{"debian", []string{"/usr/local/share/ca-certificates"}, LinuxTrustLayout{"/usr/local/share/ca-certificates", "update-ca-certificates"}},
+		{"unknown", nil, LinuxTrustLayout{"/usr/local/share/ca-certificates", "update-ca-certificates"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectLinuxTrustLayout(func(path string) bool {
+				for _, dir := range tc.dirs {
+					if dir == path {
+						return true
+					}
+				}
+				return false
+			})
+			if got != tc.want {
+				t.Fatalf("layout = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCommandStoreInstallLinuxRunsLayoutUpdateCommand(t *testing.T) {
+	dir := t.TempDir()
+	var commands [][]string
+	store := CommandStore{
+		GOOS:        "linux",
+		LinuxDir:    dir,
+		LinuxUpdate: "update-ca-trust",
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, append([]string{name}, args...))
+			if name == "update-ca-trust" {
+				return nil, &exec.Error{Name: name, Err: fs.ErrPermission}
+			}
+			return []byte("ok"), nil
+		},
+	}
+	plan := Plan{Reference: "acme", TrustName: "Sandcastle acme tenant CA"}
+	result, err := store.InstallCA(context.Background(), plan, []byte("CERT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Target != filepath.Join(dir, CertFilename(plan)) {
+		t.Fatalf("Target = %q", result.Target)
+	}
+	want := "update-ca-trust | sudo update-ca-trust"
+	var got []string
+	for _, c := range commands {
+		got = append(got, strings.Join(c, " "))
+	}
+	if strings.Join(got, " | ") != want {
+		t.Fatalf("commands = %q, want %q", got, want)
 	}
 }
