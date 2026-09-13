@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"sort"
 	"strings"
 	"testing"
 
@@ -149,38 +148,6 @@ func TestSetProjectDomainV2WritesKeyAndRerendersProfile(t *testing.T) {
 	}
 }
 
-func TestListZoneModeMachinesV2(t *testing.T) {
-	server := newFakeDomainServer()
-	server.resources["sc2-acme-zp"] = &fakeDomainResources{profiles: map[string]api.ProfilePut{}, instances: map[string]*api.Instance{
-		"web":     instanceWithConfig(map[string]string{meta.KeyV2PublicHostname: "web.baum.hase.de"}),
-		"old":     instanceWithConfig(map[string]string{}),
-		"private": instanceWithConfig(map[string]string{meta.KeyV2PublicHostname: meta.NamingModePrivate}),
-		"api":     instanceWithConfig(map[string]string{meta.KeyV2PublicHostname: " api.baum.hase.de "}),
-		// ADR-0028: the list key; a derived name under the domain counts,
-		// explicit-only names do not.
-		"both":     instanceWithConfig(map[string]string{meta.KeyV2PublicHostnames: "both.baum.hase.de,web12.tc42.uk"}),
-		"explicit": instanceWithConfig(map[string]string{meta.KeyV2PublicHostnames: "web13.tc42.uk"}),
-	}}
-	creator := TenantCreator{Server: server}
-	// Without a domain on the project nothing blocks — explicit hostnames
-	// in a private project must not stop a later set-domain.
-	if got, err := creator.ListZoneModeMachinesV2(context.Background(), "sc2", "acme", "zp"); err != nil || len(got) != 0 {
-		t.Fatalf("no domain: %v, %v", got, err)
-	}
-	server.projects["sc2-acme-zp"].Config[meta.KeyV2Domain] = "baum.hase.de"
-	got, err := creator.ListZoneModeMachinesV2(context.Background(), "sc2", "acme", "zp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sort.Strings(got)
-	if strings.Join(got, ",") != "api,both,web" {
-		t.Fatalf("zone-mode machines = %v", got)
-	}
-	if _, err := creator.ListZoneModeMachinesV2(context.Background(), "sc2", "acme", "nope"); !errors.Is(err, projectbroker.ErrProjectNotFound) {
-		t.Fatalf("missing project: %v", err)
-	}
-}
-
 // The broker adapter maps the seam onto the creator (and refuses deletion
 // without a deleter).
 func TestProjectBrokerCreatorDomainSeam(t *testing.T) {
@@ -192,9 +159,6 @@ func TestProjectBrokerCreatorDomainSeam(t *testing.T) {
 	}
 	if got := server.projects["sc2-acme-zp"].Config[meta.KeyV2Domain]; got != "baum.hase.de" {
 		t.Fatalf("KeyV2Domain = %q", got)
-	}
-	if machines, err := adapter.ListZoneModeMachines(ctx, "acme", "zp"); err != nil || len(machines) != 0 {
-		t.Fatalf("machines = %v, %v", machines, err)
 	}
 	if err := adapter.DeleteTenantProject(ctx, "acme", "zp"); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("delete without deleter: %v", err)

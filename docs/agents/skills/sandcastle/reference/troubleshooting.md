@@ -92,22 +92,32 @@ dig +short <machine>.<suffix>          @<tenant-cidr>.3
 - Nothing resolves at all → the sidecar or its tailnet route is down. Check
   `sc tailscale status`.
 
-## A zone-mode machine shows `CERT pending`, Caddy is inactive, or HTTPS refuses
+## A machine with a public name shows `CERT pending`, Caddy is inactive, or HTTPS refuses
 
-A machine in a project with a Project Domain (`sc ls` FQDN `<m>.<domain>`)
-gets its certificate **pushed by the Auth App's zone reconciler**, not fetched
-at boot. The reconciler runs every 30 s and on instance events; a fresh machine
+A machine with Machine Public Hostnames — the derived `<m>.<domain>` of a
+project with a Project Domain and/or explicit `sc hostname` names (`sc ls`
+FQDN `<first name> (+N)`) — gets **one certificate per name pushed by the Auth
+App's zone reconciler**, not fetched at boot. The reconciler runs every 30 s,
+on instance events and on every `sc hostname add|remove`; a fresh name
 normally goes `pending` → (order, 1–3 min with DNS-01 propagation) → `issued` →
-`installed` (`sc ls` CERT `ok`) within about five minutes of cloud-init
-finishing. Until then `pending` is the designed state; Caddy is running the
-whole time, serving the Machine Private Hostname with the Tenant CA leaf.
+`installed` within about five minutes of cloud-init finishing. Until then
+`pending` is the designed state; Caddy is running the whole time, serving the
+Machine Private Hostname with the Tenant CA leaf.
+
+**States are per name.** `user.sandcastle.v2.cert-state` reads
+`<name>=<state>[,<name>=<state>…]` (sorted by name); `sc project status` shows
+one row per name; `sc ls` CERT folds the machine to its **worst** name
+(`failed` > `pending` > `issued` > `renewing` > `installed`), so a machine with
+one name still pending reads `pending` even though the others already serve —
+read `sc project status` (or the key) to see which one. `cert-not-after` is
+the machine's earliest installed expiry.
 
 ```bash
 sc ls                                                   # FQDN <m>.<domain>, CERT pending|ok|failed
 sc project status <project>                             # per-machine PUBLIC NAME / CERT / NOT AFTER / DETAIL
 sc incus config get <m> user.sandcastle.v2.public-hostnames  # the machine's public-name set (ADR-0028; the single public-hostname key is legacy)
-sc incus config get <m> user.sandcastle.v2.cert-state   # pending | issued | installed | renewing | failed:<reason>
-sc incus config get <m> user.sandcastle.v2.cert-not-after    # expiry of the INSTALLED certificate
+sc incus config get <m> user.sandcastle.v2.cert-state   # <name>=<state>,… — pending | issued | installed | renewing | failed:<reason> per name
+sc incus config get <m> user.sandcastle.v2.cert-not-after    # earliest expiry among the INSTALLED certificates
 dig +short <m>.<domain> @1.1.1.1                        # the public A record → tenant-bridge IP
 sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: PRIVATE=<m>.<p>.<suffix> / PUBLIC=<name> per served name / RENDERED=<ts>
 sc incus exec <m> -- cat /etc/sandcastle/hostnames      # the machine's public-name set, one per line
@@ -120,7 +130,8 @@ sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
   journalctl -u sandcastle-auth-app --no-pager | grep "zone reconcile: <m>.<domain>"
 ```
 
-Reading the states (`sc project status` CERT column; `sc ls` folds them):
+Reading the states (`sc project status` CERT column, one row per name; `sc ls`
+folds a machine to its worst name):
 
 | state | meaning | what to do |
 |---|---|---|
@@ -186,6 +197,20 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
 - **Certificate serves but `openssl` shows an old serial** — the drift check
   re-pushes within a pass once the machine is running; if the on-disk
   `cert.pem` was edited by hand it is overwritten.
+- **A name is missing from `/etc/sandcastle/hostnames` or still listed after
+  `sc hostname remove`** — the reconciler pushes the file whole whenever it
+  differs from the machine's set (add, remove, `set-domain`/`unset-domain`, an
+  empty first-boot seed); the log line is `<m>: hostnames file pushed (…)`.
+  It only reads the file of a running machine with a per-name marker that
+  has, or recently had, a public name; after an Auth App restart a machine
+  whose last name was removed just before is the one case it does not revisit
+  — run `sandcastle-caddy-setup --refresh` after fixing the file by hand, or
+  add/remove a name.
+- **`sc project set-domain`/`unset-domain` with machines** — allowed (ADR-0028
+  slice 3): the reconciler re-derives every machine's name within a minute
+  (`stamped … public-hostnames=…`, records, a fresh certificate — the released
+  domain's rows are dropped, so expect a new order), and pushes the hostnames
+  file. Explicit hostnames are untouched.
 - **Siblings unreachable over HTTPS from a machine with public names** — they
   should not be: every machine trusts the Tenant CA and serves its private
   name. Check `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists

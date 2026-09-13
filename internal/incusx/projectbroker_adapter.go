@@ -80,11 +80,6 @@ func (p ProjectBrokerCreator) SetProjectDomain(ctx context.Context, tenant strin
 	return p.Creator.SetProjectDomainV2(ctx, p.Prefix, tenant, project, domain)
 }
 
-// ListZoneModeMachines implements authapp.TenantProjectDomainManager.
-func (p ProjectBrokerCreator) ListZoneModeMachines(ctx context.Context, tenant string, project string) ([]string, error) {
-	return p.Creator.ListZoneModeMachinesV2(ctx, p.Prefix, tenant, project)
-}
-
 // SetMachinePublicHostnames implements authapp.TenantProjectDomainManager
 // (ADR-0028): the machine's public-name list on its own instance config.
 func (p ProjectBrokerCreator) SetMachinePublicHostnames(ctx context.Context, tenant string, project string, machine string, hostnames []string) error {

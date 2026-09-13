@@ -17,10 +17,11 @@ import (
 )
 
 // ZoneMachineServer is the Incus side of the Public DNS Zone reconciler
-// (ADR-0027 §4, authapp.ZoneMachineServer): the fleet walk, the Naming Mode /
-// certificate-state stamps, the marker and certificate reads, and the
-// cert + key push into a Machine. It runs over the mounted host socket of the
-// serving Auth App, scoped to one install's prefix like V2DNSReconciler.
+// (ADR-0027 §4 / ADR-0028, authapp.ZoneMachineServer): the fleet walk, the
+// public-name-list / certificate-state stamps, the marker, hostnames-file
+// and certificate reads, and the per-hostname cert + key and hostnames-file
+// pushes into a Machine. It runs over the mounted host socket of the serving
+// Auth App, scoped to one install's prefix like V2DNSReconciler.
 type ZoneMachineServer struct {
 	Server incus.InstanceServer
 	Store  tenant.IncusTenantStore
@@ -37,7 +38,8 @@ func NewZoneMachineServer(server incus.InstanceServer, store tenant.IncusTenantS
 // ListZoneMachines walks every app project of every tenant of the install
 // (one GetInstancesFull per project — config, state and addresses in one
 // call) and returns each non-sidecar instance with its project's domain key,
-// its Naming Mode record, its certificate mirror and its bridge address.
+// its public-name keys (the list, and the legacy single key the reconciler
+// only ever deletes), its certificate mirror and its bridge address.
 func (s ZoneMachineServer) ListZoneMachines(ctx context.Context) ([]authapp.ZoneMachine, error) {
 	if s.Server == nil || s.Store == nil {
 		return nil, nil
@@ -242,9 +244,8 @@ func machineCertificateInstallScript(hostname string) string {
 // PushMachineHostnames writes the machine's whole public-name set to
 // /etc/sandcastle/hostnames (0644, root) and runs caddy-setup --refresh so
 // a removed name's site block disappears and a listed name whose
-// certificate is already there appears. The reconciler calls it when the
-// set changes (slice 3 of #172); the seam exists now so the machine
-// contract and its caller do not change again.
+// certificate is already there appears. The reconciler calls it whenever
+// the file on the machine does not list exactly the machine's set.
 func (s ZoneMachineServer) PushMachineHostnames(ctx context.Context, incusProject, name string, hostnames []string) error {
 	return pushMachineHostnames(s.Server.UseProject(incusProject), name, hostnames)
 }

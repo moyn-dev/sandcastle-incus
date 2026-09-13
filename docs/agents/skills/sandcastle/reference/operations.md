@@ -80,9 +80,12 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   install's own names give `… is reserved by this install`; no zone gives
   `no Public DNS Zone covers <domain> — ask your admin`; the apex gives `… is a
   zone apex; claim at least one label below <zone>`.
-- `set-domain`/`unset-domain` are refused while the project has machines with a
-  public name (`project <p> has machines with a public name: …; delete them
-  before changing the project domain`). Re-claiming the same domain is a no-op.
+- `set-domain`/`unset-domain` are allowed with machines in the project (ADR-0028
+  slice 3): the zone reconciler re-derives every machine's `<m>.<domain>` —
+  list key, A records, a fresh certificate, the hostnames file — within a
+  minute; the replaced/released domain's records and certificate rows go with
+  the claim; explicit hostnames are untouched. Re-claiming the same domain is a
+  no-op.
 - The verbs need `sc login`; on a broker-only install they print `--domain is
   not available on this install`. All take `--dry-run`.
 - `sc create` in a project with a domain stamps the set
@@ -108,20 +111,26 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   running; a public name is served as soon as its certificate lands and
   `sandcastle-caddy-setup --refresh` (execed by the reconciler after every
   push; safe to run by hand) re-renders.
-- The Auth App's zone reconciler (30 s + instance events) does the rest with
-  no operator step: public `A` records for `<m>.<d>` and `*.<m>.<d>` (DNS-only,
-  tenant-bridge IP; stopped machines keep them, deleted ones lose them), one
-  Let's Encrypt order per machine via DNS-01 (max 4 at once, backoff 1m → 6h
-  on failure, ARI-timed renewal with a fresh key), the cert + key push into
-  `/etc/sandcastle/tls/<hostname>/` once a per-name marker exists
-  (`instance-started` re-pushes a stopped machine within seconds), a per-pass
-  fingerprint drift check against that directory, and the mirror into
-  `user.sandcastle.v2.cert-state` / `cert-not-after` that `sc ls` and
-  `sc project status` read. Freeform `incus launch` machines are stamped with
-  their public name on first sight and treated the same; a Dev Image machine
-  gets an A record but no certificate (no Caddy, no marker). Deleting a machine
-  retains its certificate row until expiry, so recreating it with the same
-  name reuses the certificate without a new order. Diagnosis:
+- The Auth App's zone reconciler (30 s + instance events + a kick from every
+  `sc hostname add|remove` / `set-domain` / `unset-domain`) does the rest with
+  no operator step, **per (machine, public name)** — the derived `<m>.<d>` plus
+  every explicit hostname: public `A` records for `<name>` and `*.<name>`
+  (DNS-only, tenant-bridge IP; stopped machines keep them, deleted ones lose
+  the records of all their names), one Let's Encrypt order per name via DNS-01
+  (max 4 at once, backoff 1m → 6h on failure, ARI-timed renewal with a fresh
+  key; adding a name never reissues the others), the cert + key push into
+  `/etc/sandcastle/tls/<name>/` once a per-name marker exists
+  (`instance-started` re-pushes a stopped machine within seconds), a push of
+  `/etc/sandcastle/hostnames` whole whenever the machine's file does not list
+  exactly its set (add, remove, re-derived domain, empty first-boot seed), a
+  per-pass fingerprint drift check per name, and the mirror into
+  `user.sandcastle.v2.cert-state` (per name: `host=state,…`) /
+  `cert-not-after` (earliest) that `sc ls` (worst state) and `sc project
+  status` (one row per name) read. Freeform `incus launch` machines get their
+  list key stamped on first sight and are treated the same; a Dev Image
+  machine gets A records but no certificate (no Caddy, no marker). Deleting a
+  machine or removing a hostname retains its certificate row until expiry, so
+  the same name reuses the certificate without a new order. Diagnosis:
   `reference/troubleshooting.md`.
 - `sc connect` dials the bridge IP; `known_hosts` records the private names
   and every public name, and `HostKeyAlias` stays the Machine Private Hostname
@@ -155,9 +164,11 @@ sc incus config get web user.sandcastle.v2.public-hostnames     # the sorted lis
   an Auth App with sc login)` otherwise. `sc project delete` releases the
   project's hostnames; a machine deleted out-of-band is pruned by the 5-minute
   loop; `sc-adm public-dns-zone remove` is refused while hostnames are held.
-- Slice 1 of #172 records names and certificate rows only; A records, per-name
-  certificates and Caddy site blocks follow (explicit names read `CERT
-  pending` until then).
+- Every name — derived or explicit — gets its own A records, certificate and
+  Caddy site block from the zone reconciler (above); `sc hostname add` shows
+  up on the machine within seconds (hostnames file), records within a minute,
+  the certificate within about five. `sc hostname remove` deletes the name's
+  records at once and keeps its certificate row for a re-add.
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

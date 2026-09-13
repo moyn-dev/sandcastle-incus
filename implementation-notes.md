@@ -5614,3 +5614,85 @@ ticket left to the implementer:
   run the per-name script, hence "recreate" above.
 - **`sc project set-domain` help** no longer says "Naming Mode is fixed at creation"; the refusal
   is described as the transitional guard it is.
+
+## 2026-09-13 — Machine Public Hostnames slice 3 (#175): the reconciler per (machine, hostname)
+
+Issue #175 (decisions on #172; ADR-0028; spec `docs/spec/machine-hostnames.md` §6). What the
+ticket left to the implementer:
+
+- **The list key is converged, not stamped once.** The ticket asked for the Freeform first-sight
+  stamp "now as a list"; the spec (§4) also owed the derived-name re-derivation on a domain change.
+  One rule covers both: every pass computes the machine's set (derived + explicit) and rewrites
+  `user.sandcastle.v2.public-hostnames` when it differs (deleting the key when the set is empty),
+  and deletes the legacy `public-hostname` key in the same write — `PublicHostnamesFromConfig`
+  falls back to the legacy key once the list is gone, so a stale `web.baum.hase.de` there would have
+  resurrected a released derived name. Cost: one `UpdateInstance` per legacy-stamped machine on the
+  first pass after the upgrade (every machine the v0.10.0 reconciler saw carries `private` or a
+  derived name), never again. Alternative — stamp only when the key is absent, as before — rejected:
+  it cannot express unset-domain, set-domain or a failed API write. The "Incus key without claim"
+  and "key disagrees with claim" projects keep the old behaviour (nothing written, logged once),
+  because the tenant may still repair them; their explicit names are served regardless.
+- **`set-domain`/`unset-domain` refusal retired, and `ListZoneModeMachines` with it.** The seam
+  method, its incusx implementation, the adapter, `ProjectDomainMachinesError` and the handler guard
+  are gone rather than left as dead code. `projectDomainSet` now runs `onProjectDomainReleased` for
+  a **replaced** domain (the previous claim) — before this slice the refusal made replacement with
+  machines impossible, so the replaced domain's records and rows were never released; without it
+  the old derived names' A records would leak (they are under no claimed domain any more, so the
+  stale-record GC would not touch them). Both verbs kick the reconciler.
+- **The API kicks the reconciler.** `HandlerOptions.ZoneReconcileKick` / `zoneReconciler.RequestPass`
+  (mutex-guarded, nil-safe, set by the loop) so `sc hostname add|remove` and the domain verbs
+  converge within seconds instead of at the next 30 s tick. The reconciler is built before the
+  handler in `Serve` for that. Alternative — have the DELETE handler push the hostnames file itself
+  — rejected: the handler has no `ZoneMachineServer` and no Incus project name, and one owner of
+  the file (the reconciler) is the whole point of §5.2.
+- **Hostnames-file convergence is bounded, not fleet-wide.** Reading `/etc/sandcastle/hostnames`
+  on every running machine every 30 s would add a file read per private-only machine that never
+  had a public name. The pass reads it for machines with ≥1 target and for machines this process
+  remembers having had names (`namedBefore`), so the last-name removal converges to an empty file
+  in the same process. The one gap — the last name removed and the Auth App restarted before the
+  next pass — leaves a stale (harmless: the name's records are gone) file until `--refresh` by hand
+  or the next add/remove; documented in the skill. Alternatives: reading every machine (rejected,
+  cost on the private fleet), or persisting "had names" in the DB (rejected as a table for one
+  edge). The marker is read once per machine per pass (`markerByMachine`) since several names share
+  it.
+- **The certificate-row GC keeps rows "live" while the hostname is reserved.** The ticket said
+  explicit rows should stop being exempt "by fiat"; the reason they must stay is now concrete:
+  `sc create --hostname` records the row *before* the instance exists (`beforeCreate`), so a pass
+  between the claim and the create would drop a never-issued row of a "vanished" machine — and a
+  Dev Image machine would never get it back. A reservation that exists says the tenant wants the
+  name; the hostname GC (5 min) ends the reservation of a vanished machine and the row follows on
+  the next pass. The old exemption had no such tie to the reservation's lifetime.
+- **Mirror format and folding.** `cert-state` = `host=state,…` sorted by host (the parser also
+  accepts a bare pre-slice-3 value as the first name's); `cert-not-after` = the earliest expiry
+  among names whose pushed serial is the issued one (a renewed-but-unpushed name contributes the
+  machine's previous value, as before). Worst-state order `failed > (unknown) > pending > issued >
+  renewing > installed`, a name without an entry counting as pending — so `sc ls` reads `pending`
+  until *every* name serves, which is what the operator wants to see. An unknown state ranks just
+  below failed so the CERT column still shows it verbatim rather than hiding it behind a healthy
+  sibling. `WorstCertState` returns "" when nothing is mirrored yet, keeping the pre-slice JSON
+  (`certState` absent for a fresh machine) and the existing decode tests.
+- **`sc project status` per name.** One row per (machine, name); NOT AFTER — one value per machine
+  in the mirror — is printed on the machine's `installed`/`renewing` rows as its earliest expiry
+  (conservative; documented) rather than only on the first row, where a `pending` first row would
+  have carried an expiry that is not its own. A machine without a name reads `private name only`
+  ("private mode" was Naming Mode vocabulary). The table now also appears for a project without a
+  domain once a machine carries an explicit hostname — before, such a project ended at
+  `Domain: (none)` and the hostname's state was invisible outside `sc ls`.
+- **Managed records for explicit names are exactly base + wildcard**, not the subtree the
+  reservation covers: the reconciler deletes only what it writes, so a record a tenant might add by
+  hand below a reserved name is never read as stale. Zones are reconciled when they hold a claim or
+  a hostname row (with an empty target list when nothing is live), so a zone holding only explicit
+  names still GC's a deleted machine's records.
+- **Removal hook deletes records only.** `onMachineHostnameReleased` → `releaseMachineHostnameRecords`
+  (base + wildcard A, the name's `_acme-challenge` TXT) through the same provider factory as the
+  domain release, so the package's tests stay off Cloudflare; the row is untouched (§4.6 retention —
+  the tests pin that a re-added name reaches `installed` with no order).
+- **Tests.** The reconciler tests were rewritten for the pair model (fake fleet gained
+  `PushMachineHostnames` and list-key stamping; the harness routes the release hooks to its own fake
+  DNS) and gained: add later, remove (records gone, row retained, file pushed, re-add reuses), the
+  last name removed (empty file, keys deleted, machine not revisited), explicit name in a private
+  project (empty seed pushed), derived + explicit mixed with per-name mirror and earliest expiry,
+  machine deletion covering all names, set-domain / unset-domain re-derivation, list-key convergence
+  + legacy-key deletion + a legacy-marker machine, and the API kick. `meta` tests cover the mirror
+  format, parsing, worst-state folding and `CertStateOf`; the CLI golden covers per-name rows and
+  the private-project table.

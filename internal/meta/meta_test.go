@@ -215,3 +215,65 @@ func TestIsManaged(t *testing.T) {
 		t.Fatal("Sandcastle config should be managed")
 	}
 }
+
+// ADR-0028: the cert-state mirror is per hostname (`host=state,…`, sorted);
+// DecodeMachine keeps the map and folds the worst state into CertState; a
+// bare pre-ADR-0028 value is read as the first name's.
+func TestCertStatesPerHostname(t *testing.T) {
+	if got := FormatCertStates(map[string]string{"web.baum.hase.de": "installed", "Shop.tc42.uk.": "failed:rate-limited", "": "x", "z": ""}); got != "shop.tc42.uk=failed:rate-limited,web.baum.hase.de=installed" {
+		t.Fatalf("FormatCertStates = %q", got)
+	}
+	if FormatCertStates(nil) != "" {
+		t.Fatal("empty map must render empty")
+	}
+	names := []string{"shop.tc42.uk", "web.baum.hase.de"}
+	states := ParseCertStates(" shop.tc42.uk=installed, web.baum.hase.de=issued ,,", names)
+	if len(states) != 2 || states["shop.tc42.uk"] != "installed" || states["web.baum.hase.de"] != "issued" {
+		t.Fatalf("ParseCertStates = %v", states)
+	}
+	if legacy := ParseCertStates("installed", names); len(legacy) != 1 || legacy["shop.tc42.uk"] != "installed" {
+		t.Fatalf("legacy value = %v", legacy)
+	}
+	if ParseCertStates("installed", nil) != nil || ParseCertStates("", names) != nil {
+		t.Fatal("nothing to parse must yield nil")
+	}
+	for _, tc := range []struct {
+		states map[string]string
+		want   string
+	}{
+		{nil, ""},
+		{map[string]string{"shop.tc42.uk": "installed", "web.baum.hase.de": "installed"}, "installed"},
+		{map[string]string{"shop.tc42.uk": "installed", "web.baum.hase.de": "renewing"}, "renewing"},
+		{map[string]string{"shop.tc42.uk": "issued", "web.baum.hase.de": "renewing"}, "issued"},
+		{map[string]string{"shop.tc42.uk": "pending", "web.baum.hase.de": "issued"}, "pending"},
+		{map[string]string{"shop.tc42.uk": "installed"}, "pending"}, // web has no entry yet
+		{map[string]string{"shop.tc42.uk": "weird", "web.baum.hase.de": "pending"}, "weird"},
+		{map[string]string{"shop.tc42.uk": "failed:validation", "web.baum.hase.de": "weird"}, "failed:validation"},
+		{map[string]string{"gone.tc42.uk": "failed:expired", "shop.tc42.uk": "installed", "web.baum.hase.de": "installed"}, "failed:expired"}, // stale entry still counts
+	} {
+		if got := WorstCertState(tc.states, names); got != tc.want {
+			t.Fatalf("WorstCertState(%v) = %q, want %q", tc.states, got, tc.want)
+		}
+	}
+	m := DecodeMachine(map[string]string{
+		KeyV2PublicHostnames: "web.baum.hase.de,shop.tc42.uk",
+		KeyV2CertState:       "shop.tc42.uk=installed,web.baum.hase.de=failed:rate-limited",
+		KeyV2CertNotAfter:    "2026-12-01T00:00:00Z",
+	}, Machine{Name: "web"})
+	if m.CertState != "failed:rate-limited" || m.CertStates["shop.tc42.uk"] != "installed" || m.CertNotAfter != "2026-12-01T00:00:00Z" {
+		t.Fatalf("DecodeMachine = %+v", m)
+	}
+	if m.CertStateOf("shop.tc42.uk") != "installed" || m.CertStateOf("web.baum.hase.de") != "failed:rate-limited" || m.CertStateOf("new.tc42.uk") != CertStatePending {
+		t.Fatalf("CertStateOf = %q / %q / %q", m.CertStateOf("shop.tc42.uk"), m.CertStateOf("web.baum.hase.de"), m.CertStateOf("new.tc42.uk"))
+	}
+	// An older Auth App's cache payload: only the folded state, applied to
+	// every name.
+	legacy := Machine{PublicHostname: "web.baum.hase.de", PublicHostnames: []string{"web.baum.hase.de"}, CertState: "installed"}
+	if legacy.CertStateOf("web.baum.hase.de") != "installed" {
+		t.Fatalf("legacy CertStateOf = %q", legacy.CertStateOf("web.baum.hase.de"))
+	}
+	// A private machine never carries states, whatever the config says.
+	if p := DecodeMachine(map[string]string{KeyV2CertState: "x=installed"}, Machine{}); p.CertStates != nil || p.CertState != "" {
+		t.Fatalf("private machine decoded states: %+v", p)
+	}
+}

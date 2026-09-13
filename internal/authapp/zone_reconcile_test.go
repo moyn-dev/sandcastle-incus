@@ -18,9 +18,10 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
-// No unit test may reach Cloudflare: the release hook (DELETE …/domain, the
-// claim GC) builds a provider through newZoneDNSProvider, so the package's
-// tests run against an in-memory zone by default.
+// No unit test may reach Cloudflare: the release hooks (DELETE …/domain,
+// DELETE …/hostnames/{h}, the GCs) build a provider through
+// newZoneDNSProvider, so the package's tests run against an in-memory zone by
+// default.
 func init() {
 	newZoneDNSProvider = newFakeDNS().provider
 }
@@ -33,11 +34,12 @@ type fakeZoneFleet struct {
 	mu       sync.Mutex
 	machines []ZoneMachine
 	// files is "<incusProject>/<name>:<path>" → content
-	files   map[string]string
-	pushes  []fakePush
-	stamps  []fakeStamp
-	listErr error
-	pushErr error
+	files          map[string]string
+	pushes         []fakePush
+	hostnamePushes []fakeHostnamesPush
+	stamps         []fakeStamp
+	listErr        error
+	pushErr        error
 	// unreachable makes ReadInstanceFile fail with a non-404 error.
 	unreachable map[string]bool
 }
@@ -47,6 +49,11 @@ type fakePush struct {
 	Hostname string
 	CertPEM  string
 	KeyPEM   string
+}
+
+type fakeHostnamesPush struct {
+	Instance  string
+	Hostnames []string
 }
 
 type fakeStamp struct {
@@ -64,6 +71,13 @@ func (f *fakeZoneFleet) setFile(incusProject, name, path, content string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[f.key(incusProject, name)+":"+path] = content
+}
+
+func (f *fakeZoneFleet) file(incusProject, name, path string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content, ok := f.files[f.key(incusProject, name)+":"+path]
+	return content, ok
 }
 
 func (f *fakeZoneFleet) ListZoneMachines(context.Context) ([]ZoneMachine, error) {
@@ -87,6 +101,8 @@ func (f *fakeZoneFleet) StampInstanceConfig(_ context.Context, incusProject, nam
 			switch k {
 			case meta.KeyV2PublicHostname:
 				m.PublicHostname = v
+			case meta.KeyV2PublicHostnames:
+				m.PublicHostnames = meta.ParsePublicHostnames(v)
 			case meta.KeyV2CertState:
 				m.CertState = v
 			case meta.KeyV2CertNotAfter:
@@ -121,6 +137,23 @@ func (f *fakeZoneFleet) PushMachineCertificate(_ context.Context, incusProject, 
 	f.pushes = append(f.pushes, fakePush{Instance: f.key(incusProject, name), Hostname: hostname, CertPEM: certPEM, KeyPEM: keyPEM})
 	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSHostCertPath(hostname)] = certPEM
 	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSHostKeyPath(hostname)] = keyPEM
+	// The install script appends the name to the hostnames file if missing
+	// and re-renders: the marker then lists the name.
+	hk := f.key(incusProject, name) + ":" + tenant.MachineHostnamesPath
+	if !strings.Contains(f.files[hk], hostname+"\n") {
+		f.files[hk] = tenant.FormatMachineHostnamesFile(append(strings.Split(f.files[hk], "\n"), hostname))
+	}
+	return nil
+}
+
+func (f *fakeZoneFleet) PushMachineHostnames(_ context.Context, incusProject, name string, hostnames []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pushErr != nil {
+		return f.pushErr
+	}
+	f.hostnamePushes = append(f.hostnamePushes, fakeHostnamesPush{Instance: f.key(incusProject, name), Hostnames: append([]string(nil), hostnames...)})
+	f.files[f.key(incusProject, name)+":"+tenant.MachineHostnamesPath] = tenant.FormatMachineHostnamesFile(hostnames)
 	return nil
 }
 
@@ -139,6 +172,24 @@ func (f *fakeZoneFleet) pushCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.pushes)
+}
+
+func (f *fakeZoneFleet) hostnamePushCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.hostnamePushes)
+}
+
+// pushedHostnames lists the hostnames of every certificate push, sorted.
+func (f *fakeZoneFleet) pushedHostnames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, p := range f.pushes {
+		out = append(out, p.Hostname)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // fakeDNS is one in-memory libdns zone shared by every provider the factory
@@ -274,7 +325,7 @@ func newZoneHarness(t *testing.T, machines ...ZoneMachine) *zoneHarness {
 
 // newZoneHarnessInside is newZoneHarness with the Public DNS Zone living
 // inside the Cloudflare zone cloudflareZone and domain claimed under it for
-// acme/zp.
+// acme/zp. The release hooks use the harness's fake DNS too.
 func newZoneHarnessInside(t *testing.T, zone, cloudflareZone, domain string, machines ...ZoneMachine) *zoneHarness {
 	t.Helper()
 	db := newClaimsTestDB(t)
@@ -290,6 +341,9 @@ func newZoneHarnessInside(t *testing.T, zone, cloudflareZone, domain string, mac
 	})
 	h.rec.providers = h.dns.provider
 	h.rec.now = func() time.Time { return h.now }
+	old := newZoneDNSProvider
+	newZoneDNSProvider = h.dns.provider
+	t.Cleanup(func() { newZoneDNSProvider = old })
 	return h
 }
 
@@ -298,6 +352,16 @@ func (h *zoneHarness) pass() error {
 	err := h.rec.Reconcile(h.ctx)
 	h.rec.waitOrders()
 	return err
+}
+
+// passes runs n passes, failing on any error.
+func (h *zoneHarness) passes(n int) {
+	h.t.Helper()
+	for i := 0; i < n; i++ {
+		if err := h.pass(); err != nil {
+			h.t.Fatalf("pass %d: %v", i, err)
+		}
+	}
 }
 
 func (h *zoneHarness) row(hostname string) machineCertificate {
@@ -325,9 +389,36 @@ func (h *zoneHarness) logged(substr string) int {
 	return n
 }
 
+// claimHostname reserves an explicit hostname for acme/<project>:<machine>.
+func (h *zoneHarness) claimHostname(hostname, project, machine string) MachineHostname {
+	h.t.Helper()
+	row, err := ClaimMachineHostname(h.ctx, h.db, ClaimMachineHostnameRequest{Hostname: hostname, Tenant: "acme", Project: project, Machine: machine})
+	if err != nil {
+		h.t.Fatalf("claim %s: %v", hostname, err)
+	}
+	return row
+}
+
+// requestExplicit records the pending row `sc hostname add` leaves.
+func (h *zoneHarness) requestExplicit(row MachineHostname) {
+	h.t.Helper()
+	if _, err := requestMachineCertificate(h.ctx, h.db, machineCertificateRequest{
+		Hostname: row.Hostname, Tenant: row.Tenant, Project: row.Project, Machine: row.Machine, Zone: row.Zone, DirectoryURL: LetsEncryptStagingDirectory,
+	}, h.now); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// zoneMachine is a machine of acme/zp (domain baum.hase.de) stamped by sc
+// create with its derived name.
 func zoneMachine(name, ip string, running bool) ZoneMachine {
 	return ZoneMachine{Tenant: "acme", Project: "zp", IncusProject: "sc2-acme-zp", Name: name,
-		ProjectDomain: "baum.hase.de", PublicHostname: name + ".baum.hase.de", BridgeIPv4: ip, Running: running}
+		ProjectDomain: "baum.hase.de", PublicHostnames: []string{name + ".baum.hase.de"}, BridgeIPv4: ip, Running: running}
+}
+
+// privateMachine is a machine of acme/default (no Project Domain).
+func privateMachine(name, ip string, running bool) ZoneMachine {
+	return ZoneMachine{Tenant: "acme", Project: "default", IncusProject: "sc2-acme-default", Name: name, BridgeIPv4: ip, Running: running}
 }
 
 // markerFor is a per-name Caddy Setup Marker (ADR-0028) of a machine whose
@@ -336,6 +427,13 @@ func zoneMachine(name, ip string, running bool) ZoneMachine {
 // the push).
 func markerFor(hostname string) string {
 	return "PRIVATE=web.zp.acme\nPUBLIC=" + hostname + "\nRENDERED=1757760000\n"
+}
+
+// ready gives a machine a per-name marker and a hostnames file listing its
+// current names, i.e. the state caddy-setup leaves after a correct seed.
+func (h *zoneHarness) ready(incusProject, name string, hostnames ...string) {
+	h.fleet.setFile(incusProject, name, tenant.CaddySetupMarkerPath, "PRIVATE="+name+".zp.acme\nRENDERED=1757760000\n")
+	h.fleet.setFile(incusProject, name, tenant.MachineHostnamesPath, tenant.FormatMachineHostnamesFile(hostnames))
 }
 
 func recordNames(rrs []libdns.RR, typ string) []string {
@@ -355,7 +453,8 @@ func recordNames(rrs []libdns.RR, typ string) []string {
 func TestZoneReconcile_RecordConvergence(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	stopped := zoneMachine("old", "", false) // stopped: no lease, records stay
-	private := ZoneMachine{Tenant: "acme", Project: "zp", IncusProject: "sc2-acme-zp", Name: "p", ProjectDomain: "baum.hase.de", PublicHostname: "private", BridgeIPv4: "10.249.7.3", Running: true}
+	private := privateMachine("p", "10.249.7.3", true)
+	private.PublicHostname = meta.NamingModePrivate // a legacy stamp: deleted, never a name
 	h := newZoneHarness(t, web, stopped, private)
 	h.dns.add("hase.de.", libdns.RR{Name: "old.baum", Type: "A", Data: "10.249.7.5"})
 	h.dns.add("hase.de.", libdns.RR{Name: "*.old.baum", Type: "A", Data: "10.249.7.5"})
@@ -378,13 +477,18 @@ func TestZoneReconcile_RecordConvergence(t *testing.T) {
 	if h.dns.tokens[0] != "tok" {
 		t.Fatalf("provider token = %q, want the zone's decrypted token", h.dns.tokens[0])
 	}
+	// The legacy key is deleted on the private machine; nothing else about
+	// it is touched (no records, no mirror).
+	if m := h.fleet.machine("sc2-acme-default", "p"); m.PublicHostname != "" || len(m.PublicHostnames) != 0 || m.CertState != "" {
+		t.Fatalf("private machine after pass: %+v", m)
+	}
 	// A second pass with nothing changed makes no writes.
-	sets, deletes := h.dns.sets, h.dns.deletes
+	sets, deletes, stamps := h.dns.sets, h.dns.deletes, len(h.fleet.stamps)
 	if err := h.pass(); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
-	if h.dns.sets != sets || h.dns.deletes != deletes {
-		t.Fatalf("unchanged fleet wrote records: sets %d→%d deletes %d→%d", sets, h.dns.sets, deletes, h.dns.deletes)
+	if h.dns.sets != sets || h.dns.deletes != deletes || len(h.fleet.stamps) != stamps {
+		t.Fatalf("unchanged fleet wrote: sets %d→%d deletes %d→%d stamps %d→%d", sets, h.dns.sets, deletes, h.dns.deletes, stamps, len(h.fleet.stamps))
 	}
 }
 
@@ -394,7 +498,7 @@ func TestZoneReconcile_RecordConvergence(t *testing.T) {
 func TestZoneReconcile_ZoneInsideCloudflareZone(t *testing.T) {
 	const cf = "tc42.uk."
 	web := ZoneMachine{Tenant: "acme", Project: "zp", IncusProject: "sc2-acme-zp", Name: "web",
-		ProjectDomain: "baum.e2e.sc.tc42.uk", PublicHostname: "web.baum.e2e.sc.tc42.uk", BridgeIPv4: "10.249.7.9", Running: true}
+		ProjectDomain: "baum.e2e.sc.tc42.uk", PublicHostnames: []string{"web.baum.e2e.sc.tc42.uk"}, BridgeIPv4: "10.249.7.9", Running: true}
 	h := newZoneHarnessInside(t, "e2e.sc.tc42.uk", "tc42.uk", "baum.e2e.sc.tc42.uk", web)
 	h.dns.add(cf, libdns.RR{Name: "gone.baum.e2e.sc", Type: "A", Data: "10.249.7.6"})   // deleted machine under the domain
 	h.dns.add(cf, libdns.RR{Name: "*.gone.baum.e2e.sc", Type: "A", Data: "10.249.7.6"}) // deleted machine under the domain
@@ -435,9 +539,6 @@ func TestZoneReconcile_ZoneInsideCloudflareZone(t *testing.T) {
 
 	// Release: A + challenge records under the domain go, relative to the
 	// Cloudflare zone; the neighbours stay.
-	old := newZoneDNSProvider
-	newZoneDNSProvider = h.dns.provider
-	t.Cleanup(func() { newZoneDNSProvider = old })
 	h.dns.add(cf, libdns.RR{Name: "_acme-challenge.web.baum.e2e.sc", Type: "TXT", Data: "mid-order"})
 	c, found, err := ReleaseProjectDomainClaim(h.ctx, h.db, "acme", "zp")
 	if err != nil || !found {
@@ -456,19 +557,32 @@ func TestZoneReconcile_ZoneInsideCloudflareZone(t *testing.T) {
 	}
 }
 
+// A Freeform Machine (no list key) in a claimed project is stamped with its
+// derived name as a LIST on first sight, gets its records, and — once the
+// per-name marker appears — a row, an order and a push. A machine in a
+// project without a domain and without names is never stamped.
 func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	freeform := ZoneMachine{Tenant: "acme", Project: "zp", IncusProject: "sc2-acme-zp", Name: "ff", ProjectDomain: "baum.hase.de", BridgeIPv4: "10.249.7.20", Running: true}
-	privateProject := ZoneMachine{Tenant: "acme", Project: "default", IncusProject: "sc2-acme-default", Name: "dev", BridgeIPv4: "10.249.7.21", Running: true}
+	privateProject := privateMachine("dev", "10.249.7.21", true)
 	h := newZoneHarness(t, freeform, privateProject)
 	// No marker yet: A record, no row, mirrored pending.
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if got := h.fleet.machine("sc2-acme-zp", "ff").PublicHostname; got != "ff.baum.hase.de" {
-		t.Fatalf("freeform stamp = %q", got)
+	ff := h.fleet.machine("sc2-acme-zp", "ff")
+	if strings.Join(ff.PublicHostnames, ",") != "ff.baum.hase.de" || ff.PublicHostname != "" {
+		t.Fatalf("freeform stamp = %+v", ff)
 	}
-	if got := h.fleet.machine("sc2-acme-default", "dev").PublicHostname; got != meta.NamingModePrivate {
-		t.Fatalf("private-project stamp = %q", got)
+	if h.logged("stamped sc2-acme-zp/ff "+meta.KeyV2PublicHostnames+"=ff.baum.hase.de") != 1 {
+		t.Fatalf("stamp not logged: %v", h.logs)
+	}
+	if dev := h.fleet.machine("sc2-acme-default", "dev"); dev.PublicHostname != "" || len(dev.PublicHostnames) != 0 || dev.CertState != "" {
+		t.Fatalf("private-project machine touched: %+v", dev)
+	}
+	for _, s := range h.fleet.stamps {
+		if s.Instance == "sc2-acme-default/dev" {
+			t.Fatalf("private-project machine stamped: %+v", s)
+		}
 	}
 	if _, err := getMachineCertificate(h.ctx, h.db, "ff.baum.hase.de"); err == nil {
 		t.Fatal("row created without a marker")
@@ -476,8 +590,8 @@ func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 2 {
 		t.Fatalf("A records = %v, want base + wildcard", got)
 	}
-	if h.fleet.machine("sc2-acme-zp", "ff").CertState != meta.CertStatePending {
-		t.Fatalf("cert-state = %q, want pending", h.fleet.machine("sc2-acme-zp", "ff").CertState)
+	if got := h.fleet.machine("sc2-acme-zp", "ff").CertState; got != "ff.baum.hase.de=pending" {
+		t.Fatalf("cert-state = %q, want per-name pending", got)
 	}
 	if h.logged("no caddy setup marker") != 1 {
 		t.Fatalf("marker-absent logged %d times, want once", h.logged("no caddy setup marker"))
@@ -488,8 +602,9 @@ func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	if h.logged("no caddy setup marker") != 1 {
 		t.Fatal("marker-absent logged again on the next pass")
 	}
-	// Marker appears: row created, order runs, push happens, mirror installed.
-	h.fleet.setFile("sc2-acme-zp", "ff", tenant.CaddySetupMarkerPath, markerFor("ff.baum.hase.de"))
+	// Marker appears (seeded file lists the name): row created, order runs,
+	// push happens, mirror installed.
+	h.ready("sc2-acme-zp", "ff", "ff.baum.hase.de")
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -502,9 +617,12 @@ func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	if h.fleet.pushCount() != 1 || h.fleet.pushes[0].Hostname != "ff.baum.hase.de" {
 		t.Fatalf("pushes = %+v, want one push for ff.baum.hase.de", h.fleet.pushes)
 	}
+	if h.fleet.hostnamePushCount() != 0 {
+		t.Fatalf("a correctly seeded hostnames file was pushed: %+v", h.fleet.hostnamePushes)
+	}
 	m := h.fleet.machine("sc2-acme-zp", "ff")
 	row := h.row("ff.baum.hase.de")
-	if m.CertState != meta.CertStateInstalled || m.CertNotAfter != formatCertTime(row.NotAfter) || row.PushedSerial != row.Serial {
+	if m.CertState != "ff.baum.hase.de=installed" || m.CertNotAfter != formatCertTime(row.NotAfter) || row.PushedSerial != row.Serial {
 		t.Fatalf("after push: state=%q notAfter=%q pushed=%q serial=%q", m.CertState, m.CertNotAfter, row.PushedSerial, row.Serial)
 	}
 }
@@ -532,15 +650,15 @@ func TestZoneReconcile_PushGateNoMarkerNoPush(t *testing.T) {
 		if err := h.pass(); err != nil {
 			t.Fatalf("pass (%q): %v", marker, err)
 		}
-		if h.fleet.pushCount() != 0 {
+		if h.fleet.pushCount() != 0 || h.fleet.hostnamePushCount() != 0 {
 			t.Fatalf("pushed with marker %q", marker)
 		}
-		if h.state("web.baum.hase.de") != machineCertStateIssued || h.fleet.machine("sc2-acme-zp", "web").CertState != meta.CertStateIssued {
+		if h.state("web.baum.hase.de") != machineCertStateIssued || h.fleet.machine("sc2-acme-zp", "web").CertState != "web.baum.hase.de=issued" {
 			t.Fatalf("state with marker %q = %s / %s, want issued", marker, h.state("web.baum.hase.de"), h.fleet.machine("sc2-acme-zp", "web").CertState)
 		}
 	}
 	if n := h.logged("A record only"); n != 4 {
-		t.Fatalf("gate logged %d times, want once per distinct marker (4)", n)
+		t.Fatalf("gate logged %d times, want once per distinct marker (4): %v", n, h.logs)
 	}
 	// A per-name marker that does not list the hostname yet (its block
 	// cannot render before the push) clears the gate.
@@ -574,7 +692,7 @@ func TestZoneReconcile_PushGateNoMarkerNoPush(t *testing.T) {
 func TestZoneReconcile_PushFailureRetriesWithoutBackoff(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	h := newZoneHarness(t, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +739,7 @@ func TestZoneReconcile_SchedulingAndBackoff(t *testing.T) {
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if h.fleet.machine("sc2-acme-zp", "web").CertState != "failed:validation" {
+	if h.fleet.machine("sc2-acme-zp", "web").CertState != "web.baum.hase.de=failed:validation" {
 		t.Fatalf("mirror = %q", h.fleet.machine("sc2-acme-zp", "web").CertState)
 	}
 	if len(h.issuer.calls) != 1 {
@@ -726,7 +844,7 @@ func TestZoneReconcile_ARIAndRenewalRotatesKey(t *testing.T) {
 	if err := h.pass(); err != nil { // the kicked pass mirrors the new row
 		t.Fatalf("pass: %v", err)
 	}
-	if m := h.fleet.machine("sc2-acme-zp", "web"); m.CertState != meta.CertStateIssued {
+	if m := h.fleet.machine("sc2-acme-zp", "web"); m.CertState != "web.baum.hase.de=issued" {
 		t.Fatalf("mirror after renewal = %q", m.CertState)
 	}
 }
@@ -849,16 +967,11 @@ func TestZoneReconcile_TXTSweepBeforeOrder(t *testing.T) {
 func TestZoneReconcile_DriftRePush(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	h := newZoneHarness(t, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.pass(); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
-	if err := h.pass(); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
+	h.passes(2)
 	if h.fleet.pushCount() != 1 {
 		t.Fatalf("pushes = %d", h.fleet.pushCount())
 	}
@@ -906,32 +1019,30 @@ func TestZoneReconcile_DriftRePush(t *testing.T) {
 func TestZoneReconcile_MirroringWritesOnlyChanges(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	h := newZoneHarness(t, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	// First sight: pending stamped (public-hostname was already set by sc create).
-	stamps := len(h.fleet.stamps)
-	if stamps != 1 || h.fleet.stamps[0].Config[meta.KeyV2CertState] != meta.CertStatePending {
+	// First sight: the per-name pending state is stamped; the list key
+	// (already set by sc create) is not rewritten.
+	if len(h.fleet.stamps) != 1 || h.fleet.stamps[0].Config[meta.KeyV2CertState] != "web.baum.hase.de=pending" {
 		t.Fatalf("stamps = %+v", h.fleet.stamps)
 	}
-	if _, ok := h.fleet.stamps[0].Config[meta.KeyV2PublicHostname]; ok {
-		t.Fatal("public-hostname rewritten")
+	for _, key := range []string{meta.KeyV2PublicHostname, meta.KeyV2PublicHostnames} {
+		if _, ok := h.fleet.stamps[0].Config[key]; ok {
+			t.Fatalf("%s rewritten", key)
+		}
 	}
 	// The order ran in the goroutine; next pass pushes and mirrors installed.
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
 	m := h.fleet.machine("sc2-acme-zp", "web")
-	if m.CertState != meta.CertStateInstalled || m.CertNotAfter == "" {
+	if m.CertState != "web.baum.hase.de=installed" || m.CertNotAfter == "" {
 		t.Fatalf("mirror = %q / %q", m.CertState, m.CertNotAfter)
 	}
-	stamps = len(h.fleet.stamps)
-	for i := 0; i < 3; i++ {
-		if err := h.pass(); err != nil {
-			t.Fatalf("pass: %v", err)
-		}
-	}
+	stamps := len(h.fleet.stamps)
+	h.passes(3)
 	if len(h.fleet.stamps) != stamps {
 		t.Fatalf("unchanged fleet stamped %d more time(s)", len(h.fleet.stamps)-stamps)
 	}
@@ -942,7 +1053,7 @@ func TestZoneReconcile_MirroringWritesOnlyChanges(t *testing.T) {
 		t.Fatalf("pass: %v", err)
 	}
 	m = h.fleet.machine("sc2-acme-zp", "web")
-	if m.CertState != meta.CertStateRenewing || m.CertNotAfter == "" {
+	if m.CertState != "web.baum.hase.de=renewing" || m.CertNotAfter == "" {
 		t.Fatalf("renewing mirror = %q / %q", m.CertState, m.CertNotAfter)
 	}
 	if got := h.state("web.baum.hase.de"); got != machineCertStateRenewing {
@@ -953,7 +1064,7 @@ func TestZoneReconcile_MirroringWritesOnlyChanges(t *testing.T) {
 func TestZoneReconcile_GCRetentionAndReuse(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	h := newZoneHarness(t, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
 		t.Fatal(err)
 	}
@@ -961,12 +1072,7 @@ func TestZoneReconcile_GCRetentionAndReuse(t *testing.T) {
 	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("never.baum.hase.de"), h.now); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.pass(); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
-	if err := h.pass(); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
+	h.passes(2)
 	if _, err := getMachineCertificate(h.ctx, h.db, "never.baum.hase.de"); err == nil {
 		t.Fatal("never-issued row of an absent machine retained")
 	}
@@ -993,11 +1099,11 @@ func TestZoneReconcile_GCRetentionAndReuse(t *testing.T) {
 	// Machine reappears as a Freeform Machine with the marker: the retained
 	// certificate is pushed, no new order.
 	back := zoneMachine("web", "10.249.7.11", true)
-	back.PublicHostname = ""
+	back.PublicHostnames = nil
 	h.fleet.mu.Lock()
 	h.fleet.machines = append(h.fleet.machines, back)
 	h.fleet.mu.Unlock()
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	orders := len(h.issuer.calls)
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
@@ -1007,6 +1113,9 @@ func TestZoneReconcile_GCRetentionAndReuse(t *testing.T) {
 	}
 	if h.fleet.pushCount() != 2 || h.row("web.baum.hase.de").Serial != issued.Serial {
 		t.Fatalf("retained certificate not pushed: pushes=%d", h.fleet.pushCount())
+	}
+	if got := h.fleet.machine("sc2-acme-zp", "web").PublicHostnames; strings.Join(got, ",") != "web.baum.hase.de" {
+		t.Fatalf("reappearing machine not stamped: %v", got)
 	}
 	// Expiry: an absent machine's row is dropped once the certificate is
 	// past not_after; a row from another directory goes too.
@@ -1064,15 +1173,15 @@ func TestZoneReconcile_OneMachineNeverFailsThePass(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	broken := zoneMachine("broken", "10.249.7.12", true)
 	h := newZoneHarness(t, broken, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
 	h.fleet.unreachable["sc2-acme-zp/broken"] = true
 	for _, host := range []string{"web.baum.hase.de", "broken.baum.hase.de"} {
 		if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest(host), h.now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := h.pass(); err != nil {
-		t.Fatalf("pass: %v", err)
+	if err := h.pass(); err == nil || !strings.Contains(err.Error(), "sc2-acme-zp/broken") {
+		t.Fatalf("broken machine not reported: %v", err)
 	}
 	err := h.pass()
 	if err == nil || !strings.Contains(err.Error(), "broken.baum.hase.de") {
@@ -1092,17 +1201,30 @@ func TestZoneReconcile_OneMachineNeverFailsThePass(t *testing.T) {
 	}
 }
 
+// A project carrying KeyV2Domain without a claim: no derived name, no
+// records, no stamps — the tenant may still repair it. An explicit hostname
+// of such a machine is served regardless.
 func TestZoneReconcile_UnclaimedDomainIsPrivateForDNS(t *testing.T) {
-	unclaimed := ZoneMachine{Tenant: "acme", Project: "orphan", IncusProject: "sc2-acme-orphan", Name: "x", ProjectDomain: "loose.hase.de", BridgeIPv4: "10.249.7.30", Running: true}
+	unclaimed := ZoneMachine{Tenant: "acme", Project: "orphan", IncusProject: "sc2-acme-orphan", Name: "x", ProjectDomain: "loose.hase.de", PublicHostnames: []string{"x.loose.hase.de"}, BridgeIPv4: "10.249.7.30", Running: true}
 	h := newZoneHarness(t, unclaimed)
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if got := h.fleet.machine("sc2-acme-orphan", "x").PublicHostname; got != "" {
-		t.Fatalf("unclaimed project stamped %q", got)
-	}
 	if len(h.dns.list("hase.de.")) != 0 || len(h.fleet.stamps) != 0 {
 		t.Fatalf("unclaimed project got records/stamps: %v %v", h.dns.list("hase.de."), h.fleet.stamps)
+	}
+	if got := h.fleet.machine("sc2-acme-orphan", "x").PublicHostnames; strings.Join(got, ",") != "x.loose.hase.de" {
+		t.Fatalf("unclaimed project's list rewritten: %v", got)
+	}
+	h.claimHostname("x12.hase.de", "orphan", "x")
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); strings.Join(got, ",") != "*.x12=10.249.7.30,x12=10.249.7.30" {
+		t.Fatalf("explicit name of an unclaimed-project machine not served: %v", got)
+	}
+	if len(h.fleet.stamps) != 0 {
+		t.Fatalf("unclaimed project stamped: %+v", h.fleet.stamps)
 	}
 }
 
@@ -1116,7 +1238,7 @@ func TestZoneReconcile_LastMachineInZoneDeletedGCsRecords(t *testing.T) {
 	addZone(t, h.db, "igel.de")
 	claim(t, h.db, "dachs.igel.de", "acme", "zp2")
 	other := ZoneMachine{Tenant: "acme", Project: "zp2", IncusProject: "sc2-acme-zp2", Name: "api",
-		ProjectDomain: "dachs.igel.de", PublicHostname: "api.dachs.igel.de", BridgeIPv4: "10.249.8.4", Running: true}
+		ProjectDomain: "dachs.igel.de", PublicHostnames: []string{"api.dachs.igel.de"}, BridgeIPv4: "10.249.8.4", Running: true}
 	h.fleet.mu.Lock()
 	h.fleet.machines = append(h.fleet.machines, other)
 	h.fleet.mu.Unlock()
@@ -1149,12 +1271,8 @@ func TestZoneReconcile_LastMachineInZoneDeletedGCsRecords(t *testing.T) {
 func TestZoneReconcile_EmptyFleetGCsRecordsKeepsRetainedRow(t *testing.T) {
 	web := zoneMachine("web", "10.249.7.9", true)
 	h := newZoneHarness(t, web)
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
-	for i := 0; i < 2; i++ { // order, then push
-		if err := h.pass(); err != nil {
-			t.Fatalf("pass %d: %v", i, err)
-		}
-	}
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
+	h.passes(2) // order, then push
 	if h.state("web.baum.hase.de") != "installed" {
 		t.Fatalf("state = %s, want installed", h.state("web.baum.hase.de"))
 	}
@@ -1181,8 +1299,8 @@ func TestZoneReconcile_EmptyFleetGCsRecordsKeepsRetainedRow(t *testing.T) {
 	}
 }
 
-// A registered zone without a claim has nothing to converge: no provider is
-// built for it and Cloudflare is not read.
+// A registered zone without a claim or a hostname has nothing to converge:
+// no provider is built for it and Cloudflare is not read.
 func TestZoneReconcile_ZoneWithoutClaimsIsNotRead(t *testing.T) {
 	h := newZoneHarness(t)
 	addZone(t, h.db, "igel.de")
@@ -1200,9 +1318,6 @@ func TestZoneReconcile_ZoneWithoutClaimsIsNotRead(t *testing.T) {
 func TestOnProjectDomainReleased(t *testing.T) {
 	h := newZoneHarness(t)
 	dns := h.dns
-	old := newZoneDNSProvider
-	newZoneDNSProvider = dns.provider
-	t.Cleanup(func() { newZoneDNSProvider = old })
 	for _, host := range []string{"web.baum.hase.de", "b1.baum.hase.de"} {
 		if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest(host), h.now); err != nil {
 			t.Fatal(err)
@@ -1239,15 +1354,468 @@ func TestDesiredZoneRecords(t *testing.T) {
 		{hostname: "web.baum.hase.de", machine: ZoneMachine{BridgeIPv4: "10.1.1.1"}},
 		{hostname: "old.baum.hase.de", machine: ZoneMachine{}},
 		{hostname: "v6.baum.hase.de", machine: ZoneMachine{BridgeIPv4: "fd00::1"}},
+		{hostname: "web12.hase.de", machine: ZoneMachine{BridgeIPv4: "10.1.1.2"}},
 	}
 	want, keep := desiredZoneRecords("hase.de.", targets)
-	if len(want) != 2 || want["web.baum"].String() != "10.1.1.1" || want["*.web.baum"].String() != "10.1.1.1" {
+	if len(want) != 4 || want["web.baum"].String() != "10.1.1.1" || want["*.web.baum"].String() != "10.1.1.1" || want["web12"].String() != "10.1.1.2" || want["*.web12"].String() != "10.1.1.2" {
 		t.Fatalf("want = %v", want)
 	}
-	if len(keep) != 3 {
+	if len(keep) != 4 {
 		t.Fatalf("keep = %v", keep)
 	}
 	if libdnsZone("Hase.DE") != "hase.de." || libdnsZone("hase.de.") != "hase.de." {
 		t.Fatal("libdnsZone")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0028: (machine, hostname) pairs — explicit hostnames
+// ---------------------------------------------------------------------------
+
+// An explicit hostname added later (`sc hostname add`): its records and its
+// own certificate appear, the machine's hostnames file is pushed with the
+// grown set, the derived name's certificate is untouched, and the mirror
+// carries both names.
+func TestZoneReconcile_ExplicitHostnameAddedLater(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	h := newZoneHarness(t, web)
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
+	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	h.passes(2)
+	derived := h.row("web.baum.hase.de")
+	if derived.PushedSerial != derived.Serial {
+		t.Fatalf("derived not installed: %+v", derived)
+	}
+	// sc hostname add zp:web shop.hase.de — the API claims, records the
+	// pending row and rewrites the list key; the reconciler does the rest.
+	row := h.claimHostname("shop.hase.de", "zp", "web")
+	h.requestExplicit(row)
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de"}
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	// Records for the new name (apex-level, relative to the zone).
+	got := recordNames(h.dns.list("hase.de."), "A")
+	want := []string{"*.shop=10.249.7.9", "*.web.baum=10.249.7.9", "shop=10.249.7.9", "web.baum=10.249.7.9"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("A records = %v, want %v", got, want)
+	}
+	// The hostnames file no longer matched the set: pushed whole, once.
+	if h.fleet.hostnamePushCount() != 1 || strings.Join(h.fleet.hostnamePushes[0].Hostnames, ",") != "shop.hase.de,web.baum.hase.de" {
+		t.Fatalf("hostnames pushes = %+v", h.fleet.hostnamePushes)
+	}
+	// The order for shop ran (its own certificate, name + wildcard); the
+	// derived name was not re-ordered.
+	if len(h.issuer.calls) != 2 || strings.Join(h.issuer.calls[1].Hostnames, ",") != "shop.hase.de,*.shop.hase.de" {
+		t.Fatalf("issuer calls = %+v", h.issuer.calls)
+	}
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := h.fleet.pushedHostnames(); strings.Join(got, ",") != "shop.hase.de,web.baum.hase.de" {
+		t.Fatalf("certificate pushes = %v", got)
+	}
+	if h.row("web.baum.hase.de").Serial != derived.Serial {
+		t.Fatal("adding a hostname reissued the derived name")
+	}
+	m := h.fleet.machine("sc2-acme-zp", "web")
+	if m.CertState != "shop.hase.de=installed,web.baum.hase.de=installed" {
+		t.Fatalf("mirror = %q", m.CertState)
+	}
+	// The earliest expiry is mirrored; both were issued at h.now here.
+	if m.CertNotAfter != formatCertTime(h.row("shop.hase.de").NotAfter) {
+		t.Fatalf("not-after = %q", m.CertNotAfter)
+	}
+	// Nothing more to do on the next pass.
+	stamps, hp := len(h.fleet.stamps), h.fleet.hostnamePushCount()
+	h.passes(2)
+	if len(h.fleet.stamps) != stamps || h.fleet.hostnamePushCount() != hp || h.fleet.pushCount() != 2 {
+		t.Fatalf("settled fleet kept writing: stamps %d→%d hostnames %d→%d pushes %d", stamps, len(h.fleet.stamps), hp, h.fleet.hostnamePushCount(), h.fleet.pushCount())
+	}
+}
+
+// Removing an explicit hostname: the release hook deletes its records and
+// keeps the row; the reconciler pushes the shrunken hostnames file, drops
+// the name from the mirror and never re-creates the records.
+func TestZoneReconcile_ExplicitHostnameRemoved(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	web.PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de"}
+	h := newZoneHarness(t, web)
+	h.ready("sc2-acme-zp", "web", "shop.hase.de", "web.baum.hase.de")
+	row := h.claimHostname("shop.hase.de", "zp", "web")
+	h.requestExplicit(row)
+	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	h.passes(2)
+	if got := h.fleet.pushedHostnames(); strings.Join(got, ",") != "shop.hase.de,web.baum.hase.de" {
+		t.Fatalf("certificate pushes = %v", got)
+	}
+	shop := h.row("shop.hase.de")
+	h.dns.add("hase.de.", libdns.RR{Name: "_acme-challenge.shop", Type: "TXT", Data: "left-over"})
+	// sc hostname remove zp:web shop.hase.de
+	released, err := ReleaseMachineHostname(h.ctx, h.db, "acme", "zp", "web", "shop.hase.de")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := onMachineHostnameReleased(h.ctx, h.db, released); err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	got := recordNames(h.dns.list("hase.de."), "A")
+	if strings.Join(got, ",") != "*.web.baum=10.249.7.9,web.baum=10.249.7.9" {
+		t.Fatalf("A records after release = %v", got)
+	}
+	if len(recordNames(h.dns.list("hase.de."), "TXT")) != 0 {
+		t.Fatal("challenge record of the released name survived")
+	}
+	if retained := h.row("shop.hase.de"); retained.Serial != shop.Serial {
+		t.Fatalf("row not retained: %+v", retained)
+	}
+	// The API rewrites the list; the next pass pushes the shrunken file.
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].PublicHostnames = []string{"web.baum.hase.de"}
+	h.fleet.mu.Unlock()
+	hp := h.fleet.hostnamePushCount()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if h.fleet.hostnamePushCount() != hp+1 || strings.Join(h.fleet.hostnamePushes[hp].Hostnames, ",") != "web.baum.hase.de" {
+		t.Fatalf("hostnames pushes = %+v", h.fleet.hostnamePushes)
+	}
+	if m := h.fleet.machine("sc2-acme-zp", "web"); m.CertState != "web.baum.hase.de=installed" {
+		t.Fatalf("mirror after remove = %q", m.CertState)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); strings.Join(got, ",") != "*.web.baum=10.249.7.9,web.baum=10.249.7.9" {
+		t.Fatalf("released name's records re-created: %v", got)
+	}
+	// Re-adding the name reuses the retained certificate: no new order.
+	orders := len(h.issuer.calls)
+	h.requestExplicit(h.claimHostname("shop.hase.de", "zp", "web"))
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de"}
+	h.fleet.mu.Unlock()
+	h.passes(2)
+	if len(h.issuer.calls) != orders {
+		t.Fatal("re-added hostname spent an order")
+	}
+	if h.row("shop.hase.de").Serial != shop.Serial || h.state("shop.hase.de") != machineCertStateInstalled {
+		t.Fatalf("retained certificate not reused: %s", h.state("shop.hase.de"))
+	}
+}
+
+// After the last explicit name of a machine in a private project goes, the
+// machine's hostnames file is pushed empty and its cert keys are deleted.
+func TestZoneReconcile_LastHostnameRemovedClearsMachine(t *testing.T) {
+	solo := privateMachine("solo", "10.249.7.40", true)
+	solo.PublicHostnames = []string{"solo.hase.de"}
+	h := newZoneHarness(t, solo)
+	h.ready("sc2-acme-default", "solo", "solo.hase.de")
+	h.requestExplicit(h.claimHostname("solo.hase.de", "default", "solo"))
+	h.passes(2)
+	if m := h.fleet.machine("sc2-acme-default", "solo"); m.CertState != "solo.hase.de=installed" || m.CertNotAfter == "" {
+		t.Fatalf("mirror = %+v", m)
+	}
+	released, err := ReleaseMachineHostname(h.ctx, h.db, "acme", "default", "solo", "solo.hase.de")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := onMachineHostnameReleased(h.ctx, h.db, released); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].PublicHostnames = nil
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if n := h.fleet.hostnamePushCount(); n != 1 || len(h.fleet.hostnamePushes[0].Hostnames) != 0 {
+		t.Fatalf("empty hostnames file not pushed: %+v", h.fleet.hostnamePushes)
+	}
+	if content, ok := h.fleet.file("sc2-acme-default", "solo", tenant.MachineHostnamesPath); !ok || content != "" {
+		t.Fatalf("hostnames file = %q", content)
+	}
+	if m := h.fleet.machine("sc2-acme-default", "solo"); m.CertState != "" || m.CertNotAfter != "" {
+		t.Fatalf("cert keys not cleared: %+v", m)
+	}
+	// Settled: a machine without names is not read again.
+	stamps, hp := len(h.fleet.stamps), h.fleet.hostnamePushCount()
+	h.passes(2)
+	if len(h.fleet.stamps) != stamps || h.fleet.hostnamePushCount() != hp {
+		t.Fatal("settled machine kept being written")
+	}
+}
+
+// An explicit hostname on a machine in a project WITHOUT a domain: no
+// derived name, records + certificate for the explicit one, marker gate and
+// push like any other; the hostnames file is pushed when the first-boot seed
+// left it empty (the datasource read yielded nothing).
+func TestZoneReconcile_ExplicitHostnameInPrivateProject(t *testing.T) {
+	solo := privateMachine("solo", "10.249.7.40", true)
+	solo.PublicHostnames = []string{"solo.hase.de"}
+	h := newZoneHarness(t, solo)
+	h.ready("sc2-acme-default", "solo") // seeded empty
+	h.requestExplicit(h.claimHostname("solo.hase.de", "default", "solo"))
+	h.passes(2)
+	if got := recordNames(h.dns.list("hase.de."), "A"); strings.Join(got, ",") != "*.solo=10.249.7.40,solo=10.249.7.40" {
+		t.Fatalf("A records = %v", got)
+	}
+	if h.fleet.hostnamePushCount() != 1 || strings.Join(h.fleet.hostnamePushes[0].Hostnames, ",") != "solo.hase.de" {
+		t.Fatalf("hostnames pushes = %+v", h.fleet.hostnamePushes)
+	}
+	if got := h.fleet.pushedHostnames(); strings.Join(got, ",") != "solo.hase.de" {
+		t.Fatalf("certificate pushes = %v", got)
+	}
+	if len(h.issuer.calls) != 1 || strings.Join(h.issuer.calls[0].Hostnames, ",") != "solo.hase.de,*.solo.hase.de" {
+		t.Fatalf("issuer calls = %+v", h.issuer.calls)
+	}
+	m := h.fleet.machine("sc2-acme-default", "solo")
+	if m.CertState != "solo.hase.de=installed" || strings.Join(m.PublicHostnames, ",") != "solo.hase.de" {
+		t.Fatalf("machine after pass: %+v", m)
+	}
+}
+
+// Derived + explicit on one machine, mixed states: the mirror carries every
+// name with its own state, `cert-not-after` is the earliest installed expiry,
+// and a failure of one name never touches the other.
+func TestZoneReconcile_MixedNamesMirrorPerHostname(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	web.PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de", "web12.hase.de"}
+	h := newZoneHarness(t, web)
+	h.ready("sc2-acme-zp", "web", "shop.hase.de", "web.baum.hase.de", "web12.hase.de")
+	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	// The derived name is issued first (an earlier, shorter lifetime).
+	h.issuer.lifetime = 30 * 24 * time.Hour
+	h.passes(2)
+	h.issuer.lifetime = 90 * 24 * time.Hour
+	h.requestExplicit(h.claimHostname("shop.hase.de", "zp", "web"))
+	h.requestExplicit(h.claimHostname("web12.hase.de", "zp", "web"))
+	h.passes(2)
+	m := h.fleet.machine("sc2-acme-zp", "web")
+	if m.CertState != "shop.hase.de=installed,web.baum.hase.de=installed,web12.hase.de=installed" {
+		t.Fatalf("mirror = %q", m.CertState)
+	}
+	if m.CertNotAfter != formatCertTime(h.row("web.baum.hase.de").NotAfter) {
+		t.Fatalf("not-after = %q, want the earliest (%s)", m.CertNotAfter, formatCertTime(h.row("web.baum.hase.de").NotAfter))
+	}
+	// One name's renewal window opens and its order fails: only its state
+	// flips.
+	if _, err := h.db.ExecContext(h.ctx, `UPDATE machine_certificates SET renew_after = ? WHERE hostname = 'web12.hase.de'`, formatCertTime(h.now)); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(time.Second)
+	h.issuer.err = errors.New("acme: urn:ietf:params:acme:error:rateLimited")
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	m = h.fleet.machine("sc2-acme-zp", "web")
+	if m.CertState != "shop.hase.de=installed,web.baum.hase.de=installed,web12.hase.de=renewing" {
+		t.Fatalf("mirror after one failure = %q", m.CertState)
+	}
+	// The CLI folds that to the worst state.
+	decoded := meta.DecodeMachine(map[string]string{meta.KeyV2PublicHostnames: "shop.hase.de,web.baum.hase.de,web12.hase.de", meta.KeyV2CertState: m.CertState, meta.KeyV2CertNotAfter: m.CertNotAfter}, meta.Machine{})
+	if decoded.CertState != meta.CertStateRenewing || decoded.CertStates["shop.hase.de"] != meta.CertStateInstalled || decoded.CertNotAfter != m.CertNotAfter {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+}
+
+// A deleted machine with several names: the records of every name go on the
+// next pass (the explicit reservation still stands until the 5-minute GC),
+// every row is retained while its certificate is valid.
+func TestZoneReconcile_MachineDeletedGCsAllNames(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	web.PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de"}
+	h := newZoneHarness(t, web)
+	h.ready("sc2-acme-zp", "web", "shop.hase.de", "web.baum.hase.de")
+	h.requestExplicit(h.claimHostname("shop.hase.de", "zp", "web"))
+	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	h.passes(2)
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 4 {
+		t.Fatalf("A records = %v", got)
+	}
+	// incus delete web
+	h.fleet.mu.Lock()
+	h.fleet.machines = nil
+	h.fleet.files = map[string]string{}
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 0 {
+		t.Fatalf("deleted machine's records survived: %v", got)
+	}
+	if h.logged("zone hase.de: deleted 4 stale A record(s)") != 1 {
+		t.Fatalf("stale deletion not logged: %v", h.logs)
+	}
+	for _, host := range []string{"shop.hase.de", "web.baum.hase.de"} {
+		if !h.row(host).usable(LetsEncryptStagingDirectory, h.now) {
+			t.Fatalf("row %s not retained", host)
+		}
+	}
+	// The hostname GC releases the reservation (machine gone): the hook
+	// finds nothing left to delete, and the row still keeps its own
+	// retention.
+	dropped, err := ReconcileMachineHostnames(h.ctx, h.db, map[string][]string{"acme": {"zp"}}, map[string]struct{}{}, func(ctx context.Context, hostname MachineHostname) {
+		if err := onMachineHostnameReleased(ctx, h.db, hostname); err != nil {
+			t.Fatalf("hook: %v", err)
+		}
+	})
+	if err != nil || len(dropped) != 1 {
+		t.Fatalf("hostname GC: %v %v", dropped, err)
+	}
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if _, err := getMachineCertificate(h.ctx, h.db, "shop.hase.de"); err != nil {
+		t.Fatal("valid row of a released hostname dropped")
+	}
+	// Once expired, both rows go.
+	h.now = h.row("shop.hase.de").NotAfter.Add(time.Second)
+	h.fleet.mu.Lock()
+	h.fleet.machines = []ZoneMachine{zoneMachine("other", "10.249.7.10", true)}
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if rows, _ := listAllMachineCertificates(h.ctx, h.db); len(rows) != 0 {
+		t.Fatalf("expired rows retained: %+v", rows)
+	}
+}
+
+// set-domain with machines: the reconciler re-derives every machine's name
+// under the new domain — list key, records, a fresh row (marker present),
+// hostnames file — while explicit names stay; unset-domain removes the
+// derived name and leaves the explicit one.
+func TestZoneReconcile_DomainChangeRederivesNames(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	web.PublicHostnames = []string{"shop.hase.de", "web.baum.hase.de"}
+	h := newZoneHarness(t, web)
+	h.ready("sc2-acme-zp", "web", "shop.hase.de", "web.baum.hase.de")
+	h.requestExplicit(h.claimHostname("shop.hase.de", "zp", "web"))
+	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("web.baum.hase.de"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	h.passes(2)
+	// sc project set-domain zp eiche.hase.de: claim replaced, old records
+	// and rows released, Incus key rewritten.
+	previous, found, err := ReleaseProjectDomainClaim(h.ctx, h.db, "acme", "zp")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	if err := onProjectDomainReleased(h.ctx, h.db, previous); err != nil {
+		t.Fatal(err)
+	}
+	claim(t, h.db, "eiche.hase.de", "acme", "zp")
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].ProjectDomain = "eiche.hase.de"
+	h.fleet.mu.Unlock()
+	h.passes(2)
+	m := h.fleet.machine("sc2-acme-zp", "web")
+	if strings.Join(m.PublicHostnames, ",") != "shop.hase.de,web.eiche.hase.de" {
+		t.Fatalf("list after set-domain = %v", m.PublicHostnames)
+	}
+	got := recordNames(h.dns.list("hase.de."), "A")
+	want := []string{"*.shop=10.249.7.9", "*.web.eiche=10.249.7.9", "shop=10.249.7.9", "web.eiche=10.249.7.9"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("A records after set-domain = %v, want %v", got, want)
+	}
+	if last := h.fleet.hostnamePushes[len(h.fleet.hostnamePushes)-1]; strings.Join(last.Hostnames, ",") != "shop.hase.de,web.eiche.hase.de" {
+		t.Fatalf("hostnames push after set-domain = %+v", last)
+	}
+	if h.state("web.eiche.hase.de") != machineCertStateInstalled || m.CertState != "shop.hase.de=installed,web.eiche.hase.de=installed" {
+		t.Fatalf("after set-domain: state=%s mirror=%q", h.state("web.eiche.hase.de"), m.CertState)
+	}
+	if _, err := getMachineCertificate(h.ctx, h.db, "web.baum.hase.de"); err == nil {
+		t.Fatal("replaced domain's row survived")
+	}
+	// sc project unset-domain zp
+	c, _, err := ReleaseProjectDomainClaim(h.ctx, h.db, "acme", "zp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := onProjectDomainReleased(h.ctx, h.db, c); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	h.fleet.machines[0].ProjectDomain = ""
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	m = h.fleet.machine("sc2-acme-zp", "web")
+	if strings.Join(m.PublicHostnames, ",") != "shop.hase.de" || m.CertState != "shop.hase.de=installed" {
+		t.Fatalf("after unset-domain: %+v", m)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); strings.Join(got, ",") != "*.shop=10.249.7.9,shop=10.249.7.9" {
+		t.Fatalf("A records after unset-domain = %v", got)
+	}
+	if last := h.fleet.hostnamePushes[len(h.fleet.hostnamePushes)-1]; strings.Join(last.Hostnames, ",") != "shop.hase.de" {
+		t.Fatalf("hostnames push after unset-domain = %+v", last)
+	}
+}
+
+// A stale list key (a failed API write) is converged; a legacy single key
+// is deleted in the same write; a machine whose per-name marker is legacy
+// gets records but neither a file push nor a certificate.
+func TestZoneReconcile_ListKeyConvergenceAndLegacyMachine(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	web.PublicHostnames = []string{"web.baum.hase.de", "stale.hase.de"}
+	web.PublicHostname = "web.baum.hase.de"
+	legacy := zoneMachine("old", "10.249.7.8", true)
+	h := newZoneHarness(t, web, legacy)
+	h.ready("sc2-acme-zp", "web", "web.baum.hase.de")
+	h.fleet.setFile("sc2-acme-zp", "old", tenant.CaddySetupMarkerPath, "MODE=zone\nFQDN=old.baum.hase.de\n")
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(h.fleet.stamps) < 1 {
+		t.Fatalf("stamps = %+v", h.fleet.stamps)
+	}
+	first := h.fleet.stamps[0]
+	if first.Instance != "sc2-acme-zp/web" || first.Config[meta.KeyV2PublicHostnames] != "web.baum.hase.de" || first.Config[meta.KeyV2PublicHostname] != "" {
+		t.Fatalf("convergence stamp = %+v", first)
+	}
+	if _, ok := first.Config[meta.KeyV2PublicHostname]; !ok {
+		t.Fatal("legacy key not deleted")
+	}
+	m := h.fleet.machine("sc2-acme-zp", "web")
+	if strings.Join(m.PublicHostnames, ",") != "web.baum.hase.de" || m.PublicHostname != "" {
+		t.Fatalf("after convergence: %+v", m)
+	}
+	// The legacy machine: records yes, file push no, row no.
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 4 {
+		t.Fatalf("A records = %v", got)
+	}
+	for _, p := range h.fleet.hostnamePushes {
+		if p.Instance == "sc2-acme-zp/old" {
+			t.Fatalf("legacy machine got a hostnames push: %+v", p)
+		}
+	}
+	if _, err := getMachineCertificate(h.ctx, h.db, "old.baum.hase.de"); err == nil {
+		t.Fatal("legacy machine got a row")
+	}
+	if h.logged("does not clear the push gate for old.baum.hase.de") != 1 {
+		t.Fatalf("legacy gate not logged once: %v", h.logs)
+	}
+}
+
+// RequestPass is safe before the loop is wired and reaches the kick after.
+func TestZoneReconcilerRequestPass(t *testing.T) {
+	var r *zoneReconciler
+	r.RequestPass() // nil receiver: no-op
+	r = newZoneReconciler(nil, nil, nil, "", nil)
+	r.RequestPass() // no kick yet
+	kicked := 0
+	r.setKick(func() { kicked++ })
+	r.RequestPass()
+	if kicked != 1 {
+		t.Fatalf("kicked = %d", kicked)
 	}
 }

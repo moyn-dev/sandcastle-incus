@@ -505,16 +505,18 @@ func ReconcileMachineHostnames(ctx context.Context, db *sql.DB, liveProjects map
 }
 
 // onMachineHostnameReleased runs when an explicit hostname is released
-// (DELETE …/hostnames/{h}, project delete, or the GC). Slice 1 of #172 only
-// frees the reservation; slice 3 (the per-hostname reconciler) fills this in
-// with "delete the hostname's A records; leave the machine_certificates row
-// to its own retention rule". Kept as a named hook so the three callers do
-// not have to change again.
+// (DELETE …/hostnames/{h}, project delete, or the GC): it deletes the name's
+// A records (base + wildcard) and its _acme-challenge TXT record (spec
+// machine-hostnames §7.4). The machine_certificates row is NOT touched — it
+// keeps its own retention rule (§4.6), so a re-added name reuses the
+// certificate without a new order. A Cloudflare failure is returned for the
+// caller to log; the zone reconciler treats records of a released name as
+// stale on its next pass, so nothing is lost.
 func onMachineHostnameReleased(ctx context.Context, db *sql.DB, hostname MachineHostname) error {
-	_ = ctx
-	_ = db
-	_ = hostname
-	return nil
+	if db == nil {
+		return nil
+	}
+	return releaseMachineHostnameRecords(ctx, db, hostname)
 }
 
 // MachineHostnameRef names one hostname held under a zone — for the zone

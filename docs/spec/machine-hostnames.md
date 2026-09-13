@@ -100,11 +100,17 @@ single `user.sandcastle.v2.public-hostname` (ADR-0027) — which is now legacy:
   field (an older Auth App's resource cache).
 - **Writers write only the list**: `sc create` stamps it in the create call (never the single key,
   never empty — an empty set stamps nothing); the Auth App rewrites it on every add/remove
-  (`SetMachinePublicHostnames`, an empty set deletes the key). The zone reconciler still stamps the
-  legacy key on a machine that carries neither (Freeform Machine) and reads the derived name off the
-  list when present; slice 3 retires the legacy stamp.
-- `user.sandcastle.v2.cert-state` / `cert-not-after` stay one value per machine in slice 1 (the
-  derived name's); slice 3 folds per-hostname states.
+  (`SetMachinePublicHostnames`, an empty set deletes the key); the zone reconciler **converges** it
+  to derived + explicit on every pass (§6.1) — a Freeform Machine is stamped on first sight, a
+  changed Project Domain re-derives the name — and deletes the legacy single key on the way. The
+  legacy key is never stamped any more.
+- `user.sandcastle.v2.cert-state` is **per hostname** since slice 3: `host=state[,host=state…]`,
+  sorted by host (`meta.FormatCertStates`/`ParseCertStates`); `cert-not-after` is the **earliest**
+  expiry among the machine's installed certificates. `meta.Machine` decodes both — `CertStates
+  map[string]string` and `CertState` = the worst state (failed > pending > issued > renewing >
+  installed; a name without an entry counts as pending) — so `sc ls` folds the worst into its CERT
+  column and `sc project status` lists one row per name (§6.3). A bare pre-slice-3 value is read as
+  the first name's state.
 
 ## 2. Auth App endpoints (tenant plane, CLI Auth Token)
 
@@ -136,9 +142,11 @@ Authorization is the machine-certificates one: the caller's own tenant, or one i
   returns the would-be set.
 - **DELETE**: release (404 `machine hostname "<h>" is not held by machine "<p>:<m>"` — a foreign
   holder is never revealed; the derived name is not removable per machine) → `onMachineHostnameReleased`
-  hook → rewrite the key. The hook is a named no-op in slice 1; slice 3 fills in "delete the A
-  records" (the certificate row keeps its own retention). A failed key rewrite after the release is
-  logged, never rolled back.
+  hook (deletes the name's base + wildcard A records and its `_acme-challenge` TXT; the certificate
+  row keeps its own retention, §6.4) → rewrite the key → kick the zone reconciler (the shrunken
+  hostnames file is pushed within seconds, not at the next tick). A failed key rewrite after the
+  release is logged, never rolled back — the reconciler converges the key. POST kicks the reconciler
+  too, so records, the order and the hostnames-file push start at once.
 - **GET**: the full set, derived flagged.
 - **`DELETE /api/projects/{name}`** releases every hostname of the project's machines (after the
   domain claim, before Incus), through the same hook.
@@ -151,9 +159,9 @@ Authorization is the machine-certificates one: the caller's own tenant, or one i
 `ReconcileMachineHostnames`: a row whose `<tenant>/<project>` is not a live project, or whose machine
 is absent from the machine listing, is dropped through the release hook. **Nothing is retained** —
 retention is `machine_certificates`' own rule. An empty live set is never trusted; without a machine
-listing (no store, or a listing error) only rows of vanished projects go. Explicit hostnames are
-"live" for the zone reconciler's certificate-row GC, so their pending rows survive until slice 3
-orders them.
+listing (no store, or a listing error) only rows of vanished projects go. A reservation that still
+exists keeps its certificate row "live" for the zone reconciler's row GC (§6.5): the reservation
+says the tenant still wants the name, and this GC is what ends it.
 
 ## 3. CLI
 
@@ -194,12 +202,12 @@ normalizes and refuses the obviously malformed locally; server refusals print ve
   Caddy Setup Marker lists every name it configured, `--bare` and Dev Image variants follow, `sc
   create` prints the private `DNS:` line for every machine again, and `HostKeyAlias`/`known_hosts`
   are finalized. Existing machines converge on the next payload sync + recreate.
-- **Slice 3 — reconciler.** Per-hostname A records and orders (the derived name and every explicit
-  name, each its own `machine_certificates` row), per-hostname push to its directory with a
-  per-hostname marker gate, the derived name re-derived when a Project's domain changes (retiring the
-  `set-domain`/`unset-domain` refusal and the legacy `public-hostname` stamp), `cert-state` folded
-  across names, `onMachineHostnameReleased` deleting the name's records, and the explicit-hostname
-  rows no longer exempt from the row GC by fiat.
+- **Slice 3 — reconciler.** Delivered (§6 below): per-hostname A records and orders (the derived
+  name and every explicit name, each its own `machine_certificates` row), per-hostname push to its
+  directory with a per-hostname marker gate, the derived name re-derived when a Project's domain
+  changes (the `set-domain`/`unset-domain` refusal and the legacy `public-hostname` stamp are
+  retired), `cert-state` per name, `onMachineHostnameReleased` deleting the name's records, and the
+  hostnames file pushed whenever the machine's set changes.
 - **Slice 4 — e2e Phase 12g** automates the outline below.
 
 ## 5. Machine contract (slice 2, final) — supersedes public-dns-zones §5
@@ -304,7 +312,89 @@ sync + recreate. Parse failure, a marker with neither `PRIVATE=` nor `MODE=`, or
   names, `HTTPS (public): https://<h>[, https://<h>…]   (Let's Encrypt; served once the certificate
   lands)`.
 
-## 6. e2e Phase 12g (outline; placeholder in `docs/e2e-sc2.md`)
+## 6. Reconciler (slice 3, final) — supersedes public-dns-zones §4.1, §4.2, §4.6 (records), §4.7
+
+The zone stage of the ADR-0018 DNS pass (`internal/authapp/zone_reconcile.go`, 30 s ticker +
+instance lifecycle events + a kick from the hostname/domain endpoints and from every finished
+order). Everything public-dns-zones §4 says about ordering (§4.3: ARI, backoff, TXT sweep,
+concurrency cap, orders regardless of running state), the push protocol (§4.4 as amended by §5.3),
+drift (§4.5) and certificate-row retention (§4.6) still holds — **per (machine, hostname) pair**.
+
+### 6.1 Targets and the list key
+
+For every live Machine of the install the target set is the **union** of its derived name
+(`<machine>.<Project Domain>` when its project holds a claim that agrees with the Incus domain key)
+and its `machine_hostnames` rows. A Machine with no public name is not a target (the private stage
+serves it as before). The list key `user.sandcastle.v2.public-hostnames` is converged to exactly
+that set on every pass where it differs — the Freeform Machine's first-sight stamp, the re-derived
+name after `set-domain`/`unset-domain`, a stale list after a failed API write — and the legacy
+`public-hostname` key is deleted in the same write (its readers would otherwise fall back to it).
+Nothing is written when they agree. A project whose Incus key and claim disagree, or that carries
+the key without a claim (public-dns-zones §4.6), gets no derived name and its machines' keys,
+mirrors and hostnames files are left alone (logged once) — their explicit names are still served.
+
+`set-domain` and `unset-domain` are therefore **allowed with machines in the project** (the §2.2
+refusal is retired): a replaced or released domain goes through `onProjectDomainReleased` (its
+records and certificate rows), and the next pass re-derives every machine (new list key, records,
+a fresh row once the marker is there, hostnames file). Explicit names are unaffected by either.
+
+### 6.2 Per hostname
+
+- **A records** (§4.2 per pair): base + wildcard, relative to the Cloudflare zone containing the
+  Public DNS Zone; one `GetRecords` per zone per pass. A zone is reconciled when it holds at least
+  one claim **or** one explicit hostname (with an empty target list when nothing under it is live).
+  *Managed* records — those the pass may delete as stale — are the A records under a claimed
+  Project Domain and exactly the base/wildcard of a reserved explicit hostname; anything else in
+  the zone is never touched. A stopped Machine keeps its records; a deleted Machine (also out-of-band)
+  loses the records of **all** its names on the next pass, while its explicit reservations wait
+  for the 5-minute hostname GC (§2.1), whose release hook finds nothing left to delete.
+- **Certificate**: one `machine_certificates` row per hostname (rows come from `sc create`, `sc
+  hostname add`, or are created by the reconciler for a name without one when the Machine carries a
+  per-name marker — a Dev Image Machine never orders); order, ARI, backoff, sweep and cap as in §4.3
+  with the row's own zone; push into `/etc/sandcastle/tls/<host>/` with the one-exec swap +
+  `--refresh` (§5.3); the marker gate is `ReadyFor(host)` (a per-name marker exists; read once per
+  Machine per pass); drift is checked per name against the name's `cert.pem`.
+- **Hostnames file**: for every running Machine with a per-name marker whose set is non-empty, or
+  that had names in an earlier pass of this Auth App process, the pass reads
+  `/etc/sandcastle/hostnames`; when it does not list exactly the set (a name added or removed, a
+  re-derived name, a first-boot seed the datasource read left empty), `PushMachineHostnames` writes
+  it whole and runs `--refresh` (§5.2). A Machine that never had a name in this process and has none
+  now is not read (the file is only ever wrong on a Machine that had names; the one gap — the last
+  name removed and the Auth App restarted before the next pass — is closed by `--refresh` by hand or
+  the next add/remove).
+
+### 6.3 Mirroring
+
+After every Machine one write, only when changed: `user.sandcastle.v2.cert-state` =
+`host=state[,host=state…]` (sorted by host; states as public-dns-zones §1.5) and
+`user.sandcastle.v2.cert-not-after` = the earliest `not_after` among the names whose issued
+certificate is the pushed one (a renewed-but-unpushed name contributes the Machine's previous
+value). A Machine that loses its last name has both keys deleted. `sc ls` CERT shows the worst
+state (`meta.Machine.CertState`); `sc project status` prints one row per (machine, name) with the
+name's state — for a project with a Project Domain, or a project without one as soon as a machine
+carries an explicit hostname — where NOT AFTER is the Machine's earliest installed expiry (shown on
+its `installed`/`renewing` rows) and a machine without a public name reads `private name only`.
+
+### 6.4 Removal
+
+`onMachineHostnameReleased` (DELETE `…/hostnames/{h}`, `DELETE /api/projects/{name}`, the GC)
+deletes the name's base + wildcard A records and its `_acme-challenge` TXT and **retains the row**
+(public-dns-zones §4.6: a re-added name reuses the certificate without a new order until it
+expires). The DELETE endpoint then rewrites the key and kicks the reconciler, whose next pass pushes
+the shrunken hostnames file + `--refresh` and drops the name from the mirror. Machine deletion:
+records of all its names on the next pass, rows retained. Project domain release/replace: derived
+names only (records + rows under the domain, as before); explicit names stay. Zone removal is
+refused while hostnames are claimed (§2).
+
+### 6.5 Row GC
+
+Unchanged rule (§4.6) with one clarification: a row is *live* while its hostname is a target
+**or** still reserved in `machine_hostnames` — so a `sc create --hostname` claim made before the
+instance exists (`beforeCreate`) is never dropped between the claim and the first pass that sees
+the Machine, and a vanished Machine's explicit rows follow its reservations out (hostname GC, then
+the row on the next pass, once the certificate holds nothing worth retaining).
+
+## 7. e2e Phase 12g (outline; placeholder in `docs/e2e-sc2.md`)
 
 Gate as Phase 12. `ZONE` is the test zone; `zp` holds `e2e-$RUN.$ZONE`; `pp` is a project without a
 domain.
@@ -327,5 +417,10 @@ domain.
 6. Slice 2 (machine side, checkable now): `machine.env` carries `PUBLIC_HOSTNAMES=` with the names,
    `/etc/sandcastle/hostnames` lists them, `caddy.ready` reads `PRIVATE=<m>.<p>.<suffix>` (+ `PUBLIC=`
    per rendered name), the private name serves the Tenant CA leaf from the first boot, and
-   `sandcastle-caddy-setup --refresh` is idempotent. Slice 3 adds A records and certificates per
-   name, Caddy serving every name (`openssl s_client -servername` per name).
+   `sandcastle-caddy-setup --refresh` is idempotent.
+7. Slice 3 (reconciler): A records for every name (`dig` per name, base + wildcard), one certificate
+   per name pushed into `/etc/sandcastle/tls/<name>/`, Caddy serving every name (`openssl s_client
+   -servername` per name; one `PUBLIC=` line per name in the marker), `cert-state` per name
+   (`host=state,…`) with `sc ls` CERT `ok` and `sc project status` one row per name; `sc hostname
+   add|remove` pushes the hostnames file whole within seconds (records of a removed name gone, row
+   retained); `sc project set-domain`/`unset-domain` with machines re-derive their names.

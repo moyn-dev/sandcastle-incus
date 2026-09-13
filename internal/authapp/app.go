@@ -247,6 +247,20 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 	if r.ResourceCacheEnabled && r.ResourceCacheServer != nil {
 		resourceCache = NewResourceCache(DefaultResourceCacheStaleAfter)
 	}
+	// The zone stage (ADR-0027 §4) rides the DNS loop: same ticker, same
+	// lifecycle-event trigger, so instance-started pushes a certificate
+	// within seconds. The certmagic issuer is built here because only Serve
+	// holds the database the zone tokens are decrypted from. Built before the
+	// handler so the hostname endpoints can kick it.
+	var zones *zoneReconciler
+	if r.ZoneMachines != nil {
+		issuer := newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
+			return PublicDNSZoneToken(ctx, db, zone)
+		})
+		zones = newZoneReconciler(db, r.ZoneMachines, issuer, plan.ACMEDirectory, func(level, format string, args ...any) {
+			logger.Message(ctx, level, "auth-app "+format, args...)
+		})
+	}
 	server := &http.Server{
 		Addr: plan.Address,
 		Handler: logger.HTTP(NewHandler(db, HandlerOptions{
@@ -285,21 +299,9 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			Sidecars:                     r.Sidecars,
 			ResourceCache:                resourceCache,
 			ResourceCacheMachineRenderer: r.ResourceCacheMachineRenderer,
+			ZoneReconcileKick:            zones.RequestPass,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
-	}
-	// The zone stage (ADR-0027 §4) rides the DNS loop: same ticker, same
-	// lifecycle-event trigger, so instance-started pushes a certificate
-	// within seconds. The certmagic issuer is built here because only Serve
-	// holds the database the zone tokens are decrypted from.
-	var zones *zoneReconciler
-	if r.ZoneMachines != nil {
-		issuer := newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
-			return PublicDNSZoneToken(ctx, db, zone)
-		})
-		zones = newZoneReconciler(db, r.ZoneMachines, issuer, plan.ACMEDirectory, func(level, format string, args ...any) {
-			logger.Message(ctx, level, "auth-app "+format, args...)
-		})
 	}
 	if r.DNSReconcile != nil || zones != nil {
 		go r.runDNSReconcileLoop(ctx, logger, zones)
@@ -371,9 +373,9 @@ func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logg
 		}
 	}
 	if zones != nil {
-		// A finished order kicks the loop so the push does not wait for the
-		// ticker.
-		zones.kick = notify
+		// A finished order (and a hostname add/remove through the API)
+		// kicks the loop so the push does not wait for the ticker.
+		zones.setKick(notify)
 	}
 	if r.DNSEvents != nil || zones != nil {
 		if r.DNSEvents != nil {
@@ -913,10 +915,15 @@ type HandlerOptions struct {
 	// project_domain_claims table; tests inject a fake.
 	ProjectDomainClaims ProjectDomainClaimSource
 	// ProjectDomains is the Incus seam for Project Domains (ADR-0027): it
-	// stamps KeyV2Domain + re-renders the profile, lists zone-mode machines,
-	// creates a project with a domain and deletes a project. nil means the
-	// domain verbs answer 501 ("not available on this deployment").
+	// stamps KeyV2Domain + re-renders the profile, creates a project with a
+	// domain, deletes a project and rewrites a machine's public-name list.
+	// nil means the domain verbs answer 501 ("not available on this
+	// deployment").
 	ProjectDomains TenantProjectDomainManager
+	// ZoneReconcileKick, when set, asks the zone reconciler for a pass soon;
+	// the hostname and domain endpoints call it after a change so records,
+	// orders and the hostnames-file push do not wait for the 30 s ticker.
+	ZoneReconcileKick func()
 }
 
 // TenantProjectCreator creates an app project for a tenant and extends the
@@ -974,6 +981,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		cloudflareZones:       handlerOptions.CloudflareZones,
 		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
 		projectDomains:        handlerOptions.ProjectDomains,
+		zoneReconcileKick:     handlerOptions.ZoneReconcileKick,
 	}
 	if app.projectDomainResolver == nil && app.db != nil {
 		// Slice 3 landed the claims table: it is the production resolver.
@@ -1112,6 +1120,15 @@ type handler struct {
 	cloudflareZones       CloudflareZoneValidator
 	projectDomainClaims   ProjectDomainClaimSource
 	projectDomains        TenantProjectDomainManager
+	zoneReconcileKick     func()
+}
+
+// kickZoneReconcile asks the zone reconciler for a pass soon (no-op when
+// the handler runs without one).
+func (h handler) kickZoneReconcile() {
+	if h.zoneReconcileKick != nil {
+		h.zoneReconcileKick()
+	}
 }
 
 // projectsAPI is the tunnel-friendly tenant plane for project creation

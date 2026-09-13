@@ -161,7 +161,7 @@ func TestProjectSetDomainWiring(t *testing.T) {
 	}
 
 	// Refusals come through verbatim.
-	stub.fail = errors.New("project zp has machines with a public name: web; delete them before changing the project domain")
+	stub.fail = errors.New(`project domain "baum.hase.de" overlaps a domain already claimed on this install; choose another`)
 	_, err = executeForTestWithConfig(t, commandConfig{
 		name:         "sandcastle",
 		authProjects: stub,
@@ -241,7 +241,11 @@ func TestProjectStatusRendersDomainAndMachineTable(t *testing.T) {
 		adminConfig:  scconfig.Admin{Remote: "sc-acme", StoragePool: "default", AuthHostname: "https://idefix.example.dev", AuthToken: "tok", Tenant: "acme"},
 		tenantStore:  tenant.MemoryStore{Projects: projects},
 		machineStore: fakeMachineStatusStore{machines: []meta.Machine{
-			{Tenant: "acme", Project: "zp", Name: "web", PublicHostname: "web.baum.hase.de", CertState: "installed", CertNotAfter: "2026-12-11T09:14:00Z"},
+			// Derived + explicit (ADR-0028): one row per name, the mirror per
+			// name; NOT AFTER is the machine's earliest installed expiry.
+			{Tenant: "acme", Project: "zp", Name: "web", PublicHostname: "shop.tc42.uk", PublicHostnames: []string{"shop.tc42.uk", "web.baum.hase.de"},
+				CertStates: map[string]string{"shop.tc42.uk": "installed", "web.baum.hase.de": "issued"}, CertState: "issued", CertNotAfter: "2026-12-11T09:14:00Z"},
+			// A legacy cache payload with the single folded state still renders.
 			{Tenant: "acme", Project: "zp", Name: "api", PublicHostname: "api.baum.hase.de"},
 			{Tenant: "acme", Project: "zp", Name: "old"},
 			{Tenant: "acme", Project: "zp", Name: "bad", PublicHostname: "bad.baum.hase.de", CertState: "failed:rate-limited"},
@@ -258,9 +262,10 @@ func TestProjectStatusRendersDomainAndMachineTable(t *testing.T) {
 		"Machines: 4",
 		"Domain: baum.hase.de   (zone hase.de)",
 		"MACHINE  PUBLIC NAME       CERT       NOT AFTER             DETAIL",
-		"web      web.baum.hase.de  installed  2026-12-11T09:14:00Z",
+		"web      shop.tc42.uk      installed  2026-12-11T09:14:00Z",
+		"web      web.baum.hase.de  issued     -",
 		"api      api.baum.hase.de  pending    -",
-		"old      -                 -          -                     private mode",
+		"old      -                 -          -                     private name only",
 		"bad      bad.baum.hase.de  failed     -                     rate-limited",
 	}, "\n")
 	if strings.TrimSpace(stdout) != want {
@@ -278,8 +283,34 @@ func TestProjectStatusRendersDomainAndMachineTable(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Domain != "baum.hase.de" || payload.Zone != "hase.de" || len(payload.Machines) != 4 || payload.Machines[0].PublicHostname != "web.baum.hase.de" || payload.Machines[0].CertState != "installed" || payload.Machines[3].Detail != "rate-limited" {
+	if payload.Domain != "baum.hase.de" || payload.Zone != "hase.de" || len(payload.Machines) != 5 || payload.Machines[0].PublicHostname != "shop.tc42.uk" || payload.Machines[0].CertState != "installed" || payload.Machines[1].CertState != "issued" || payload.Machines[4].Detail != "rate-limited" {
 		t.Fatalf("payload = %#v", payload)
+	}
+
+	// A project without a domain shows the table once a machine carries an
+	// explicit hostname — and only then.
+	projects[1].Config[meta.KeyV2Domain] = ""
+	stdout, err = executeForTestWithConfig(t, config, "project", "status", "default")
+	if err != nil || !strings.HasSuffix(strings.TrimSpace(stdout), "Domain: (none)") {
+		t.Fatalf("private project without hostnames: %v %q", err, stdout)
+	}
+	config.machineStore = fakeMachineStatusStore{machines: []meta.Machine{
+		{Tenant: "acme", Project: "default", Name: "solo", PublicHostnames: []string{"solo.tc42.uk"}, CertStates: map[string]string{"solo.tc42.uk": "installed"}, CertState: "installed", CertNotAfter: "2026-12-01T00:00:00Z"},
+		{Tenant: "acme", Project: "default", Name: "shell"},
+	}}
+	stdout, err = executeForTestWithConfig(t, config, "project", "status", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"Domain: (none)",
+		"MACHINE  PUBLIC NAME   CERT       NOT AFTER             DETAIL",
+		"solo     solo.tc42.uk  installed  2026-12-01T00:00:00Z",
+		"shell    -             -          -                     private name only",
+	} {
+		if !strings.Contains(stdout, line) {
+			t.Fatalf("private project with a hostname lacks %q:\n%s", line, stdout)
+		}
 	}
 
 	// Without a login the zone is simply omitted — the status never fails on it.

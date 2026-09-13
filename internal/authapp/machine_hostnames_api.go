@@ -286,6 +286,9 @@ func (h handler) machineHostnameAdd(w http.ResponseWriter, r *http.Request, user
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Records, the order and the hostnames-file push are the zone
+	// reconciler's; ask for a pass now rather than at the next tick.
+	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -311,8 +314,9 @@ func (h handler) stampMachinePublicHostnames(ctx context.Context, tenantName, pr
 }
 
 // machineHostnameRemove is DELETE: release the reservation, run the release
-// hook, rewrite the instance key. Record and certificate cleanup are slice
-// 3's (onMachineHostnameReleased).
+// hook (the name's A and challenge records go; the certificate row stays
+// under its own retention), rewrite the instance key, and kick the zone
+// reconciler so the shrunken hostnames file reaches the machine now.
 func (h handler) machineHostnameRemove(w http.ResponseWriter, r *http.Request, user User, requestedTenant, project, machine, hostname string, dryRun bool) {
 	if h.projectDomains == nil {
 		writeAPIError(w, http.StatusNotImplemented, errors.New(machineHostnamesUnavailableMessage))
@@ -369,8 +373,8 @@ func (h handler) machineHostnameRemove(w http.ResponseWriter, r *http.Request, u
 	})
 	if err != nil && !errors.Is(err, ErrMachineNotFound) && !errors.Is(err, projectbroker.ErrProjectNotFound) {
 		// The reservation is already released — the tenant asked for the
-		// name to go; a stale instance key is converged by the reconciler
-		// (slice 3), never rolled back.
+		// name to go; a stale instance key is converged by the reconciler,
+		// never rolled back.
 		writeAPIError(w, machineHostnameErrorStatus(err), err)
 		return
 	}
@@ -379,5 +383,6 @@ func (h handler) machineHostnameRemove(w http.ResponseWriter, r *http.Request, u
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
 	}
+	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
 }

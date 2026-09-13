@@ -111,56 +111,6 @@ func (c TenantCreator) SetProjectDomainV2(_ context.Context, installPrefix strin
 	return nil
 }
 
-// ListZoneModeMachinesV2 names the app project's instances that carry a
-// DERIVED Machine Public Hostname — a public name under the project's
-// current Project Domain (read from either public-name key, ADR-0028). These
-// are what block set-domain/unset-domain until slice 3 of #172 teaches the
-// reconciler to re-derive names; explicit hostnames in a project without a
-// domain never block, so `set-domain` stays possible for such a project.
-func (c TenantCreator) ListZoneModeMachinesV2(_ context.Context, installPrefix string, tenantName string, project string) ([]string, error) {
-	incusProject, _, err := c.v2AppProject(installPrefix, tenantName, project)
-	if err != nil {
-		return nil, err
-	}
-	server, err := c.resolveV2Server()
-	if err != nil {
-		return nil, err
-	}
-	appProject, _, err := server.GetProject(incusProject)
-	if err != nil {
-		return nil, fmt.Errorf("read project %s: %w", incusProject, err)
-	}
-	domain := ""
-	if appProject != nil {
-		domain = strings.ToLower(strings.TrimSpace(appProject.Config[meta.KeyV2Domain]))
-	}
-	if domain == "" {
-		return nil, nil
-	}
-	scoped := server.UseProject(incusProject)
-	names, err := scoped.GetInstanceNames(api.InstanceTypeAny)
-	if err != nil {
-		return nil, fmt.Errorf("list machines of %s: %w", incusProject, err)
-	}
-	var zoneMode []string
-	for _, name := range names {
-		instance, _, err := scoped.GetInstance(name)
-		if err != nil {
-			return nil, fmt.Errorf("read machine %s in %s: %w", name, incusProject, err)
-		}
-		if instance == nil {
-			continue
-		}
-		for _, hostname := range meta.PublicHostnamesFromConfig(instance.Config) {
-			if strings.HasSuffix(hostname, "."+domain) {
-				zoneMode = append(zoneMode, name)
-				break
-			}
-		}
-	}
-	return zoneMode, nil
-}
-
 // SetMachinePublicHostnamesV2 rewrites a machine's KeyV2PublicHostnames list
 // (ADR-0028) on its own instance config; an empty set deletes the key. A
 // missing machine wraps authapp.ErrMachineNotFound so the hostnames API can

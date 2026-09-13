@@ -158,28 +158,37 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
   records (base + `*.` wildcard, DNS-only) point at the machine's tenant-bridge
   address, so it is reachable only over the tenant tailnet; distinct from a
   Public Route, which goes through the edge.
-- **Naming Mode** — The per-machine choice, fixed at creation and recorded in
-  `user.sandcastle.v2.public-hostname`, between `private` (Machine Private
-  Hostname, Tenant CA leaf) and `zone` (Machine Public Hostname, Let's Encrypt
-  certificate). Set by the project's Project Domain at create time; a later
-  `set-domain`/`unset-domain` never changes an existing machine, which is why
-  both are refused while zone-mode machines exist.
+- **Naming Mode** — *Superseded by ADR-0028.* The former per-machine choice
+  between `private` and `zone`, recorded in the legacy
+  `user.sandcastle.v2.public-hostname`. Every machine now has its Machine
+  Private Hostname and additionally a set of Machine Public Hostnames
+  (`user.sandcastle.v2.public-hostnames`: the derived `<m>.<domain>` plus
+  explicit `sc hostname` names); `set-domain`/`unset-domain` re-derive
+  existing machines instead of being refused.
 - **Machine Certificate** — The publicly trusted certificate the Auth App orders
-  (Let's Encrypt, DNS-01 with the zone's token, one per machine for
-  `<m>.<d>` + `*.<m>.<d>`), holds, pushes into `/etc/sandcastle/tls/` and
-  renews on the CA's ARI schedule. Its state — `pending`, `issued`,
-  `installed`, `renewing`, `failed:<reason>` — is mirrored into
-  `user.sandcastle.v2.cert-state` (+ `cert-not-after`) and read by `sc ls`
-  (CERT column: `pending` / `ok` / `failed` / `-`) and `sc project status`.
-- **Caddy Setup Marker** — `/etc/sandcastle/caddy.ready` (`MODE=` / `FQDN=`),
-  written last by the payload's `caddy-setup`. The Auth App pushes a
-  certificate only when the marker names the expected Machine Public Hostname;
-  Dev Image machines never write one and never get a certificate.
+  (Let's Encrypt, DNS-01 with the zone's token, one per Machine Public Hostname
+  for `<name>` + `*.<name>`), holds, pushes into
+  `/etc/sandcastle/tls/<name>/` and renews on the CA's ARI schedule. Its state
+  — `pending`, `issued`, `installed`, `renewing`, `failed:<reason>` — is
+  mirrored per name into `user.sandcastle.v2.cert-state`
+  (`<name>=<state>,…`; `cert-not-after` is the earliest installed expiry) and
+  read by `sc ls` (CERT column folds the machine's worst name: `pending` /
+  `ok` / `failed` / `-`) and `sc project status` (one row per name).
+- **Caddy Setup Marker** — `/etc/sandcastle/caddy.ready` (`PRIVATE=` the
+  Machine Private Hostname, one `PUBLIC=<name>` per rendered public block,
+  `RENDERED=`), written last by the payload's `caddy-setup` and rewritten by
+  every `sandcastle-caddy-setup --refresh`. The Auth App pushes a certificate
+  only when this per-name marker exists (a legacy `MODE=`/`FQDN=` marker never
+  clears the gate); Dev Image machines never write one and never get a
+  certificate.
 - **Zone reconciler** — The zone stage of the Auth App's DNS reconciler (30 s
-  ticker + instance events): stamps Freeform Machines' Naming Mode, writes and
-  prunes the public A records, orders/renews/pushes Machine Certificates, checks
-  for drift, and mirrors the state. Logs as
-  `auth-app zone reconcile: <hostname>: …`.
+  ticker + instance events + a kick from the hostname/domain endpoints),
+  working per (machine, Machine Public Hostname): converges the public-name
+  list key (Freeform Machines stamped on first sight, derived names re-derived
+  on a domain change), writes and prunes the public A records, pushes the
+  machine's hostnames file when its set changes, orders/renews/pushes one
+  Machine Certificate per name, checks for drift, and mirrors the per-name
+  state. Logs as `auth-app zone reconcile: <hostname>: …`.
 - **ACME directory** (`--acme-directory`) — The Let's Encrypt endpoint the
   install orders Machine Certificates from: production by default,
   `https://acme-staging-v02.api.letsencrypt.org/directory` for e2e and first

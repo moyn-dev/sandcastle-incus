@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
@@ -393,12 +394,11 @@ func TestReconcileProjectDomainClaims_GC(t *testing.T) {
 
 // fakeProjectDomains records the Incus side of the domain endpoints.
 type fakeProjectDomains struct {
-	mu       sync.Mutex
-	calls    []string
-	zoneMode map[string][]string // "tenant/project" → machines
-	missing  map[string]bool     // "tenant/project" (or "tenant/project:machine") → not found
-	stamped  map[string][]string // "tenant/project:machine" → last KeyV2PublicHostnames list written
-	fail     error
+	mu      sync.Mutex
+	calls   []string
+	missing map[string]bool     // "tenant/project" (or "tenant/project:machine") → not found
+	stamped map[string][]string // "tenant/project:machine" → last KeyV2PublicHostnames list written
+	fail    error
 }
 
 func (f *fakeProjectDomains) record(call string) {
@@ -421,14 +421,6 @@ func (f *fakeProjectDomains) SetProjectDomain(_ context.Context, tenant, project
 		return fmt.Errorf("%w: %s/%s", projectbroker.ErrProjectNotFound, tenant, project)
 	}
 	return f.fail
-}
-
-func (f *fakeProjectDomains) ListZoneModeMachines(_ context.Context, tenant, project string) ([]string, error) {
-	f.record("list " + tenant + "/" + project)
-	if f.missing[tenant+"/"+project] {
-		return nil, fmt.Errorf("%w: %s/%s", projectbroker.ErrProjectNotFound, tenant, project)
-	}
-	return f.zoneMode[tenant+"/"+project], nil
 }
 
 func (f *fakeProjectDomains) SetMachinePublicHostnames(_ context.Context, tenant, project, machine string, hostnames []string) error {
@@ -570,25 +562,22 @@ func TestProjectsAPI_CreateWithoutDomainIsUnchanged(t *testing.T) {
 }
 
 func TestProjectAPI_SetAndUnsetDomain(t *testing.T) {
-	domains := &fakeProjectDomains{zoneMode: map[string][]string{"acme/busy": {"web", "api"}}, missing: map[string]bool{"acme/nope": true}}
+	domains := &fakeProjectDomains{missing: map[string]bool{"acme/nope": true}}
 	h, db, acme, beta := projectDomainTestHandler(t, domains)
 
 	// no auth
 	if code, _ := zoneRequest(t, h, "", http.MethodPut, "/api/projects/web/domain", `{"domain":"baum.hase.de"}`); code != http.StatusUnauthorized {
 		t.Fatalf("no token: %d", code)
 	}
-	// unknown project → 404
+	// unknown project → 404 (the Incus write fails; the claim is released
+	// again)
 	if code, out := zoneRequest(t, h, acme, http.MethodPut, "/api/projects/nope/domain", `{"domain":"baum.hase.de"}`); code != http.StatusNotFound || out["error"] == "" {
 		t.Fatalf("missing project: %d %v", code, out)
 	}
-	// zone-mode machines block set and unset, listed sorted
-	want := "project busy has machines with a public name: api, web; delete them before changing the project domain"
-	if code, out := zoneRequest(t, h, acme, http.MethodPut, "/api/projects/busy/domain", `{"domain":"baum.hase.de"}`); code != http.StatusConflict || out["error"] != want {
-		t.Fatalf("busy set: %d %v", code, out)
+	if claims, _ := ListProjectDomainClaims(context.Background(), db); len(claims) != 0 {
+		t.Fatalf("missing project kept a claim: %+v", claims)
 	}
-	if code, out := zoneRequest(t, h, acme, http.MethodDelete, "/api/projects/busy/domain", ""); code != http.StatusConflict || out["error"] != want {
-		t.Fatalf("busy unset: %d %v", code, out)
-	}
+	domains.calls = nil
 	// dry run: validated, nothing written
 	code, out := zoneRequest(t, h, acme, http.MethodPut, "/api/projects/web/domain", `{"domain":"baum.hase.de","dryRun":true}`)
 	if code != http.StatusOK || out["domain"] != "baum.hase.de" || out["zone"] != "hase.de" || out["dryRun"] != true {
@@ -608,7 +597,7 @@ func TestProjectAPI_SetAndUnsetDomain(t *testing.T) {
 	if code != http.StatusOK || out["domain"] != "baum.hase.de" || out["zone"] != "hase.de" {
 		t.Fatalf("set: %d %v", code, out)
 	}
-	if strings.Join(domains.calls, ",") != "list acme/web,set acme/web baum.hase.de" {
+	if strings.Join(domains.calls, ",") != "set acme/web baum.hase.de" {
 		t.Fatalf("calls = %v", domains.calls)
 	}
 	// GET reports the claim
@@ -621,20 +610,28 @@ func TestProjectAPI_SetAndUnsetDomain(t *testing.T) {
 	if code != http.StatusOK || out["alreadyClaimed"] != true || out["domain"] != "baum.hase.de" {
 		t.Fatalf("re-claim: %d %v", code, out)
 	}
-	if strings.Join(domains.calls, ",") != "list acme/web" {
+	if strings.Join(domains.calls, ",") != "" {
 		t.Fatalf("re-claim touched Incus: %v", domains.calls)
 	}
 	// another tenant cannot take it, nor its subtree
 	if code, out := zoneRequest(t, h, beta, http.MethodPut, "/api/projects/peer/domain", `{"domain":"x.baum.hase.de"}`); code != http.StatusConflict || out["error"] != `project domain "x.baum.hase.de" overlaps a domain already claimed on this install; choose another` {
 		t.Fatalf("cross tenant: %d %v", code, out)
 	}
-	// replace: the same project moves to another domain
+	// replace: the same project moves to another domain — allowed with
+	// machines (the reconciler re-derives their names); the replaced
+	// domain's certificate rows go with it like an unset.
+	if _, err := requestMachineCertificate(context.Background(), db, machineCertificateRequest{Hostname: "web.baum.hase.de", Tenant: "acme", Project: "web", Machine: "web", Zone: "hase.de", DirectoryURL: LetsEncryptStagingDirectory}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	domains.calls = nil
 	if code, out := zoneRequest(t, h, acme, http.MethodPut, "/api/projects/web/domain", `{"domain":"eiche.hase.de"}`); code != http.StatusOK || out["domain"] != "eiche.hase.de" {
 		t.Fatalf("replace: %d %v", code, out)
 	}
 	if c, _, _ := GetProjectDomainClaim(context.Background(), db, "acme", "web"); c.Domain != "eiche.hase.de" {
 		t.Fatalf("claim after replace = %+v", c)
+	}
+	if rows, _ := listAllMachineCertificates(context.Background(), db); len(rows) != 0 {
+		t.Fatalf("replaced domain kept certificate rows: %+v", rows)
 	}
 	// unset dry run, then unset: row gone, key cleared
 	if code, out := zoneRequest(t, h, acme, http.MethodDelete, "/api/projects/web/domain?dryRun=1", ""); code != http.StatusOK || out["released"] != "eiche.hase.de" || out["dryRun"] != true {
@@ -647,7 +644,7 @@ func TestProjectAPI_SetAndUnsetDomain(t *testing.T) {
 	if code, out := zoneRequest(t, h, acme, http.MethodDelete, "/api/projects/web/domain", ""); code != http.StatusOK || out["released"] != "eiche.hase.de" {
 		t.Fatalf("unset: %d %v", code, out)
 	}
-	if strings.Join(domains.calls, ",") != "list acme/web,set acme/web " {
+	if strings.Join(domains.calls, ",") != "set acme/web " {
 		t.Fatalf("unset calls = %v", domains.calls)
 	}
 	if _, found, _ := GetProjectDomainClaim(context.Background(), db, "acme", "web"); found {
