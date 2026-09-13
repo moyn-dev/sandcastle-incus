@@ -191,7 +191,25 @@
 <span class="cmd">sc update</span>                    <span class="comment"># show the table, then prompt to apply what's outdated</span>
 <span class="cmd">sc update --yes</span>              <span class="comment"># apply without prompting</span>
 <span class="cmd">sc update --version v0.3.1</span>   <span class="comment"># pin the CLI to a tag (an older tag rolls back)</span></code></pre>
+    <p>Copies of the agent skill that <code>sc skill install</code> wrote appear in the table as <code>skill (claude, user)</code> / <code>skill (codex, user)</code> rows and are refreshed (non-fatally, one line per copy) when outdated.</p>
     <p>The <strong>CLI target</strong> downloads <code>sandcastle-&lt;os&gt;-&lt;arch&gt;.tar.gz</code> from the release, verifies its SHA-256 against <code>checksums.txt</code>, and atomically replaces the binary, keeping the previous one as <code>.bak</code>. Homebrew-managed installs are never self-replaced &mdash; the command prints <code>brew upgrade sandcastle</code> instead; an install from <code>install.sh</code> (or any writable directory) self-replaces in place on both Linux and macOS. The <strong>sidecar target</strong> is delegated to the deployment (auth-app token plane, broker mTLS fallback), which pushes its own running binary into your sidecar and restarts only the TLS leaf signer (sub-second; DNS and connectivity untouched).</p>
+  </div>
+
+  <div class="step">
+    <h3>Agent skill for Claude Code and Codex (<code>sc skill</code>) <span class="badge badge-user">user</span></h3>
+    <p>The Sandcastle agent skill (the <code>SKILL.md</code> + reference files that teach a coding agent how to drive <code>sc</code>/<code>sc-adm</code>, tracked at <code>docs/agents/skills/sandcastle/</code>) ships inside the binary. Install it once per machine; <code>sc update</code> refreshes copies it installed.</p>
+    <pre><code><span class="cmd">sc skill install</span>                          <span class="comment"># Claude Code + Codex, user scope; skips an agent whose config dir is absent</span>
+<span class="cmd">sc skill install --agent codex</span>            <span class="comment"># one agent; an explicitly named agent gets its dir created</span>
+<span class="cmd">sc skill install --scope project</span>          <span class="comment"># into the current git repo: .claude/skills/ and .agents/skills/</span>
+<span class="cmd">sc skill install --dir ./skills</span>           <span class="comment"># explicit directory (lands at ./skills/sandcastle); ignores --agent/--scope</span>
+<span class="cmd">sc skill install --force</span>                  <span class="comment"># replace a hand-placed copy (a directory without the sc marker)</span>
+<span class="cmd">sc skill status [--json]</span>                  <span class="comment"># AGENT SCOPE PATH STATE: missing | up to date | outdated (v… → v…) | unmanaged</span>
+<span class="cmd">sc skill uninstall</span>                        <span class="comment"># removes only copies sc installed; --dry-run on install/uninstall</span>
+<span class="cmd">sc skill show</span>                             <span class="comment"># print the embedded SKILL.md (pipe it wherever)</span></code></pre>
+    <p>Locations: Claude Code reads <code>$CLAUDE_CONFIG_DIR/skills/sandcastle</code> (default <code>~/.claude/skills/sandcastle</code>) and <code>&lt;repo&gt;/.claude/skills/sandcastle</code>; Codex reads <code>$CODEX_HOME/skills/sandcastle</code> (default <code>~/.codex/skills/sandcastle</code>) and the repository skill root <code>&lt;repo&gt;/.agents/skills/sandcastle</code>. Every install is written atomically (staged next to the target, then renamed in) and carries a <code>.sc-skill-version</code> marker with the skill content version and the CLI version that wrote it. Without the marker a directory is <em>unmanaged</em>: <code>install</code> refuses it unless <code>--force</code>, <code>uninstall</code> and <code>sc update</code> leave it alone.</p>
+    <p><strong>Reminder.</strong> When an interactive <code>sc</code> command succeeds (stdout and stderr both terminals, no <code>--json</code>/<code>--output json</code>), the CLI checks the user-scope copies for the agents present on the box (<code>~/.claude</code> → Claude Code, <code>~/.codex</code> or <code>$CODEX_HOME</code> → Codex) and, if one is missing or outdated, prints one line on stderr after the command's output, at most once per 24h (throttle file <code>~/.config/sandcastle/skill-reminder-state.json</code>, next to the update notice's):</p>
+    <pre><code><span class="comment">hint: the Sandcastle agent skill is not installed for Claude Code and Codex — run: sc skill install   (silence: sc config set skill-reminder off)</span></code></pre>
+    <p>It is a local filesystem check only (no network), never printed by <code>sc-adm</code>, <code>sc admin …</code>, <code>sc skill …</code> itself, or on a failed command. <code>sc skill install</code> resets the throttle. Silence it for good with <code>sc config set skill-reminder off</code> (<code>on</code> or <code>sc config unset skill-reminder</code> re-enables) or for one shell with <code>SANDCASTLE_SKILL_REMINDER=0</code>.</p>
   </div>
 
   <div class="step">
@@ -205,6 +223,7 @@ remote: sc-alice</code></pre>
     <p>Environment variables take precedence over the config file if both are set.</p>
     <pre><code><span class="cmd">sc config set</span> <span class="arg">project website</span>
 <span class="cmd">sc config unset</span> <span class="arg">project</span>
+<span class="cmd">sc config set</span> <span class="arg">skill-reminder off</span>   <span class="comment"># silence the daily agent-skill hint (on / unset re-enables)</span>
 <span class="cmd">sc config show</span></code></pre>
     <p><code>sc login</code> now records the tenant's project into <code>project:</code> for you, so you rarely set it by hand — see <a href="#login-project">Initial &amp; current project</a>.</p>
     <p><code>sc info</code> prints the active context (tenant, project, remote, auth hostname) and the projects available in the current tenant, marking the current one with <code>*</code>. It fetches the project list live but degrades to the local config (with a note) when the tenant can't be reached, and it never fails on a connectivity error. Use it to discover valid project names for <code>[[project:]machine]</code> references.</p>
@@ -1171,6 +1190,7 @@ Publish a machine's port to the public Internet.
       <tbody>
         <tr><td><code>SANDCASTLE_TENANT</code></td><td><code>sc</code>, <code>sc-adm</code></td><td>Default tenant for tenant-scoped commands.</td></tr>
         <tr><td><code>SANDCASTLE_NO_UPDATE_NOTIFIER</code></td><td><code>sc</code></td><td>Any non-empty value disables the daily release check and the passive update notice.</td></tr>
+        <tr><td><code>SANDCASTLE_SKILL_REMINDER</code></td><td><code>sc</code></td><td><code>0</code> (or <code>false</code>/<code>off</code>/<code>no</code>) silences the once-a-day "agent skill not installed / outdated" hint; the persisted form is <code>sc config set skill-reminder off</code>.</td></tr>
         <tr><td><code>SANDCASTLE_PROJECT</code></td><td><code>sc</code>, <code>sc-adm</code></td><td>Default lightweight project inside the current tenant.</td></tr>
         <tr><td><code>SANDCASTLE_REMOTE</code></td><td><code>sc</code>, <code>sc-adm</code>, mise image tasks</td><td>Incus remote name. For <code>sc</code>, this is usually the restricted Sandcastle remote.</td></tr>
         <tr><td><code>SANDCASTLE_ADMIN_REMOTE</code></td><td><code>sc-adm</code>, local DNS setup</td><td>Admin Incus remote when it differs from <code>SANDCASTLE_REMOTE</code>.</td></tr>

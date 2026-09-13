@@ -154,4 +154,6 @@ This repo uses a multi-context domain documentation layout (root Sandcastle cont
 
 ### Driving Sandcastle from the shell
 
-A model-invoked skill for operating Sandcastle with `sc`/`sc-adm` lives at `docs/agents/skills/sandcastle/`. Install it by copying the directory into `~/.claude/skills/` (global) or `.claude/skills/` (this repo only) — those copies are derived; the tracked one is the source. Keep it current when CLI behaviour changes.
+A model-invoked skill for operating Sandcastle with `sc`/`sc-adm` lives at `docs/agents/skills/sandcastle/`. Install it with `sc skill install` (default: Claude Code at `~/.claude/skills/sandcastle` and Codex at `~/.codex/skills/sandcastle`; `--scope project` targets `.claude/skills/` and `.agents/skills/` in the current repo; `sc skill status|uninstall|show`). Installed copies are derived and carry a `.sc-skill-version` marker; `sc update` refreshes outdated managed copies. An interactive `sc` run prints a one-line stderr hint (once per 24h, `internal/cli/skill_reminder.go`) when the skill is missing or outdated for an agent present on the box — silence it with `sc config set skill-reminder off` or `SANDCASTLE_SKILL_REMINDER=0`. Keep the skill current when CLI behaviour changes.
+
+The tracked dir is the source. The binary embeds a copy at `internal/agentskill/sandcastle/` (`go:embed` cannot reach outside its package): run `make skill-sync` (or `mise run skill:sync`) after editing the tracked directory; `TestEmbeddedSkillMatchesTrackedSource` fails on any drift, so an unsynced edit does not pass `go test ./...`.

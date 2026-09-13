@@ -5,6 +5,94 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-13 — `sc skill` reminder: a once-a-day interactive hint
+
+The spec: after a successful interactive `sc` run, print one stderr line when
+the skill is missing/outdated for an agent present on the box, throttled to
+24h, with config + env opt-outs. Decisions it left open:
+
+- **Own state file, own loader — not a field in `update-state.json`.** The
+  update notice's `update.State` is rewritten by the background release check
+  (`Checker.Check` saves the whole struct); folding `noticed_at` for the skill
+  into it would race that goroutine's write within one run. A sibling
+  `skill-reminder-state.json` in the same dir keeps the "next to the update
+  notice" convention with zero coupling. The spec's "skip if it would take a
+  lock the update notice already holds" turned out moot: the update path
+  takes no file lock (only an in-process mutex in `update.Exchange`), so
+  there is nothing to contend with.
+- **"Agent present" = the target's `ConfigDir` exists**, the same test
+  `sc skill install` uses to skip absent agents, so the hint and the install
+  it recommends agree on which agents count. Unmanaged copies stay silent —
+  the hint recommends `sc skill install`, which would refuse them.
+- **Gates read back from cobra, not threaded through `rootOptions`.**
+  `Execute` switches to `ExecuteContextC` to learn the executed leaf
+  (`CommandPath()` → skip the `sc skill` subtree) and reads `--output`/`--json`
+  from the root's persistent flags after the run, so the reminder needs no
+  hook inside `NewRootCommand`. The admin tree is excluded twice: `ExecuteAdmin`
+  never calls it, and `skillReminderLine` also refuses `sc-adm`/`… admin`
+  root names so the unit test can prove it without a process boundary.
+- **Both stdout and stderr must be terminals** (the update notice checks
+  only stderr). A `sc ls | grep` with a terminal stderr is a script in
+  spirit; a hint there is noise.
+- **`sc skill install` deletes the state file** rather than stamping a new
+  time: the throttle only exists to avoid nagging, and a fresh install is
+  the strongest possible "user acted" signal. `--dry-run` leaves it alone.
+- **Env accepts `0`/`false`/`off`/`no`**, not only the `0` the spec named,
+  matching how people write boolean env vars; the config key accepts
+  `on`/`off` only and rejects anything else so a typo cannot silently mean
+  "on".
+
+## 2026-09-13 — `sc skill`: the agent skill ships in the binary
+
+The spec asked for `sc skill install|status|uninstall|show` for Claude Code and
+Codex. Decisions it left open:
+
+- **Embedded copy + drift test, not a build step.** `go:embed` cannot reach
+  `docs/agents/skills/sandcastle/` from `internal/agentskill/`, so the package
+  carries a byte-exact copy and `TestEmbeddedSkillMatchesTrackedSource` fails
+  on any file-set or content difference; `make skill-sync` refreshes it.
+  Alternatives: a `go generate` step (invisible until someone runs it) or
+  moving the tracked source under `internal/` (breaks the "docs are the
+  source" rule and the plain-copy install path). The test makes a forgotten
+  sync a red `go test ./...`, which is the cheapest enforcement we have.
+- **Codex project scope is `<repo>/.agents/skills/`, user scope
+  `$CODEX_HOME/skills/`.** Source: https://developers.openai.com/codex/skills
+  (redirects to https://learn.chatgpt.com/docs/build-skills; table "Skill
+  Scope / Location": REPO `$REPO_ROOT/.agents/skills`, USER
+  `$HOME/.agents/skills`, ADMIN `/etc/codex/skills`) cross-checked against
+  `codex-rs/ext/skills/src/host_roots.rs` on `openai/codex` main, which still
+  loads `$CODEX_HOME/skills` with the comment "Deprecated user skills location
+  (`$CODEX_HOME/skills`), kept for backward compatibility" beside
+  `$HOME/.agents/skills` and the project `.codex/skills` layer. User scope
+  keeps `$CODEX_HOME/skills` (`~/.codex/skills`) because that is where this
+  box's existing Codex skills live and its config dir doubles as the "is
+  Codex installed" probe; `~/.agents/skills` has no such marker. If Codex
+  drops the deprecated root, switch `Resolve` to `~/.agents/skills`.
+- **Marker file `.sc-skill-version`** (`version=<12-hex content hash>`,
+  `cli=<CLI version>`) inside the skill directory decides managed vs
+  unmanaged. A directory without it is never overwritten (`--force`) or
+  removed — a hand-edited copy is the user's. The content hash (SHA-256 over
+  sorted path+data) rather than the CLI version keys "outdated", so a CLI
+  release that did not touch the skill leaves every copy "up to date".
+- **Atomic install = stage + two renames.** Files are written into a temp
+  sibling `.sandcastle.tmp-*`, the old tree is renamed to `.sandcastle.old-*`,
+  the staged tree renamed in, the old one removed. `rename(2)` cannot replace
+  a non-empty directory, hence the move-aside; an agent reading the skill
+  mid-install sees either the old or the new tree, and files the skill no
+  longer ships vanish with the old tree (a copy-over-in-place would leave
+  them).
+- **`sc update` treats skills as a third, non-fatal target.** Managed
+  user-scope copies show as `skill (<agent>, user)` rows and are refreshed
+  from the skill embedded in the *running* binary after the CLI/sidecar
+  steps; a refresh failure is a stderr note, not an exit code. After a CLI
+  self-replace the running process still embeds the old skill, so the freshly
+  installed binary's newer skill lands on the next `sc update` — accepted
+  over re-exec'ing the new binary, which the update path does not do either.
+- **Absent agent = skipped, unless named.** Default `--agent all` skips an
+  agent whose config dir does not exist ("codex: not installed (no ~/.codex),
+  skipped") so a Claude-only machine does not grow a `~/.codex`; `--agent
+  codex` creates it, since the user asked.
+
 ## 2026-08-28 — wildcard Public Routes may use one DNS-01 certificate
 
 Production measurements on `*.jot.moyn.dev` isolated a 5–7 second first-click

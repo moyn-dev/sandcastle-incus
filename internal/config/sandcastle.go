@@ -51,6 +51,16 @@ type SandcastleConfig struct {
 	// switching remotes re-points cfg.Tenant along with the token — the right
 	// token with the wrong tenant is still a 403 (#112).
 	RemoteTenants map[string]string `yaml:"remote_tenants,omitempty"`
+	// SkillReminder is the persisted opt-out for the interactive "agent skill
+	// not installed / outdated" hint (`sc config set skill-reminder off`).
+	// "" or "on" keeps the hint; "off" silences it.
+	SkillReminder string `yaml:"skill_reminder,omitempty"`
+}
+
+// SkillReminderEnabled reports whether the interactive agent-skill hint may be
+// shown: everything but an explicit "off" (case-insensitive) counts as on.
+func (c SandcastleConfig) SkillReminderEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(c.SkillReminder), "off")
 }
 
 // TenantForRemote returns the tenant recorded for an enrolled remote, or ""
