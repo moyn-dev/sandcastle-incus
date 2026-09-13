@@ -25,10 +25,20 @@ type ProjectBrokerCreator struct {
 	// the infra-project lookup and the certificate/remote names so several
 	// sandcastles can share one Incus host.
 	Prefix string
+	// Deleter backs DeleteTenantProject (the tenant-plane DELETE
+	// /api/projects/{name}, ADR-0027); nil means deletion is unavailable.
+	Deleter *TenantDeleter
 }
 
 func (p ProjectBrokerCreator) CreateTenantProject(ctx context.Context, tenant string, project string, clientCertificatePEM string) (projectbroker.ProjectResult, error) {
-	res, err := p.Creator.CreateProjectV2(ctx, p.Prefix, tenant, project)
+	return p.CreateTenantProjectWithDomain(ctx, tenant, project, clientCertificatePEM, "")
+}
+
+// CreateTenantProjectWithDomain implements authapp.TenantProjectDomainManager:
+// CreateTenantProject with KeyV2Domain stamped in the same project-create
+// request (domain == "" is a private project).
+func (p ProjectBrokerCreator) CreateTenantProjectWithDomain(ctx context.Context, tenant string, project string, clientCertificatePEM string, domain string) (projectbroker.ProjectResult, error) {
+	res, err := p.Creator.CreateProjectV2WithDomain(ctx, p.Prefix, tenant, project, domain)
 	if err != nil {
 		return projectbroker.ProjectResult{}, err
 	}
@@ -61,7 +71,33 @@ func (p ProjectBrokerCreator) CreateTenantProject(ctx context.Context, tenant st
 		IncusProject: res.IncusProject,
 		Bridge:       res.Bridge,
 		DNSSuffix:    res.DNSSuffix,
+		Domain:       strings.TrimSpace(domain),
 	}, nil
+}
+
+// SetProjectDomain implements authapp.TenantProjectDomainManager.
+func (p ProjectBrokerCreator) SetProjectDomain(ctx context.Context, tenant string, project string, domain string) error {
+	return p.Creator.SetProjectDomainV2(ctx, p.Prefix, tenant, project, domain)
+}
+
+// ListZoneModeMachines implements authapp.TenantProjectDomainManager.
+func (p ProjectBrokerCreator) ListZoneModeMachines(ctx context.Context, tenant string, project string) ([]string, error) {
+	return p.Creator.ListZoneModeMachinesV2(ctx, p.Prefix, tenant, project)
+}
+
+// DeleteTenantProject implements authapp.TenantProjectDomainManager: the app
+// project goes with its machines, volumes and profiles (DeleteProjectV2). The
+// storage pool is read off the tenant's infra project, like every other
+// shared setting.
+func (p ProjectBrokerCreator) DeleteTenantProject(ctx context.Context, tenant string, project string) error {
+	if p.Deleter == nil {
+		return fmt.Errorf("project deletion is not configured")
+	}
+	incusProject, cfg, err := p.Creator.v2AppProject(p.Prefix, tenant, project)
+	if err != nil {
+		return err
+	}
+	return p.Deleter.DeleteProjectV2(ctx, incusProject, cfg[keyV2Pool])
 }
 
 // extendTenantCertificate grants plan.Projects to the tenant's restricted

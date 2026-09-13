@@ -30,6 +30,7 @@ func newAdminCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	admin.AddCommand(newAdminImageCommand(config, opts))
 	admin.AddCommand(newAdminTLDCommand(config, opts))
 	admin.AddCommand(newAdminAuthAppCommand(config))
+	admin.AddCommand(newPublicDNSZoneCommand(config, opts))
 	return admin
 }
 
@@ -1227,6 +1228,7 @@ func newAdminAuthAppServeCommand(config commandConfig) *cobra.Command {
 	var simulateGitHubToken string
 	var defaultUnixUser string
 	var tailscaleAuthKey string
+	var acmeDirectory string
 	command := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve the Sandcastle Auth App",
@@ -1243,6 +1245,7 @@ func newAdminAuthAppServeCommand(config commandConfig) *cobra.Command {
 				SimulateGitHubToken: simulateGitHubToken,
 				DefaultUnixUser:     defaultUnixUser,
 				TailscaleAuthKey:    tailscaleAuthKey,
+				ACMEDirectory:       acmeDirectory,
 			})
 			if err != nil {
 				return err
@@ -1263,6 +1266,7 @@ func newAdminAuthAppServeCommand(config commandConfig) *cobra.Command {
 	command.Flags().StringVar(&simulateGitHubToken, "simulate-github-token", "", "DEV ONLY: enable simulated GitHub auth gated by this shared secret (no real OAuth app needed); serves /oauth/github/simulate")
 	command.Flags().StringVar(&defaultUnixUser, "default-unix-user", "", "default Unix username for newly provisioned Personal Tenant machines")
 	command.Flags().StringVar(&tailscaleAuthKey, "tailscale-auth-key", "", "Tailscale auth key returned to approved CLI device logins for unattended tenant attachment")
+	command.Flags().StringVar(&acmeDirectory, "acme-directory", "", "ACME directory URL for Machine Certificates (Public DNS Zones); default Let's Encrypt production, "+authapp.LetsEncryptStagingDirectory+" for staging")
 	_ = command.MarkFlagRequired("database")
 	return command
 }

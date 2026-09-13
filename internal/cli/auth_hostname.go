@@ -20,7 +20,6 @@ func normalizeAuthHostname(value string) string {
 	return value
 }
 
-
 // recordFor writes value under key in one of the config's record maps,
 // allocating the map on first use. Returns whether anything changed.
 func recordFor(records *map[string]string, key string, value string) bool {

@@ -12,7 +12,7 @@ import (
 func TestInfraFromPinnedProject(t *testing.T) {
 	cases := []struct{ pin, tenant, want string }{
 		{"sc2-thieso2-first", "thieso2", "sc2-thieso2"},
-		{"sc2-thieso2", "thieso2", "sc2-thieso2"}, // infra-shaped pin
+		{"sc2-thieso2", "thieso2", "sc2-thieso2"},   // infra-shaped pin
 		{"id-foo-bar-web", "foo-bar", "id-foo-bar"}, // dashed tenant
 		{"sc2-other-x", "thieso2", ""},              // wrong tenant
 		{"", "thieso2", ""},

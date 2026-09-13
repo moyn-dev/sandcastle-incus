@@ -1,6 +1,79 @@
 package meta
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// DecodeMachine is the one place the ADR-0027 instance keys are read. An
+// unstamped machine (every machine created before the feature) and one
+// pinned to the literal "private" must come back private-mode with no
+// certificate fields — even when a stray cert-state key is present — while a
+// stamped zone-mode machine carries its public name and the mirrored state.
+func TestDecodeMachine(t *testing.T) {
+	base := Machine{Tenant: "acme", Project: "website", Name: "codex", PrivateIP: "10.88.17.21", Running: true}
+	for _, tc := range []struct {
+		name   string
+		config map[string]string
+		want   Machine
+		mode   string
+	}{
+		{"unstamped", map[string]string{}, base, NamingModePrivate},
+		{"nil config", nil, base, NamingModePrivate},
+		{"private literal", map[string]string{KeyV2PublicHostname: NamingModePrivate}, base, NamingModePrivate},
+		{"private with stray cert keys", map[string]string{
+			KeyV2PublicHostname: "private", KeyV2CertState: "installed", KeyV2CertNotAfter: "2026-12-01T00:00:00Z",
+		}, base, NamingModePrivate},
+		{"zone pending (unstamped cert)", map[string]string{KeyV2PublicHostname: "codex.baum.hase.de"},
+			withZone(base, "codex.baum.hase.de", "", ""), NamingModeZone},
+		{"zone installed", map[string]string{
+			KeyV2PublicHostname: " codex.baum.hase.de ", KeyV2CertState: "installed", KeyV2CertNotAfter: "2026-12-01T00:00:00Z",
+		}, withZone(base, "codex.baum.hase.de", "installed", "2026-12-01T00:00:00Z"), NamingModeZone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecodeMachine(tc.config, base)
+			if got.NamingMode() != tc.mode {
+				t.Fatalf("NamingMode = %q, want %q", got.NamingMode(), tc.mode)
+			}
+			if got.PublicHostname != tc.want.PublicHostname || got.CertState != tc.want.CertState || got.CertNotAfter != tc.want.CertNotAfter {
+				t.Fatalf("DecodeMachine = %#v, want %#v", got, tc.want)
+			}
+			// Nothing else on the machine is touched.
+			got.PublicHostname, got.CertState, got.CertNotAfter = "", "", ""
+			if got.Tenant != base.Tenant || got.Project != base.Project || got.Name != base.Name || got.PrivateIP != base.PrivateIP || got.Running != base.Running {
+				t.Fatalf("DecodeMachine altered unrelated fields: %#v", got)
+			}
+		})
+	}
+}
+
+func withZone(m Machine, hostname, state, notAfter string) Machine {
+	m.PublicHostname, m.CertState, m.CertNotAfter = hostname, state, notAfter
+	return m
+}
+
+// The zone fields are omitempty, so an unstamped machine's JSON is unchanged
+// by their existence (the resource-cache payload and `sc ls --json` both
+// serialise meta.Machine).
+func TestMachineJSONOmitsZoneFieldsForPrivateMachine(t *testing.T) {
+	data, err := json.Marshal(Machine{Name: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"publicHostname", "certState", "certNotAfter"} {
+		if strings.Contains(string(data), key) {
+			t.Fatalf("private machine JSON carries %q: %s", key, data)
+		}
+	}
+	data, err = json.Marshal(Machine{Name: "codex", PublicHostname: "codex.baum.hase.de", CertState: "pending"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"publicHostname":"codex.baum.hase.de"`) || !strings.Contains(string(data), `"certState":"pending"`) {
+		t.Fatalf("zone machine JSON = %s", data)
+	}
+}
 
 func TestMachineConfigRoundTrip(t *testing.T) {
 	input := Machine{

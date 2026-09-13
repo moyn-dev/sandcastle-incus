@@ -32,20 +32,32 @@ The alias `<machine>.<Tenant DNS Suffix>` that resolves to the default project's
 _Avoid_: Unique-name short alias, first-wins short name
 
 **Public DNS Zone**:
-An admin-registered Cloudflare zone under which projects may claim a Project Domain; Sandcastle holds the zone's API token.
-_Avoid_: Tenant zone, DNS provider, wildcard route zone
+A public DNS domain (e.g. `hase.de`) an admin registers with the Sandcastle install, together with the credential that lets the Auth App manage records in it. Cloudflare-hosted for now.
+_Avoid_: Tenant zone, install zone, DNS provider account
 
 **Project Domain**:
-A public DNS name under a Public DNS Zone claimed by exactly one Project, install-wide, whole subtree; machines created afterwards in that project get Machine Public Hostnames beneath it.
-_Avoid_: Project zone, project suffix, custom domain
+The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one is a private-mode project. Reserved install-wide, first come, including everything below it.
+_Avoid_: Project suffix, project zone
 
 **Machine Public Hostname**:
-The public DNS name `<machine>.<Project Domain>` of a Machine created in a project with a Project Domain; such a machine has no Machine Private Hostname.
-_Avoid_: Public FQDN, zone name, external hostname
+The public DNS name `<machine>.<Project Domain>` of a Machine created in a Project that has a Project Domain, carrying a publicly trusted certificate for itself and one wildcard level below. Distinct from a Public Route: the Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
+_Avoid_: Public hostname, route hostname, public machine
+
+**Naming Mode**:
+The per-Machine choice, fixed at creation, between `private` (Machine Private Hostname, Tenant CA) and `zone` (Machine Public Hostname, publicly trusted certificate). Set by the Project's Project Domain at the time the Machine is created; never changes afterwards.
+_Avoid_: Zone-mode project, private-mode project, TLS mode
+
+**Caddy Setup Marker**:
+The file a Machine's Caddy setup leaves behind stating which Naming Mode and hostname it configured. The Auth App delivers a certificate to a Machine only when the marker is present and names the expected Machine Public Hostname.
+_Avoid_: Setup flag, ready file
+
+**Freeform Machine**:
+A Machine a Tenant creates directly with native Incus tooling instead of `sc create`. It inherits the Project's profile, so it is registered in DNS and may receive a certificate like any other Machine, but Sandcastle records nothing about it until the Auth App first sees it.
+_Avoid_: Unmanaged machine, raw instance, incus launch machine
 
 **Machine Certificate**:
-The publicly trusted certificate the Auth App obtains and holds for one Machine Public Hostname and its wildcard, and installs into that Machine. Its states are pending, issued, installed, renewing, and failed.
-_Avoid_: Machine cert, LE cert, Caddy cert, machine TLS
+The publicly trusted certificate the Auth App obtains and holds for one Machine Public Hostname and its one-level wildcard, and installs into the Machine. Its state is derived, never stored: `pending`, `issued`, `installed`, `renewing`, `failed`.
+_Avoid_: Leaf, machine cert, active certificate
 
 **GitHub Username Tenant Name**:
 The normalized GitHub username form allowed for Personal Tenant names.

@@ -87,7 +87,11 @@ func purgeTenantHostKeys(ctx context.Context, config commandConfig, summary tena
 	machines := make([]hostkeys.Machine, 0, len(refs))
 	privateCIDR := ""
 	for _, ref := range refs {
-		names := v2MachineNames(summary, ref.Project, ref.Name)
+		// A zone-mode machine (ADR-0027) owns exactly its Machine Public
+		// Hostname in known_hosts; a private one its ADR-0018 names. Either
+		// way the names are claimed so the purge never mistakes them for
+		// orphans and rewrites them like any other owned entry.
+		names := v2MachineNames(summary, ref.Project, ref.Name, ref.PublicHostname)
 		if len(names) == 0 {
 			continue
 		}

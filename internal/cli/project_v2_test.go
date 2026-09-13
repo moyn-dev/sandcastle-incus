@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
 )
@@ -222,11 +223,63 @@ func TestProjectCreateFlaglessRoundTrip(t *testing.T) {
 	}
 }
 
-type stubAuthProjects struct{ tenant, project string }
+// stubAuthProjects is the recording fake of the Auth App project plane: every
+// verb appends "<verb> <args>" to calls; fail short-circuits with an error
+// (the verbatim refusal text, as the real client returns it).
+type stubAuthProjects struct {
+	tenant, project string
+	domain          string
+	calls           []string
+	fail            error
+	zone            string
+	released        string
+	alreadyClaimed  bool
+}
 
-func (s *stubAuthProjects) CreateProject(_ context.Context, project string) (projectbroker.ProjectResult, error) {
-	s.project = project
-	return projectbroker.ProjectResult{Tenant: "demo", Project: project, IncusProject: "id-demo-" + project}, nil
+func (s *stubAuthProjects) CreateProject(_ context.Context, request authapp.ProjectCreateRequest) (projectbroker.ProjectResult, error) {
+	s.project = request.Project
+	s.domain = request.Domain
+	s.calls = append(s.calls, "create "+request.Project+" "+request.Domain+" "+boolString(request.DryRun))
+	if s.fail != nil {
+		return projectbroker.ProjectResult{}, s.fail
+	}
+	zone := s.zone
+	if zone == "" && request.Domain != "" {
+		zone = "hase.de"
+	}
+	return projectbroker.ProjectResult{Tenant: "demo", Project: request.Project, IncusProject: "id-demo-" + request.Project, Domain: request.Domain, Zone: zone, DryRun: request.DryRun}, nil
+}
+
+func (s *stubAuthProjects) GetProjectDomain(_ context.Context, project string) (authapp.ProjectDomainResult, error) {
+	s.calls = append(s.calls, "get-domain "+project)
+	if s.fail != nil {
+		return authapp.ProjectDomainResult{}, s.fail
+	}
+	return authapp.ProjectDomainResult{Tenant: "demo", Project: project, Domain: s.domain, Zone: s.zone}, nil
+}
+
+func (s *stubAuthProjects) SetProjectDomain(_ context.Context, project, domain string, dryRun bool) (authapp.ProjectDomainResult, error) {
+	s.calls = append(s.calls, "set-domain "+project+" "+domain+" "+boolString(dryRun))
+	if s.fail != nil {
+		return authapp.ProjectDomainResult{}, s.fail
+	}
+	return authapp.ProjectDomainResult{Tenant: "demo", Project: project, Domain: domain, Zone: "hase.de", DryRun: dryRun, AlreadyClaimed: s.alreadyClaimed}, nil
+}
+
+func (s *stubAuthProjects) UnsetProjectDomain(_ context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error) {
+	s.calls = append(s.calls, "unset-domain "+project+" "+boolString(dryRun))
+	if s.fail != nil {
+		return authapp.ProjectDomainResult{}, s.fail
+	}
+	return authapp.ProjectDomainResult{Tenant: "demo", Project: project, Released: s.released, DryRun: dryRun}, nil
+}
+
+func (s *stubAuthProjects) DeleteProject(_ context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error) {
+	s.calls = append(s.calls, "delete "+project+" "+boolString(dryRun))
+	if s.fail != nil {
+		return authapp.ProjectDomainResult{}, s.fail
+	}
+	return authapp.ProjectDomainResult{Tenant: "demo", Project: project, Released: s.released, DryRun: dryRun}, nil
 }
 
 // After login, `sc project create` prefers the auth-app token API (works over

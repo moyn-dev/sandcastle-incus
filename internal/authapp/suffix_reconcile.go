@@ -3,6 +3,7 @@ package authapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,10 +54,83 @@ func (r HTTPRunner) reconcileSuffixClaimsOnce(ctx context.Context, db *sql.DB) (
 	return pruneOrphanSuffixClaims(ctx, db, live)
 }
 
-// runSuffixClaimReconcileLoop prunes orphaned DNS-suffix claims once at startup
-// and then every suffixClaimReconcileInterval, until ctx is cancelled. Errors
-// are logged and the loop continues.
+// projectDomainClaimGC is the Project Domain half of the slow loop (ADR-0027
+// §4.6): claims whose <tenant>/<project> is no longer a live app project are
+// dropped (with the slice-6 release hook), and live projects carrying
+// KeyV2Domain without a claim row are reported — once per project+domain —
+// and never auto-claimed. The live set comes from the same tenant listing.
+type projectDomainClaimGC struct {
+	logged map[string]struct{}
+}
+
+// reconcileProjectDomainClaimsOnce returns the dropped claims and the newly
+// seen unclaimed Incus keys. A listing error aborts without pruning.
+func (r HTTPRunner) reconcileProjectDomainClaimsOnce(ctx context.Context, db *sql.DB, gc *projectDomainClaimGC) ([]ProjectDomainClaim, []string, error) {
+	if db == nil || r.Tenants == nil {
+		return nil, nil, nil
+	}
+	summaries, err := tenant.ListForPrefix(ctx, r.Tenants, r.Admin.IncusProjectPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list tenants for project domain reconcile: %w", err)
+	}
+	liveProjects, liveDomains := liveProjectDomains(summaries)
+	var releaseErrs []error
+	dropped, err := ReconcileProjectDomainClaims(ctx, db, liveProjects, func(ctx context.Context, claim ProjectDomainClaim) {
+		if rerr := onProjectDomainReleased(ctx, db, claim); rerr != nil {
+			releaseErrs = append(releaseErrs, fmt.Errorf("release %s: %w", claim.Domain, rerr))
+		}
+	})
+	if err != nil {
+		return dropped, nil, err
+	}
+	if len(releaseErrs) > 0 {
+		return dropped, nil, errors.Join(releaseErrs...)
+	}
+	unclaimed, err := UnclaimedProjectDomains(ctx, db, liveDomains)
+	if err != nil {
+		return dropped, nil, err
+	}
+	var fresh []string
+	for _, entry := range unclaimed {
+		if _, seen := gc.logged[entry]; seen {
+			continue
+		}
+		gc.logged[entry] = struct{}{}
+		fresh = append(fresh, entry)
+	}
+	return dropped, fresh, nil
+}
+
+// liveProjectDomains derives the GC inputs from tenant summaries: every live
+// project per tenant, and the Incus KeyV2Domain value per "<tenant>/<project>".
+func liveProjectDomains(summaries []tenant.Summary) (map[string][]string, map[string]string) {
+	liveProjects := map[string][]string{}
+	liveDomains := map[string]string{}
+	for _, s := range summaries {
+		tenantName := strings.TrimSpace(s.Tenant)
+		if tenantName == "" {
+			continue
+		}
+		for _, p := range s.Projects {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			liveProjects[tenantName] = append(liveProjects[tenantName], name)
+			if d := strings.TrimSpace(p.Domain); d != "" {
+				liveDomains[tenantName+"/"+name] = d
+			}
+		}
+	}
+	return liveProjects, liveDomains
+}
+
+// runSuffixClaimReconcileLoop prunes orphaned DNS-suffix claims (and Project
+// Domain claims, ADR-0027 §4.6) once at startup and then every
+// suffixClaimReconcileInterval, until ctx is cancelled. Errors are logged and
+// the loop continues.
 func (r HTTPRunner) runSuffixClaimReconcileLoop(ctx context.Context, db *sql.DB, logger *svclog.Logger) {
+	gc := &projectDomainClaimGC{logged: map[string]struct{}{}}
 	run := func() {
 		pruned, err := r.reconcileSuffixClaimsOnce(ctx, db)
 		if err != nil {
@@ -65,6 +139,16 @@ func (r HTTPRunner) runSuffixClaimReconcileLoop(ctx context.Context, db *sql.DB,
 		}
 		if pruned > 0 {
 			logger.Message(ctx, "INFO", "auth-app pruned %d orphaned DNS suffix claim(s)", pruned)
+		}
+		dropped, unclaimed, err := r.reconcileProjectDomainClaimsOnce(ctx, db, gc)
+		if err != nil {
+			logger.Message(ctx, "ERROR", "auth-app project domain claim reconcile: %v", err)
+		}
+		for _, claim := range dropped {
+			logger.Message(ctx, "INFO", "auth-app pruned orphaned project domain claim %s (%s/%s)", claim.Domain, claim.Tenant, claim.Project)
+		}
+		for _, entry := range unclaimed {
+			logger.Message(ctx, "WARN", "auth-app project %s carries user.sandcastle.v2.domain without a claim; ignored (sc project set-domain claims it, unset-domain clears it)", entry)
 		}
 	}
 	run()

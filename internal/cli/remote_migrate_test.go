@@ -7,10 +7,10 @@ import "testing"
 func TestPlanRemoteMigration(t *testing.T) {
 	const endpoint = "https://10.61.1.3:8443"
 	remotes := []localRemote{
-		{Name: "thieso2-io", Endpoint: endpoint, Project: "sc2-thieso2-io"},                 // extra -> remove
-		{Name: "sc-majestix-thieso2", Endpoint: endpoint, Project: "sc2-thieso2-default"},   // default -> becomes "castle"
-		{Name: "castle-web", Endpoint: endpoint, Project: "sc2-thieso2-web"},                 // extra -> remove
-		{Name: "sc-thieso2-infra", Endpoint: endpoint, Project: "sc2-thieso2"},               // infra -> skip
+		{Name: "thieso2-io", Endpoint: endpoint, Project: "sc2-thieso2-io"},                           // extra -> remove
+		{Name: "sc-majestix-thieso2", Endpoint: endpoint, Project: "sc2-thieso2-default"},             // default -> becomes "castle"
+		{Name: "castle-web", Endpoint: endpoint, Project: "sc2-thieso2-web"},                          // extra -> remove
+		{Name: "sc-thieso2-infra", Endpoint: endpoint, Project: "sc2-thieso2"},                        // infra -> skip
 		{Name: "thieso2-io-elsewhere", Endpoint: "https://10.99.0.9:8443", Project: "sc2-thieso2-io"}, // other install -> skip
 	}
 	m := planRemoteMigration(remotes, "thieso2", "castle", endpoint)

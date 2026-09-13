@@ -27,15 +27,37 @@ import (
 // <machine>.<project>.<suffix> (ADR-0018) — identity only; resolution comes
 // from the sidecar CoreDNS zone.
 func V2DefaultProfileUserData(user string, sshKey string, project string, suffix string, signerURL string) string {
+	return V2ProfileUserData(user, sshKey, project, suffix, "", signerURL)
+}
+
+// V2ProfileUserData is V2DefaultProfileUserData with the project's Naming Mode
+// (ADR-0027 §5.1). projectDomain == "" is a private project: identical output
+// to before the feature, byte for byte — machine.env carries no MODE and every
+// consumer defaults an absent MODE to private. A non-empty projectDomain is a
+// zone project: the machine's fqdn becomes <machine>.<projectDomain> and
+// machine.env gains MODE=zone, so caddy-setup (slice 4) skips the sidecar leaf
+// and waits for the Auth App's Let's Encrypt push. SIGNER stays in both modes
+// for the Tenant CA trust step.
+func V2ProfileUserData(user string, sshKey string, project string, suffix string, projectDomain string, signerURL string) string {
 	header := "#cloud-config\n"
 	identity := ""
 	project = strings.TrimSpace(project)
 	suffix = strings.TrimSpace(suffix)
+	projectDomain = strings.TrimSpace(projectDomain)
 	signerURL = strings.TrimRight(strings.TrimSpace(signerURL), "/")
 	jinja := project != "" && suffix != ""
+	// fqdnSuffix is what follows "{{ v1.local_hostname }}." — the Machine
+	// Private Hostname's "<project>.<suffix>" or the Project Domain.
+	fqdnSuffix := project + "." + suffix
+	mode := ""
+	if projectDomain != "" {
+		jinja = true
+		fqdnSuffix = projectDomain
+		mode = "MODE=zone\n      "
+	}
 	if jinja {
 		header = "## template: jinja\n#cloud-config\n"
-		identity = fmt.Sprintf("fqdn: {{ v1.local_hostname }}.%s.%s\nprefer_fqdn_over_hostname: true\n", project, suffix)
+		identity = fmt.Sprintf("fqdn: {{ v1.local_hostname }}.%s\nprefer_fqdn_over_hostname: true\n", fqdnSuffix)
 	}
 	body := fmt.Sprintf(`users:
   - name: %s
@@ -68,8 +90,8 @@ packages:
 		body += "write_files:\n" + scShimWriteFiles + fmt.Sprintf(`  - path: /etc/sandcastle/machine.env
     permissions: '0644'
     content: |
-      FQDN={{ v1.local_hostname }}.%s.%s
-      SIGNER=%s
+      FQDN={{ v1.local_hostname }}.%s
+      %sSIGNER=%s
       HOME=/home/%s
   - path: /usr/local/sbin/sandcastle-generalize
     permissions: '0755'
@@ -83,7 +105,7 @@ runcmd:
   - [/usr/local/sbin/sandcastle-generalize]
   - [systemctl, enable, --now, ssh]
   - [/usr/local/sbin/sandcastle-caddy-setup]
-`, project, suffix, signerURL, user, generalize, script)
+`, fqdnSuffix, mode, signerURL, user, generalize, script)
 		return header + identity + body
 	}
 
@@ -111,8 +133,24 @@ const BareMachineHome = "/srv"
 // signerURL the sidecar leaf signer, both read back off that same profile so a
 // bare machine can never disagree with its project about who it is.
 func V2BareUserData(domain string, signerURL string) string {
+	return V2BareUserDataForMode(domain, signerURL, "")
+}
+
+// V2BareUserDataForMode is V2BareUserData with the project's Naming Mode
+// (ADR-0027 §5.1: "the --bare user-data template is rendered the same way").
+// namingMode "" or "private" renders exactly what V2BareUserData always did;
+// "zone" adds the MODE=zone line to machine.env — the same line, in the same
+// place, as the zone project's default profile — so caddy-setup on a bare
+// zone-mode machine waits for the Auth App's certificate instead of asking
+// the sidecar signer for a leaf it would refuse. domain is then the Project
+// Domain, read back off that profile like the private "<project>.<suffix>".
+func V2BareUserDataForMode(domain string, signerURL string, namingMode string) string {
 	generalize := base64.StdEncoding.EncodeToString([]byte(SCGeneralizeShim))
 	caddy := base64.StdEncoding.EncodeToString([]byte(SCCaddySetupShim))
+	mode := ""
+	if strings.TrimSpace(namingMode) == "zone" {
+		mode = "MODE=zone\n      "
+	}
 	return fmt.Sprintf(`## template: jinja
 #cloud-config
 fqdn: {{ v1.local_hostname }}.%s
@@ -127,7 +165,7 @@ write_files:
     permissions: '0644'
     content: |
       FQDN={{ v1.local_hostname }}.%s
-      SIGNER=%s
+      %sSIGNER=%s
       HOME=%s
   - path: /usr/local/sbin/sandcastle-generalize
     permissions: '0755'
@@ -143,7 +181,7 @@ runcmd:
   # enabled would quietly make "no ssh" untrue.
   - [sh, -c, "systemctl disable --now ssh 2>/dev/null || true"]
   - [/usr/local/sbin/sandcastle-caddy-setup]
-`, domain, domain, signerURL, BareMachineHome, generalize, caddy)
+`, domain, domain, mode, signerURL, BareMachineHome, generalize, caddy)
 }
 
 // V2DevUserData renders the cloud-init user-data of a Dev Image machine: one
@@ -361,14 +399,33 @@ systemd-machine-id-setup >/dev/null 2>&1 || true
 systemctl try-restart ssh >/dev/null 2>&1 || true
 `
 
-// caddyIngressSetupScript installs Caddy, trusts the tenant CA, fetches this
-// machine's leaf from the sidecar signer, writes the Caddyfile, and (re)starts
-// Caddy as root. It sources /etc/sandcastle/machine.env for FQDN + SIGNER.
+// caddyIngressSetupScript installs Caddy, trusts the tenant CA, obtains this
+// machine's certificate, writes the Caddyfile, and enables Caddy as root. It
+// sources /etc/sandcastle/machine.env for FQDN, SIGNER, HOME and — for a
+// machine in a project with a Project Domain — MODE=zone (ADR-0027 §5.2).
+//
+// The script is mode-aware: an absent MODE is private (every machine created
+// before the feature), and the private branch is today's behaviour — the leaf
+// is fetched from the sidecar signer before Caddy serves. In zone mode the
+// leaf fetch is skipped (the signer answers 403 for a public name), the Auth
+// App pushes cert.pem/key.pem later, and a systemd drop-in makes Caddy's start
+// conditional on those files so a reboot before the first push never
+// crash-loops. The Caddyfile is the SAME template in both modes: only the site
+// names and where the certificate came from differ. The Tenant CA trust step
+// stays in both modes — private-mode siblings are still HTTPS peers.
+//
+// The Caddy Setup Marker (CaddySetupMarkerPath) is written LAST, after the
+// Caddyfile and the drop-ins exist: it asserts that this FQDN's Caddy is
+// configured, and the reconciler pushes a certificate only when it names the
+// expected Machine Public Hostname.
+//
 // Runs via the /usr/local/sbin/sandcastle-caddy-setup boot shim — the body
-// ships as the platform-payload entry SCPayloadCaddySetupPath (ADR-0022).
+// ships as the platform-payload entry SCPayloadCaddySetupPath (ADR-0022) and
+// serves `sc create`, `--bare`, Freeform Machines, containers and VMs alike.
 const caddyIngressSetupScript = `#!/bin/bash
 set -eu
 . /etc/sandcastle/machine.env
+MODE="${MODE:-private}"
 export DEBIAN_FRONTEND=noninteractive
 install -d -m 0755 /etc/sandcastle/tls /usr/local/share/ca-certificates /etc/caddy /etc/systemd/system/caddy.service.d
 
@@ -381,14 +438,44 @@ if ! command -v caddy >/dev/null 2>&1; then
   apt-get install -y -qq caddy
 fi
 
-# Trust the tenant CA on this machine (machine-to-machine HTTPS).
+# Trust the tenant CA on this machine (machine-to-machine HTTPS) — in both
+# modes: private-mode siblings are still HTTPS peers.
 curl -fsS "$SIGNER/tls/ca" -o /usr/local/share/ca-certificates/sandcastle-tenant.crt && update-ca-certificates || true
 
-# Fetch this machine's leaf (key+cert) BEFORE Caddy serves.
-curl -fsS "$SIGNER/tls/leaf?fqdn=$FQDN" | python3 -c 'import json,sys;d=json.load(sys.stdin);open("/etc/sandcastle/tls/cert.pem","w").write(d["cert"]);open("/etc/sandcastle/tls/key.pem","w").write(d["key"])'
-chmod 600 /etc/sandcastle/tls/key.pem
+if [ "$MODE" = private ]; then
+  # Fetch this machine's leaf (key+cert) from the sidecar signer BEFORE Caddy
+  # serves. A zone-mode machine gets its certificate pushed by the Auth App.
+  curl -fsS "$SIGNER/tls/leaf?fqdn=$FQDN" | python3 -c 'import json,sys;d=json.load(sys.stdin);open("/etc/sandcastle/tls/cert.pem","w").write(d["cert"]);open("/etc/sandcastle/tls/key.pem","w").write(d["key"])'
+  chmod 600 /etc/sandcastle/tls/key.pem
+fi
 
-# Caddyfile: HTTPS with our leaf (auto HTTP->HTTPS redirect), /_h browses the
+` + caddyfileHeredoc + `
+# Caddy runs as root so it can read $HOME/... regardless of owner and bind :443.
+printf '%s\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' > /etc/systemd/system/caddy.service.d/override.conf
+if [ "$MODE" = zone ]; then
+  # No certificate until the Auth App's first push: make Caddy's start
+  # conditional on it, so a reboot before then skips the start instead of
+  # crash-looping. The push's reload-or-restart starts Caddy.
+  printf '%s\n' '[Unit]' 'ConditionPathExists=/etc/sandcastle/tls/cert.pem' 'ConditionPathExists=/etc/sandcastle/tls/key.pem' > /etc/systemd/system/caddy.service.d/sandcastle-zone.conf
+fi
+systemctl daemon-reload
+systemctl enable caddy
+# Marker LAST: it asserts the Caddyfile above is in place for this FQDN.
+printf 'MODE=%s\nFQDN=%s\n' "$MODE" "$FQDN" > /etc/sandcastle/caddy.ready
+if [ "$MODE" = zone ]; then
+  systemctl start caddy || true   # condition unmet until the first push: a skipped start, not a failure
+else
+  systemctl restart caddy
+fi
+`
+
+// caddyfileHeredoc is the Caddyfile caddy-setup writes, as the shell heredoc
+// that writes it. One template for both Naming Modes (ADR-0027 §5.2): the
+// site names come from $FQDN and the certificate from the fixed
+// /etc/sandcastle/tls paths, whoever put it there. Kept as its own constant so
+// a test can pin it byte for byte — the private-mode Caddyfile must never
+// drift from what machines ran before zone mode existed.
+const caddyfileHeredoc = `# Caddyfile: HTTPS with our leaf (auto HTTP->HTTPS redirect), /_h browses the
 # login user's $HOME, /_w browses /workspace, everything else proxies to :3000
 # with Host preserved. redir handles the bare /_h and /_w (no trailing slash).
 cat > /etc/caddy/Caddyfile <<EOF
@@ -409,12 +496,6 @@ $FQDN, *.$FQDN {
     }
 }
 EOF
-
-# Caddy runs as root so it can read $HOME/... regardless of owner and bind :443.
-printf '%s\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' > /etc/systemd/system/caddy.service.d/override.conf
-systemctl daemon-reload
-systemctl enable caddy
-systemctl restart caddy
 `
 
 // DefaultV2UnixUser is the login user baked into a v2 project's default
@@ -454,6 +535,10 @@ type CreatePlanV2 struct {
 	SidecarImage       string     `json:"sidecarImage"`
 	DefaultProfileUser string     `json:"defaultProfileUser"`
 	SSHPublicKey       string     `json:"sshPublicKey"`
+	// ProjectDomain is the app project's Project Domain (ADR-0027) when the
+	// plan renders one project's profile; empty for private projects and for
+	// tenant creation (a fresh tenant's initial project has no domain).
+	ProjectDomain      string     `json:"projectDomain,omitempty"`
 	ImageAliases       []string   `json:"imageAliases"`
 	DNSFiles           []dns.File `json:"dnsFiles"`
 	TenantCA           TenantCA   `json:"tenantCA"`

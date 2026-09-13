@@ -4879,3 +4879,593 @@ Alternatives considered:
 - **Read `/etc/os-release`.** Derivatives (Manjaro, EndeavourOS, Rocky) would
   need an ID/ID_LIKE table; the anchors directory is the thing that actually
   matters.
+
+## 2026-09-12 — Public DNS Zones slice 1: `meta.DecodeMachine` and the CERT column
+
+Spec `docs/spec/public-dns-zones.md` §1.2 says "`DecodeMachine` (and the
+resource-cache instance → `meta.Machine` conversion) fill them from the
+instance config". No `DecodeMachine` existed, and there is only ONE instance →
+`meta.Machine` conversion: `incusx.MachineFromInstance`, which the live
+per-project sweep calls and which is injected into the Auth App as the
+ADR-0023 `ResourceCacheMachineRenderer`.
+
+**Decision:** introduce `meta.DecodeMachine(config, machine) Machine` as the
+pure step that reads `KeyV2PublicHostname` / `KeyV2CertState` /
+`KeyV2CertNotAfter`, and have `MachineFromInstance` funnel through it. Both
+paths agree by construction rather than by a second copy of the decode. It
+ignores the two certificate keys unless the machine is in zone mode, so a
+stray `cert-state` on an unstamped machine can never leak into the listing.
+
+Two small choices the spec left open:
+
+- A zone-mode machine with **no** `cert-state` yet (`sc create` has stamped
+  the public hostname, the reconciler has not run) renders `CERT` as
+  `pending` — that is what `sc create`'s "certificate pending" promises. An
+  unrecognised state string is shown verbatim rather than mapped to a guess.
+- `v2MachineNames` gained a fourth parameter, `publicHostname`, instead of
+  taking a `meta.Machine`: two callers (`ssh_key_purge.go`, the live connect
+  path in `create_v2.go`) only have a name/project pair today and pass `""`
+  (private mode) until slice 4 wires the Naming Mode record through. The
+  connect-cache path already passes `cached.PublicHostname`.
+
+`incusx` does not yet mirror the new keys as `keyV2…` constants: nothing in
+`incusx` writes them in this slice (the stamp is slice 4, the mirror slice 6);
+the mirror is added with the first writer.
+
+## 2026-09-12 — Public DNS Zones slice 2: the zone registry
+
+Spec `docs/spec/public-dns-zones.md` §1.3/§1.4, §2.1, §3.1, §9 item 2
+(issue #164). Things the spec left to the implementer:
+
+- **Claims are a seam, not a table, in this slice.** `remove` must refuse
+  while a Project Domain is claimed under the zone and `list` shows a CLAIMS
+  count, but `project_domain_claims` is slice 3's. The registry consumes a
+  `ProjectDomainClaimSource` interface (`ClaimsUnderZone(ctx, zone)`), wired
+  through `HandlerOptions.ProjectDomainClaims`; the default is
+  `noProjectDomainClaims{}`, which truthfully answers "none" because no claim
+  can exist yet. **Slice 3 must replace that default** with the SQL-backed
+  implementation over `project_domain_claims` (and can keep the option for
+  tests). The refusal text and the 409 mapping are already in place and
+  tested against a fake source.
+- **`encryptSecret`/`decryptSecret` live in `internal/authapp/secrets.go`**
+  with `secretEncryptionKey(ctx, db, metaKey)`; the OIDC functions became
+  one-line wrappers so `oidc.go` barely changed. The `machine_cert_key`
+  constant is declared there too so slice 5 only has to call
+  `secretEncryptionKey(ctx, db, machineCertEncryptionKeyKey)`, not add a
+  constant beside mine.
+- **Admin gate is bearer-only.** The spec says "admin bearer token
+  (`requireAdmin`)", but the existing `requireAdmin` is the web-session
+  cookie gate for the HTML admin pages. `/api/public-dns-zones` uses a new
+  `requireAdminBearer` (= `requireBearerUser` + `SandcastleAdmin`, 401 / 403)
+  and does not accept the session cookie — the endpoint exists for the CLI.
+- **Cloudflare validation is a small in-package client**, not
+  `libdns/cloudflare`: the spec offered both, and pulling certmagic's
+  dependency tree into `go.mod` is slice 5's job (parallel branch — avoiding
+  a `go.mod` conflict). `CloudflareZoneClient{BaseURL}` does exactly the two
+  calls the spec names; a fake server tests it. A success envelope with zero
+  (or several) zones has no API message, so the "rejected" text carries a
+  Sandcastle-written reason there ("the token cannot see a zone named …").
+  A transport failure is **not** a rejection: 502 `cloudflare: …`, nothing
+  stored — so an outage can never read as "your token is bad".
+- **`sc admin` and `sc-adm` are one tree.** `cmd/sandcastle/main.go` already
+  routes `sc admin …` to `ExecuteAdmin("sc admin", …)`, so mounting on
+  `NewAdminRootCommand` serves both names; the command is also added to the
+  legacy `newAdminCommand` subcommand tree in `admin.go` (unmounted today)
+  for parity with `tenant`/`user`/`image`/`tld`. The CLI tests run each verb
+  under both `config.name`s and assert it is *not* a top-level user command.
+- **`list [-o json]`** in the spec is rendered as `--output json` / `--json`:
+  neither root has an `-o` shorthand and adding one globally is out of scope.
+- **Token fingerprint** = first 8 hex characters of `sha256(token)`
+  (`sha256[:8]` read as characters of the hex digest).
+- **Dry-run responses** are 200 with `{zone, cloudflareZoneID, dryRun:true}`
+  for all three mutating verbs (the spec only fixes 201/200/204 for the real
+  thing); the CLI prints `[dry-run] would have: …`. A dry-run `add`/`set-token`
+  still calls Cloudflare — that is the point of it.
+- **Zone shape**: `domain.NormalizePublicDNSZone` requires at least two
+  labels (a bare TLD is never an admin's zone) on top of `validateDomainLabels`.
+- **No `e2e-sc2.md` change**: the spec's §7 e2e phase (Phase 12) is slice 7's
+  and nothing user-visible changes for tenants until slice 3.
+## 2026-09-12 — Public DNS Zones slice 5: ACME issuer, `acme_storage`, `machine_certificates`
+
+Spec `docs/spec/public-dns-zones.md` §1.3, §3.4, §3.5, §9 item 5 (issue #167).
+Decisions the spec left open, and one thing it asks for that certmagic's
+public API does not allow:
+
+- **Dependency weight.** `github.com/caddyserver/certmagic v0.25.4` +
+  `github.com/libdns/cloudflare v0.2.2` add 15 modules to the graph
+  (`go list -m all`: 243 → 258): acmez/v3, libdns, zerossl, miekg/dns,
+  zeebo/blake3, klauspost/cpuid, zap + zap/exp + multierr, and x/mod, x/net,
+  x/sync, x/tools bumps. `go.uber.org/zap` is a *direct* require because the
+  issuer builds certmagic's mandatory `*zap.Logger` (stderr, Info) itself.
+  x/crypto moved v0.49 → v0.50 and x/term v0.41 → v0.42 as a side effect.
+- **`sqliteStorage` semantics** follow certmagic's `FileStorage` where the
+  interface doc is vague: keys are `/`-paths, a key that is a strict prefix
+  of others is a directory; `List` non-recursive returns immediate children
+  (files and directories), recursive returns every terminal key *and* every
+  intermediate directory; `List`/`Stat`/`Load` on an absent key wrap
+  `fs.ErrNotExist`; `Delete` of a directory removes the subtree and deleting
+  an absent key is not an error. LIKE patterns are escaped so `%`/`_` in a
+  key (certmagic keys contain the contact email) match literally.
+  `Lock`/`Unlock` are an in-process channel map honouring `ctx` (ADR-0021:
+  one Auth App per install, so no cross-process lock is needed); `Unlock` of
+  a lock that is not held is an error, as certmagic's contract says.
+- **`POST /api/machine-certificates` needs the Project Domain and its zone,
+  which live in slice 3's `project_domain_claims`.** Rather than reach into a
+  table that does not exist on this branch, the handler takes a
+  `ProjectDomainResolver` (`ResolveProjectDomain(ctx, tenant, project) →
+  (domain, zone)`) via `HandlerOptions.ProjectDomains` / `HTTPRunner.ProjectDomains`.
+  Slice 3 supplies the claims-backed implementation; until then the field is
+  nil and the endpoint answers 501, the same pattern as `Projects == nil`.
+  A project without a domain answers **404** `{"error":"project \"<p>\" has no
+  project domain"}` (the spec names no status).
+- **Zone tokens** likewise belong to slice 2's `public_dns_zones`. The
+  certmagic issuer takes a `zoneTokenSource func(ctx, zone) (token, error)`;
+  the reconciler (slice 6) wires slice 2's decryptor in. `acmeIssuer` is
+  therefore *not* instantiated in `Serve` yet — nothing orders in this slice.
+- **Secret-at-rest helper.** Spec §1.4 asks to generalize
+  `encryptOIDCPrivateKey`/`decryptOIDCPrivateKey` into `encryptSecret`/
+  `decryptSecret` with purpose-labelled keys — slice 2 owns that refactor
+  (same file, same functions). To merge cleanly this slice reuses the two
+  OIDC AES-GCM functions unchanged and adds only the purpose key
+  (`purposeEncryptionKey` → `auth_app_meta` key `machine_cert_key`).
+  Fold `machineCertEncryptionKey` onto slice 2's helper at merge.
+- **Retained row on re-request.** §3.4 says a retained valid certificate
+  returns `state: issued` with no order; §4.6 says reuse clears
+  `pushed_serial`. The upsert does exactly that (and updates
+  tenant/project/machine + `requested_at`). A row that is *not* usable —
+  never issued, expired, or issued under a different `directory_url` — is
+  reset to a fresh pending row (cert/key/serial/backoff cleared), which is
+  how a staging → production switch heals without a separate migration.
+- **`TestCA` is pinned to the configured directory.** certmagic's
+  `ACMEIssuer.Issue` retries against `TestCA` (defaulting to LE staging when
+  `CA` is LE production) on attempt > 0. We never set the attempts context
+  key, but pinning `TestCA = CA` makes "staging and production never mix" a
+  property of the issuer rather than of the caller.
+- **ARI `Replaces` cannot be set through certmagic's public API.** Spec §3.5
+  says renewals "set the ARI `Replaces` context value"; the key
+  (`ctxKeyARIReplaces`) is unexported and only certmagic's own renew path
+  sets it. The `certIssuer.Issue` signature is the spec's; slice 6 either
+  accepts ARI-timed renewals *without* `replaces` (still exempt from the
+  new-orders and per-registered-domain limits, but counted against the
+  5-per-identifier-set duplicate limit) or drops to `acmez.Client.
+  ObtainCertificate` with `OrderParameters.Replaces` for renewals. Noted
+  here so slice 6 does not rediscover it.
+- **The `Public name:` line lives in `runCreateMachineV2`, not in
+  `formatCreateMachineV2`.** Slice 4 owns the create output rewrite (it
+  replaces the `DNS:` line). This slice adds the certificate request behind
+  `zoneModePublicHostname(summary, project, machine)` — `""` for a project
+  without a domain, so nothing changes for today's fleet — and prints the
+  spec's `Public name: …` line *after* the existing output, text mode only,
+  Dev Image machines excluded. Slice 4 should move `formatPublicNameLine`
+  into the formatter and drop the `DNS:` line for zone mode.
+- **Failure-reason vocabulary** (`acmeFailureReason`) is a substring
+  classifier over `last_error` — good enough for the six fixed tokens; the
+  raw error is kept verbatim on the row for `sc project status`.
+
+## 2026-09-12 — merge of slice 5 onto slice 2: one purpose-keyed secret helper
+
+Slices 2 and 5 were built in parallel and each added a "32-byte AES key per purpose in `auth_app_meta`" helper (`secretEncryptionKey` in `secrets.go`, `purposeEncryptionKey` in `machine_certificates.go`) under the same `machine_cert_key` meta key. Kept the slice-2 one, since Public DNS Zone tokens already use it, and made `machineCertEncryptionKey` delegate to it; the slice-5 copy and its private base64/rand helpers were deleted. No behavioural difference: same key derivation, same `ON CONFLICT DO NOTHING` first-use race handling.
+
+## 2026-09-12 — Public DNS Zones slice 3: Project Domain claims
+
+Spec `docs/spec/public-dns-zones.md` §1.3, §2.2, §3.2/§3.3, §4.6, §5.1, §9 item 3
+(issue #165; decision record on #158). Things the spec left to the implementer:
+
+- **`BEGIN IMMEDIATE` through a dedicated `*sql.Conn`.** `database/sql` cannot
+  pick SQLite's transaction mode (`db.BeginTx` always issues a plain `BEGIN`,
+  which is deferred), so `ClaimProjectDomain` takes `db.Conn(ctx)`, runs
+  `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` by hand, and scans + inserts on
+  that connection. Alternatives: a `_txlock=immediate` DSN parameter (would
+  make *every* transaction on the pool take the write lock up front, including
+  the log sink's) or trusting the PK alone (loses the classified error: a
+  descendant/ancestor overlap has no unique constraint to fire). A concurrency
+  test (8 goroutines, one domain) pins the "exactly one wins, the rest see a
+  `DomainClaimError`" property.
+- **Same project, different domain = replace.** The spec fixes the identical
+  re-claim as a no-op and says `set-domain` refuses only while zone-mode
+  Machines exist, but never says what a second `set-domain` with a *different*
+  domain does. `UNIQUE (tenant, project)` forbids two rows, so the claim
+  transaction deletes the project's own row and inserts the new one, skipping
+  the project's own row in the conflict scan. The previous claim is returned
+  so the handler can restore it (`restoreProjectDomainClaim`, best-effort) when
+  the Incus write fails — otherwise a failed `set-domain` would leave the
+  project domain-less in the DB while Incus still carried the old key.
+- **Route conflicts read as install-reserved, whoever owns the route.** §2.2
+  lists "an existing Public Route hostname" under the install-reserved text,
+  while §3.3's message-selection rule would have sent a same-tenant route to
+  the "claimed by project …" wording (which names a *project*, and a route has
+  a machine). The install-reserved text wins for every route, own or foreign;
+  `DomainClaimError.Class` still distinguishes `route` from `install` for
+  callers.
+- **`no-zone` before everything else, apex is a validation error.** Validation
+  (zone lookup, apex, length) runs *before* the transaction — it only reads
+  `public_dns_zones`, and refusing early keeps the write lock short. These are
+  `*ProjectDomainError` (400), distinct from `*DomainClaimError` (409). The
+  admin wording ("registered zones: …") is selected by `AdminView`, which the
+  handler sets from `user.SandcastleAdmin` — the spec ties it to the admin
+  *roots*, but no admin root claims domains today, so an admin logging in with
+  the user CLI is the closest reading.
+- **Malformed domains are 400 with the `domain` package's text.** `_`/`*`
+  labels get an explicit "labels may not start with" reason (the spec names
+  them; `validateDomainLabels` would have rejected them with the generic
+  "invalid project domain"). The CLI runs the same `NormalizeProjectDomain`
+  before calling, so the obviously malformed never leave the client.
+- **`POST /api/projects` with a domain for an already-claimed project is a
+  conflict, not a no-op.** The project cannot exist yet (create), so a row
+  for it is an orphan the GC would drop; the "already claimed" no-op is
+  `set-domain`'s.
+- **`--dry-run` on `sc project create`.** The spec asks for `--dry-run` on
+  every mutating verb; `create` never had one. It now validates the name and
+  (with `--domain`) the claim server-side in a rolled-back transaction, and
+  prints `[dry-run] would have: …`; on the broker path it prints the same
+  without contacting the broker.
+- **`set-domain`/`unset-domain` without a login print the create flag's
+  text**, `--domain is not available on this install`, rather than a third
+  sentence: the cause is identical (no Auth App to claim through) and the
+  spec fixed only that wording.
+- **`sc project status` reads the zone from the Auth App.** The zone is stored
+  on the claim row, not on Incus (§1.1 has no key for it), so `status` calls a
+  new `GET /api/projects/{name}/domain` best-effort when logged in and omits
+  `(zone …)` otherwise — the status never fails on it. The per-machine table
+  is rendered from the slice-1 `meta.Machine` fields; `DETAIL` carries the
+  `failed:<reason>` token (the raw `last_error` lives in slice 5's table and
+  is not surfaced yet).
+- **Private profiles are byte-identical, no `MODE=private`.** §5.1 says
+  private projects "add `MODE=private` (explicit …)", the issue says "private
+  projects unchanged, golden-tested". The issue wins: `V2ProfileUserData` with
+  an empty domain renders exactly what `V2DefaultProfileUserData` always did
+  (a test diffs the two), and every consumer defaults an absent `MODE` to
+  private — which §5.1 itself requires for pre-feature Machines anyway.
+  `V2DefaultProfileUserData` is kept as a wrapper so no caller changed.
+- **`--bare` and dev user-data untouched.** Both are rendered by `sc create`
+  (slice 4's surface) from the profile's `fqdn:` line, which a zone project
+  now renders as `{{ v1.local_hostname }}.<domain>` — so a bare machine in a
+  zone project already boots with the right name; the `MODE=zone` line in its
+  own `machine.env` comes with slice 4's create path.
+- **The Incus seam is one interface, `TenantProjectDomainManager`**, next to
+  the existing `TenantProjectCreator` rather than widening it: the broker
+  (`projectbroker.Handler`) shares `CreateTenantProject`, and a four-method
+  interface would have forced every broker fake to grow. `ProjectBrokerCreator`
+  implements both; `ProjectDomains` on `HTTPRunner`/`HandlerOptions` is wired
+  in `admin_root.go` with a `TenantDeleter` (new `NewTenantDeleterForServer`
+  for the socket path). A missing app project wraps
+  `projectbroker.ErrProjectNotFound` → 404.
+- **`DELETE /api/projects/{name}` deletes unconditionally.** The "project must
+  be empty" rule stays client-side (`tenant.PlanDeleteProject`), as it always
+  was for the direct path; the endpoint mirrors `sc-adm project delete`
+  (machines, volumes, profiles go). The `default` project is refused. Order:
+  claim row → `onProjectDomainReleased` → Incus; a failure after the release
+  is left to the GC, never rolled back.
+- **`onProjectDomainReleased` is the slice-6 hook.** A no-op today, called on
+  `DELETE …/domain`, `DELETE /api/projects/{name}` and from the GC with the
+  released claim; slice 6 fills in "delete every A record under the domain,
+  drop its `machine_certificates` rows".
+- **GC rides the existing 5-minute suffix loop**, reusing its tenant listing
+  (`tenant.ListForPrefix` summaries carry `Projects[].Domain` since slice 1);
+  the empty-live-set guard is the same. "Incus key without row" is logged
+  once per project+domain (in-loop `map`, reset on restart), never claimed.
+  `unset-domain` on such a project clears the key even with no row, so a
+  tenant can repair it without admin help.
+- **`sc project delete` prefers the endpoint and falls back on 501 only.** Any
+  other error from the Auth App (409 machines, network) is surfaced, not
+  retried against Incus — a restricted certificate would only produce a worse
+  error. The old "no project-delete endpoint yet" hint is gone.
+- **`sqlProjectDomainClaims` replaces slice 2's stub as the default.**
+  `HandlerOptions.ProjectDomainClaims` stays for tests; `noProjectDomainClaims`
+  stays only as the nil-safe fallback inside `checkPublicDNSZoneRemovable`.
+  The FK `zone REFERENCES public_dns_zones(zone)` is live (`foreign_keys(1)`
+  is in the DSN), so a zone with claims cannot be deleted at the DB level
+  either.
+- **e2e:** Phase 12 is added with 12a/12b (this slice's user-visible surface)
+  and a note that 12c–12f land with slices 4–7; the `unset-domain` step
+  records that it is *allowed* until slice 4 stamps the Naming Mode.
+
+## 2026-09-12 — merge of slice 3 onto slices 2+5: two seams called `ProjectDomains`
+
+Slice 5 (built before slice 3 existed) added `HTTPRunner.ProjectDomains` typed `ProjectDomainResolver` (the "which domain does this project have" lookup for `POST /api/machine-certificates`, left nil → 501). Slice 3 added a same-named field typed `TenantProjectDomainManager` (the Incus seam that writes `KeyV2Domain` and re-renders the profile). Textually the merge was clean; semantically it was a redeclaration. Resolution: the resolver seam is renamed `ProjectDomainResolver` / `projectDomainResolver`, and it now defaults to `sqlProjectDomainClaims` (which gained `ResolveProjectDomain` over `GetProjectDomainClaim`) whenever the handler has a database — so the 501 "no claims yet" path is gone and the machine-certificates endpoint answers 404 for a project without a domain. The test fake was renamed `fakeProjectDomainResolver` to avoid clashing with slice 3's `fakeProjectDomains`.
+
+## 2026-09-12 — Public DNS Zones slice 4: the machine contract
+
+Spec `docs/spec/public-dns-zones.md` §2.3, §5, §9 item 4 (issue #166; decision
+record on #159). Things the spec left to the implementer:
+
+- **The Caddyfile heredoc is its own constant** (`caddyfileHeredoc`), spliced
+  into `caddyIngressSetupScript`, so a test can pin it byte for byte against
+  the pre-slice-4 text. The script itself necessarily changes (the payload
+  version bumps once, as any payload edit does); what "private mode unchanged"
+  means here is the *behaviour* — leaf fetch, Caddyfile, override.conf, marker
+  aside, `systemctl restart` — and `TestCaddySetupPrivateMode` runs the real
+  script under bash with stubbed tools against a throwaway root to prove it.
+  The absolute paths are rebased textually for that run; the drop-in content
+  is compared in rebased form for the same reason.
+- **The private marker is written too.** §5.3 only needs the marker in zone
+  mode, but §5.2's script writes it unconditionally and it costs nothing; a
+  `MODE=private` marker is "no marker" for the push gate
+  (`CaddySetupMarker.ReadyFor`) and is a useful diagnostic on the machine.
+  `tenant.ParseCaddySetupMarker` / `ReadyFor` are provided for slice 6 so the
+  gate semantics (§4.4 step 1: parse failure, missing MODE, MODE=private, FQDN
+  mismatch → no marker) live next to the writer.
+- **`--bare` takes its MODE from the profile, not from the request.** The
+  bare document already reads the FQDN domain and signer back off the
+  project's default profile so a bare machine can never disagree with its
+  siblings; the `MODE=zone` line follows the same rule
+  (`v2ProfileModePattern` → `V2BareUserDataForMode`). The Naming Mode *stamp*
+  comes from the CLI's request (the tenant summary's `Domain`), as §2.3 says.
+  Both derive from `KeyV2Domain` and are written by the same Auth App
+  transaction, so they agree except across a stale profile — which
+  `set-domain` re-rendering already rules out. Dev Image machines run no
+  caddy-setup at all, so their cloud-init is untouched: public name stamp, no
+  marker, no certificate.
+- **The stamp is read back, not recomputed.** `CreateMachineV2Result` /
+  `EnsureMachineV2Result` / `V2MachineRef` all carry `PublicHostname` from the
+  instance (or from the request when the call created it), and the create
+  output, the certificate request and `sc connect`'s `HostKeyAlias` use that.
+  `zoneModePublicHostname` is now called exactly once per create (and once
+  in `dialV2Machine`, only for the ensure-creates case). `meta.KeyV2PublicHostname`
+  is used directly in `incusx`, like `meta.KeyV2Bare` — the `keyV2…` mirror
+  block is for infra-project keys.
+- **`ListMachinesV2` switched from `GetInstanceNames` to `GetInstances`** so
+  the purge sees each machine's Naming Mode record in one call per project
+  instead of one `GetInstance` per machine; `TenantResourceServer` gained
+  `GetInstances` (the two fakes embed the interface, so nothing else moved).
+- **Zone-mode `IP:` line stands alone.** Private mode prints
+  `IP: <ip>   DNS: … (auto-registers within seconds)` on one line; the zone
+  `Public name:` line is long and carries the certificate detail, so it gets
+  its own line under `IP: <ip>`. The still-booting and `--dry-run` forms
+  already had the name on its own line. A zone machine in the default project
+  shows no `(also: <m>.<suffix>)` alias — it has exactly one name.
+- **The certificate request runs in every output mode**, not text only as
+  slice 5 had it: creating the `machine_certificates` row is part of the
+  create, not of the rendering. `--json` carries `publicHostname`; the
+  outcome text is text-mode only. `--dry-run` never calls the Auth App and
+  prints the default pending text whatever a caller hands the formatter.
+- **e2e:** Phase 12c is written for what slice 4 can show (stamp, output,
+  marker, drop-in, enabled-inactive Caddy, connect keyed by the public name);
+  the A-record / certificate timing criteria and 12d–12f stay for slices 6–7.
+
+## 2026-09-12 — Public DNS Zones slice 6: the zone reconciler
+
+Spec `docs/spec/public-dns-zones.md` §4 (+ §1.5, §3.5, §4.6), §9 item 6
+(issue #168; decision records on #157 and #159). Things the spec left to the
+implementer, and one thing it asks for that the library does not allow:
+
+- **ARI renewals go through `certmagic.ACMEIssuer.Issue` without the ACME
+  `replaces` field.** Slice 5 found the `Replaces` context key
+  (`ctxKeyARIReplaces`) unexported; the alternative was dropping to
+  `acmez.Client.ObtainCertificate` with `OrderParameters.Replaces` for
+  renewals. Rejected: it would mean re-implementing certmagic's account
+  lookup/registration over `acme_storage` (the account is certmagic's,
+  loaded by an unexported path), the DNS-01 solver wiring and the
+  propagation wait — a second issuance path that only runs at renewal time,
+  i.e. the least-exercised code in the system. It would also not have worked
+  as a certmagic feature anyway: certmagic only sends `replaces` when
+  `!usingTestCA`, and slice 5 pins `TestCA = CA`, so even certmagic's own
+  renew path suppresses it under our configuration. Cost of the decision:
+  ARI-timed renewals are *not* exempt from Let's Encrypt's
+  5-per-identifier-set/week duplicate limit (the exemption requires
+  `replaces`); a Machine renews once per ~60 days, so the limit is
+  unreachable through renewals — the budget consumer is delete/recreate,
+  which the retained row (§4.6) already defuses. `RenewalInfo` is still used
+  for *timing*, so the "renew when the CA asks" property holds. If certmagic
+  exports the key (or gains a `Replaces` field on `Issue`), the change is one
+  `context.WithValue` in `acmeIssuer.Issue` plus a "renewal of" parameter on
+  `certIssuer.Issue`; noted in `docs/usage.html`.
+- **Package split: logic in `authapp`, Incus in `incusx`.** `incusx` imports
+  `authapp`, not the reverse, so `zone_reconcile.go` in `authapp` holds the
+  whole pass behind a four-method `ZoneMachineServer` seam (`ListZoneMachines`,
+  `StampInstanceConfig`, `ReadInstanceFile`, `PushMachineCertificate`) that
+  `incusx.ZoneMachineServer` implements over the mounted socket; the DNS side
+  is a `zoneDNSProvider` (three libdns interfaces) built by a package-level
+  factory so tests never touch Cloudflare (`init()` in the test file replaces
+  the factory for the whole package — the release hook runs in existing
+  handler tests too). The `V2DNSReconciler` in `dns_v2.go` is untouched: the
+  spec's "private stage skips zone-mode Machines" is already true because a
+  zone Machine's private name is never rendered (slice 4), and threading the
+  zone stage into that function would have coupled two reconcilers with
+  different failure modes.
+- **One loop, not two.** The zone stage runs inside `runDNSReconcileLoop`
+  after `DNSReconcile`, sharing the 30 s ticker and the lifecycle-event
+  trigger (that is what makes `instance-started` push within seconds). A
+  finished order — success *or* failure — kicks the same trigger, so the
+  push (or the `failed:` mirror) never waits for the ticker; the loop now
+  also starts when only the zone stage is configured.
+- **Provider per pass, not per zone lifetime.** `libdns/cloudflare` caches
+  the zone id inside the `Provider`; building a fresh one per pass and zone
+  (one `GetRecords` each) means a rotated token (`set-token`) is live on the
+  next pass with no cache invalidation hook. The TXT sweep runs inside the
+  order goroutine with its own zone read: orders outlive the pass, and a
+  stale snapshot could miss a challenge record certmagic wrote meanwhile.
+- **Records under a claimed domain are the reconciler's, nothing else is.**
+  Stale-record deletion is scoped to A records whose relative name ends in
+  `.<claimed domain>` and whose Machine label is not live; anything else in
+  the zone (the admin's own `www`, other tenants' domains) is never read as
+  "stale". A stopped Machine has no lease, so its records are *kept*, not
+  re-set; a deleted Machine's two records go on the next pass.
+- **Unclaimed `KeyV2Domain` → nothing stamped.** §1.1 says the reconciler
+  stamps `private` on unstamped Machines in a project *without* a domain;
+  §4.6 says a project with the key but no claim is "treated as private for
+  DNS". Stamping is irreversible, and the tenant can still repair such a
+  project with `set-domain`, so its unstamped Machines are left unstamped
+  (logged once per project); a claim and key that disagree are handled the
+  same way.
+- **Drift = leaf fingerprint OR file content.** §4.5 compares the leaf
+  sha256; e2e 12e appends junk to `cert.pem` and expects a re-push, which a
+  leaf comparison alone would not notice (the first PEM block still parses).
+  Both are compared; a missing file on a *running* Machine is drift too
+  (`ErrInstanceFileNotFound`, the incusx seam maps Incus 404 onto it), which
+  is how a Freeform Machine rebuilt under a retained row gets its
+  certificate without an API call that clears `pushed_serial`. Any other
+  read error is "unreachable": skipped, retried next pass.
+- **`systemctl start caddy` only on the first push.** The push script is the
+  spec's `mv && mv && (reload || restart)`; `restart` already starts an
+  inactive unit, but the issue asks for an explicit `start` on the first
+  push, so it is appended when the row had no `pushed_serial` *before* the
+  pass (a drift re-push clears the serial and must not read as first).
+- **Mirror `cert-not-after` for `issued` keeps the previous value.** A renewed
+  but not yet pushed row is `issued` while the old certificate still serves;
+  clearing the expiry would flicker `sc project status`. The key is written
+  from the row only when `pushed_serial == serial`.
+- **GC in the fast pass, not the 5-minute loop.** Row GC is one `SELECT` over
+  a small table and needs the live fleet, which the pass already has; it runs
+  every pass under the same "empty fleet is never trusted" guard. Rules:
+  a row whose Machine is gone is dropped when it holds nothing worth
+  retaining (never issued, expired, or issued under another directory);
+  a valid retained row waits for its Machine. `onProjectDomainReleased`
+  (slice 3's hook) now returns an error: it drops every row under the domain
+  (`hostname LIKE '%.<domain>'`, escaped) *before* deleting the A and
+  `_acme-challenge` records, so a Cloudflare outage cannot leave
+  certificates behind a released claim; callers log the error.
+- **Rate limit → last backoff step by setting `attempts = 5`**, so the
+  ladder index lands on 6 h without a second field; the fixed-vocabulary
+  classifier (`acmeFailureReason`) decides "rate-limited" from the raw error.
+- **Not done here:** `sc project status` DETAIL still shows only the reason
+  token (the raw `last_error` is on the row, surfaced via the skill's
+  `sqlite3` recipe); the e2e phase's `sqlite3` steps assume the client is
+  present on the appliance image. Slice 7 owns the e2e run and the
+  `make e2e-safe` gate wiring for `SANDCASTLE_E2E_CLOUDFLARE_TOKEN`.
+
+## 2026-09-12 — Public DNS Zones slice 7: e2e Phase 12 + docs sweep
+
+Spec `docs/spec/public-dns-zones.md` §7, §8, §9 item 7 (issue #169). No product
+code changed; the decisions are about how the phase is wired and run:
+
+- **Phase 12 is a shell driver, and the Go e2e test runs it.** The other
+  phases of `docs/e2e-sc2.md` are a manual runbook; the two hermetic variants
+  that exist (`scripts/e2e-route.sh`, `scripts/e2e-local-vm.sh`) are bash
+  over the CLIs. Phase 12 follows that shape: `scripts/e2e-pdz.sh` drives
+  `sc`/`sc admin` (one fat binary — `sc admin …` *is* the `sc-adm` tree, so the
+  script needs a single binary path) and asserts with `dig`, `openssl s_client`
+  and `curl --resolve`. `TestPublicDNSZonePhase12E2E` in `internal/e2e` is the
+  harness-side gate: it `t.Skip`s without `SANDCASTLE_E2E=1` or without the two
+  zone variables, builds the binary, and execs the script. Alternative
+  considered: reimplementing the phase in Go against the Auth App HTTP API and
+  the Incus client — rejected, it would test the API rather than the CLI the
+  operator runs, and it could not do the tailnet-side `openssl`/`curl` checks
+  any better than bash.
+- **Three-way gate, never a failure.** `scripts/e2e.sh pdz` sources
+  `.env.sc2` (where the other e2e secrets already live), then skips (exit 0)
+  when the token/zone are absent *and also* when they are present but
+  `SANDCASTLE_E2E` is not `1`. The issue asked only for the first skip; the
+  second keeps `make e2e-safe` from turning destructive (real Cloudflare
+  records, a real staging order) the moment the operator drops the credentials
+  into `.env.sc2`. The live run is therefore an explicit opt-in:
+  `SANDCASTLE_E2E=1 scripts/e2e.sh pdz` (or `SANDCASTLE_E2E=1 make e2e-safe`).
+- **The script covers the issue's core path; 12e stays manual.** Registry →
+  claim → create → A records → CERT ok → `openssl` (both SANs, STAGING issuer)
+  → wildcard vhost → unset/remove refusals → delete (records gone) → project
+  delete (claim released) → zone removed. The marker-gate, stopped-through-a-
+  push and drift checks of 12e need `sqlite3` inside the appliance (the stock
+  image has none) and wall-clock waits on the reconciler; they are written up
+  as manual steps marked **(DB)** rather than automated with an `apt-get`
+  inside the auth-app. Refusal checks use `--dry-run` so a failed assertion
+  never leaves a stray project behind; a zone that is already registered is
+  reused and left in place (so a run against a shared test install does not
+  unregister someone's zone).
+- **Docs fixed on the way.** The earlier slices' examples used
+  `sc create web --project zp`; `sc create` takes a machine reference
+  (`zp:web`) and has no `--project` flag — corrected in `docs/e2e-sc2.md` and
+  `docs/usage.html`. The skill's troubleshooting table claimed `DETAIL` shows
+  the raw `last_error`; it shows the reason token only (`project.go`), so the
+  raw error is documented as auth-app-log / `sqlite3` only. Phase 12 fragments
+  12a–12f from slices 3, 4 and 6 were merged into one section with a single
+  gate paragraph, the "until slice N" wording removed, and a pointer added to
+  Phase 8c (private-mode contract) and to the Phase 1 `--acme-directory` note.
+- **`docs/glossary.md` gained a Public DNS Zones section** (the seven
+  `CONTEXT.md` terms plus "zone reconciler" and "ACME directory", phrased for
+  the CLI reader); `CONTEXT.md` itself was already complete.
+- **ADR-0027 flipped to accepted**; the spec's §10 list is kept verbatim with
+  resolved markers pointing here (route-conflict wording, `project status`
+  layout, ARI without `replaces`, no `MODE=private` line).
+- **The installed skill copy** (`~/.claude/skills/sandcastle/`) was refreshed
+  from the tracked `docs/agents/skills/sandcastle/`; the tracked directory
+  remains the source.
+
+## 2026-09-13 — Public DNS Zones: a zone may live inside its Cloudflare zone
+
+The first live run of Phase 12 (`docs/e2e-runs/2026-09-13-phase12-public-dns-zones.md`,
+finding F1) failed at 12a: `sc admin public-dns-zone add e2e.sc.tc42.uk --token …`
+printed `Cloudflare rejected the token for zone e2e.sc.tc42.uk: the token cannot
+see a zone named e2e.sc.tc42.uk`. The Cloudflare zone is `tc42.uk`;
+`e2e.sc.tc42.uk` is a name inside it. The design (map #155, the #160 grilling,
+the tracked `.env.e2e.sample`) always allowed that — Cloudflare tokens are
+zone-scoped, records for `<m>.<pd>` are simply written into the containing
+zone under full names — but slice 2 resolved the zone id with an exact
+`GET /zones?name=<zone>`, and slice 6 handed the Public DNS Zone name itself to
+libdns, which would have failed the same way one step later.
+
+- **Resolution is "longest containing zone the token can see."**
+  `CloudflareZoneClient` now lists the token's zones (`GET /zones?per_page=50`,
+  following `result_info.total_pages`, capped at 100 pages) and picks the name
+  equal to the Public DNS Zone or its parent on a label boundary, longest
+  first, so a token that sees both `tc42.uk` and `sc.tc42.uk` lands on
+  `sc.tc42.uk`. Alternative considered: walking the name label by label with
+  `GET /zones?name=<candidate>` (one call per label, no paging) — rejected
+  because it costs up to N calls for a deep name and the listing is what Zone
+  Read grants anyway; a Sandcastle token sees a handful of zones. Two zones
+  with the same longest name is still an ambiguity error, as before. The
+  rejection text became `the token cannot see a zone containing <zone> (…)`.
+- **The Cloudflare zone name is persisted next to its id** (`cloudflare_zone`,
+  a guarded `ALTER TABLE … ADD COLUMN` via `ensureColumn`, so live and test
+  databases migrate in place). Rows from before the column carry `''` and are
+  read as "the zone itself" (`cloudflareZoneOrSelf`) — they were registered by
+  exact name, so that is exactly right; no backfill needed. `set-token`
+  re-resolves, since a rotated token may be scoped to a closer zone. The name
+  is exposed as `cloudflareZone` in the API/JSON, as `CLOUDFLARE-ZONE` in
+  `list`, and `add`/`set-token` print `(inside Cloudflare zone tc42.uk, id …)`
+  when it differs from the zone. Alternative: storing only the id and asking
+  Cloudflare for the name at reconcile time — rejected, the reconciler must
+  not depend on a Zone Read call per pass, and the name is what libdns wants.
+- **libdns is always addressed to the Cloudflare zone.** `PublicDNSZoneCredentials`
+  returns (cloudflare zone, token); the reconciler's per-pass provider cache
+  carries the libdns zone with the provider, and `reconcileZoneRecords`, the
+  `_acme-challenge` sweep and `releaseProjectDomainRecords` all use it, with
+  relative names via `libdns.RelativeName(<fqdn>, <cloudflare zone>)`
+  (`web.baum.e2e.sc` in `tc42.uk.`). The claimed-domain suffix filter and
+  `machineRelativeName` are therefore relative to the Cloudflare zone too.
+  The certmagic issuer needed no change: it is keyed by the Public DNS Zone
+  only to find the token, and its DNS-01 solver locates the zone by SOA.
+- **Tests** cover zone == Cloudflare zone, two labels deep, no containing
+  zone (sibling and non-label-boundary `otherhase.de`), longest match in both
+  listing orders, paging across two pages, the migration of an old-schema DB,
+  and a reconciler run with a subdomain zone (records, sweep, release all
+  relative to `tc42.uk.`, nothing written under `e2e.sc.tc42.uk.`).
+
+## 2026-09-13 — Public DNS Zones: GC records after the last Machine in a zone is deleted
+
+The live e2e run showed `sc delete zp-p12c:web` (the tenant's only Machine)
+leaving both A records in Cloudflare for 180 s; only the project-delete hook
+removed them. Two causes in `zoneReconciler.Reconcile`, both fixed:
+
+- **Zones are reconciled by claim, not by live target.** `byZone` was built
+  from targets only, so a zone whose claims had no live Machine was never
+  passed to `reconcileZoneRecords` and stale records under its claimed domains
+  were never GC'd. Now the zone set is the union of zones-with-targets and
+  zones-of-claims, with an empty target list where nothing is live. A
+  registered zone with no claims is still skipped — nothing to converge, and
+  no Cloudflare read for it. Alternative: reconciling every registered zone
+  — rejected, it costs a read per idle zone per pass for nothing.
+- **The empty-fleet early return is gone.** It was copied from the claim GC
+  ("an empty live set is never trusted"), but `ListZoneMachines` returns an
+  error on a listing failure, so an empty slice is a real state — and after
+  the last Machine is deleted it is the *expected* state. Records are
+  self-healing (a wrong deletion is re-created by the next pass within 30 s)
+  and certificate rows are retained on Machine deletion by design, so the
+  record and certificate passes run on an empty fleet. The one step that is
+  destructive and not self-healing is `gcMachineCertificates` (dropping
+  never-issued / expired / foreign-directory rows): a row dropped on a wrong
+  empty listing takes its persisted backoff and ARI state with it, and a
+  re-created row would order at once. That step alone keeps the guard
+  (`len(machines) > 0`), with a comment. Alternatives: dropping the guard
+  entirely (rejected for the backoff-loss reason) or keeping the whole early
+  return and deleting records from the machine-delete path instead
+  (rejected — the reconciler is the single owner of records per §4.6, and
+  out-of-band `incus delete` would still leak).
+- Tests: last Machine of one zone deleted while another zone's Machine
+  remains (base + wildcard deleted, other zone untouched, deletion logged);
+  fleet empty after the last Machine (records deleted, `retained` row kept);
+  registered zone without claims (no provider, no read). The existing GC
+  test's empty-fleet step now documents that only the row GC is skipped.
+- The commit also carries the harness fix from the same run: the bad-token
+  probe registers a *sibling* of the zone (`bad-<id>.<parent>`), because a
+  name under the zone is refused by the nesting check before the token is
+  ever tried.

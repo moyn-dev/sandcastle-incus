@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
@@ -32,14 +33,14 @@ func installV2Prefix(prefix string) string {
 // an installation under the same --prefix already exists.
 func newAdminInstallCommand(config commandConfig) *cobra.Command {
 	var (
-		prefix, cidrPool, baseImage, binaryPath, bridge, storagePool          string
-		hostname, githubClientID, githubClientSecret, adminUsers              string
-		defaultUnixUser, tailscaleAuthKey                                     string
-		simulateGitHubToken, tlsMode, brokerPort                              string
-		ingressMode, acmeEmail, tunnelToken, cloudflareAPIToken               string
-		routeIngress, routeBaseDomain, routeCNAMETarget, routeFront, routeTLS string
-		routeDNSCloudflareAPIToken                                            string
-		routeDNSCloudflareWildcards                                           []string
+		prefix, cidrPool, baseImage, binaryPath, bridge, storagePool           string
+		hostname, githubClientID, githubClientSecret, adminUsers               string
+		defaultUnixUser, tailscaleAuthKey                                      string
+		simulateGitHubToken, tlsMode, brokerPort                               string
+		ingressMode, acmeEmail, acmeDirectory, tunnelToken, cloudflareAPIToken string
+		routeIngress, routeBaseDomain, routeCNAMETarget, routeFront, routeTLS  string
+		routeDNSCloudflareAPIToken                                             string
+		routeDNSCloudflareWildcards                                            []string
 	)
 	command := &cobra.Command{
 		Use:   "install",
@@ -132,6 +133,11 @@ func newAdminInstallCommand(config commandConfig) *cobra.Command {
 					return fmt.Errorf("route ingress needs the host ports %v, but they are already in use", busy)
 				}
 			}
+			normalizedACMEDirectory, err := authapp.NormalizeACMEDirectory(acmeDirectory)
+			if err != nil {
+				return err
+			}
+			acmeDirectory = normalizedACMEDirectory
 			routeDNSProvider, err := routeDNSProviderForCloudflare(routeIngress, routeDNSCloudflareAPIToken, routeDNSCloudflareWildcards)
 			if err != nil {
 				return err
@@ -173,6 +179,7 @@ func newAdminInstallCommand(config commandConfig) *cobra.Command {
 				TLSMode:                    tlsMode,
 				IngressMode:                ingressMode,
 				ACMEEmail:                  acmeEmail,
+				ACMEDirectory:              acmeDirectory,
 				TunnelToken:                tunnelToken,
 				RouteIngress:               routeIngress,
 				RouteBaseDomain:            routeBaseDomain,
@@ -279,7 +286,8 @@ func newAdminInstallCommand(config commandConfig) *cobra.Command {
 	command.Flags().StringVar(&tlsMode, "infra-tls-mode", "acme", "infrastructure TLS mode")
 	command.Flags().StringVar(&brokerPort, "broker-port", "9443", "host port the broker listens on")
 	command.Flags().StringVar(&ingressMode, "ingress", "none", "public ingress for the Auth Hostname: none (BYO edge), acme (host :80/:443 + Let's Encrypt), or cloudflare (outbound tunnel, no inbound ports)")
-	command.Flags().StringVar(&acmeEmail, "acme-email", "", "Let's Encrypt contact email (acme or route ingress)")
+	command.Flags().StringVar(&acmeEmail, "acme-email", "", "Let's Encrypt contact email (acme or route ingress; also the ACME account contact for Machine Certificates)")
+	command.Flags().StringVar(&acmeDirectory, "acme-directory", "", "ACME directory URL for Machine Certificates (Public DNS Zones); default Let's Encrypt production, "+authapp.LetsEncryptStagingDirectory+" for staging")
 	command.Flags().StringVar(&routeIngress, "route-ingress", "", "public ingress for `sc route`: acme (host :80/:443 + Let's Encrypt) or acme-proxied (same, but an upstream SNI proxy owns the host ports and forwards to the appliance), independent of --ingress so routes can run beside a cloudflare login host; empty disables")
 	command.Flags().StringVar(&routeBaseDomain, "route-base-domain", "", "domain published routes live under (<label>.<tenant>.<base>); defaults to the Auth Hostname")
 	command.Flags().StringVar(&routeCNAMETarget, "route-cname-target", "", "public front door a tenant CNAMEs a custom route hostname onto (e.g. the SNI proxy's hostname); reported by `sc route`. Defaults to the Auth Hostname only when it is itself ACME-served here")

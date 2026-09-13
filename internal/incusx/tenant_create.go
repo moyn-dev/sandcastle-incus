@@ -40,6 +40,7 @@ type TenantResourceServer interface {
 	UpdateProfile(name string, profile api.ProfilePut, ETag string) error
 	GetInstance(name string) (*api.Instance, string, error)
 	GetInstanceNames(instanceType api.InstanceType) ([]string, error)
+	GetInstances(instanceType api.InstanceType) ([]api.Instance, error)
 	GetInstanceState(name string) (*api.InstanceState, string, error)
 	GetInstanceFile(instanceName string, filePath string) (io.ReadCloser, *incus.InstanceFileResponse, error)
 	CreateInstance(instance api.InstancesPost) (incus.Operation, error)
@@ -274,6 +275,10 @@ func (s sdkResourceServer) CreateStorageVolumeFile(pool string, volumeType strin
 
 func (s sdkResourceServer) GetInstanceNames(instanceType api.InstanceType) ([]string, error) {
 	return s.inner.GetInstanceNames(instanceType)
+}
+
+func (s sdkResourceServer) GetInstances(instanceType api.InstanceType) ([]api.Instance, error) {
+	return s.inner.GetInstances(instanceType)
 }
 
 func (s sdkResourceServer) GetInstanceFile(instanceName string, filePath string) (io.ReadCloser, *incus.InstanceFileResponse, error) {

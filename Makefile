@@ -30,9 +30,14 @@ install: build
 test:
 	$(GO) test ./...
 
+# unit + gated + Phase 12 (Public DNS Zones). Phase 12 runs only when
+# SANDCASTLE_E2E=1 and .env.sc2 (or the env) carries
+# SANDCASTLE_E2E_CLOUDFLARE_TOKEN + SANDCASTLE_E2E_PUBLIC_DNS_ZONE; otherwise
+# it is skipped, not failed.
 e2e-safe:
 	scripts/e2e.sh unit
 	scripts/e2e.sh gated
+	scripts/e2e.sh pdz
 
 
 clean:

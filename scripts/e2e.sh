@@ -11,13 +11,17 @@ Tiers:
   incus     Run destructive real-Incus e2e flows. Requires SANDCASTLE_E2E=1.
   images    Run real image build e2e. Requires SANDCASTLE_E2E=1, image build env, and pinned AI CLI versions.
   cleanup   Remove managed disposable e2e projects for SANDCASTLE_E2E_RUN_ID. Requires SANDCASTLE_E2E=1 and an explicit run id.
-  all       Run unit, gated, incus, images and cleanup tiers.
+  pdz       e2e Phase 12 — Public DNS Zones against Let's Encrypt staging (docs/e2e-sc2.md). Reads
+            SANDCASTLE_E2E_CLOUDFLARE_TOKEN + SANDCASTLE_E2E_PUBLIC_DNS_ZONE from the environment or
+            .env.sc2; SKIPPED (exit 0) when either is absent or SANDCASTLE_E2E is not 1.
+  all       Run unit, gated, incus, images and pdz tiers.
 
 Examples:
   scripts/e2e.sh unit
   SANDCASTLE_E2E=1 SANDCASTLE_E2E_REMOTE=local scripts/e2e.sh incus
   SANDCASTLE_E2E=1 SANDCASTLE_E2E_IMAGE_BUILD=1 SANDCASTLE_E2E_CODEX_VERSION=... SANDCASTLE_E2E_CLAUDE_CODE_VERSION=... SANDCASTLE_E2E_GEMINI_CLI_VERSION=... scripts/e2e.sh images
   SANDCASTLE_E2E=1 SANDCASTLE_E2E_RUN_ID=e2e-20260520-120000 scripts/e2e.sh cleanup
+  SANDCASTLE_E2E=1 scripts/e2e.sh pdz          # .env.sc2 carries the Cloudflare token + test zone
 USAGE
 }
 
@@ -87,6 +91,31 @@ require_route_broker_env() {
 
 
 
+# Phase 12 (Public DNS Zones, ADR-0027). The two gate variables normally live in
+# .env.sc2 next to the other e2e secrets; the tier sources it so `make e2e-safe`
+# picks the phase up automatically once they are there, and skips — never
+# fails — while they are not. The Go test carries the same gate (t.Skip), so
+# the plain `gated` tier skips it too.
+run_pdz() {
+  local env_file="${SANDCASTLE_E2E_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.sc2}"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+  fi
+  if [[ -z "${SANDCASTLE_E2E_CLOUDFLARE_TOKEN:-}" || -z "${SANDCASTLE_E2E_PUBLIC_DNS_ZONE:-}" ]]; then
+    echo "SKIP: e2e Phase 12 (Public DNS Zones) — set SANDCASTLE_E2E_CLOUDFLARE_TOKEN and SANDCASTLE_E2E_PUBLIC_DNS_ZONE (env or $env_file) to run it"
+    return 0
+  fi
+  if [[ "${SANDCASTLE_E2E:-}" != "1" ]]; then
+    echo "SKIP: e2e Phase 12 (Public DNS Zones) — zone + token present; set SANDCASTLE_E2E=1 to run it against the enrolled install"
+    return 0
+  fi
+  ensure_run_id pdz
+  run go test ./internal/e2e -run 'TestPublicDNSZonePhase12E2E' -count=1 -v
+}
+
 run_cleanup() {
   require_e2e cleanup
   require_env cleanup SANDCASTLE_E2E_RUN_ID
@@ -110,11 +139,15 @@ case "$tier" in
   cleanup)
     run_cleanup
     ;;
+  pdz)
+    run_pdz
+    ;;
   all)
     run_unit
     run_gated
     run_incus
     run_images
+    run_pdz
     ;;
   -h|--help|help|"")
     usage

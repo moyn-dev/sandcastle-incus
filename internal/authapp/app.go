@@ -36,6 +36,9 @@ type ServeRequest struct {
 	SimulateGitHubToken string
 	DefaultUnixUser     string
 	TailscaleAuthKey    string
+	// ACMEDirectory is the install-level ACME directory URL for Machine
+	// Certificates (ADR-0027); empty selects Let's Encrypt production.
+	ACMEDirectory string
 }
 
 type ServePlan struct {
@@ -49,6 +52,7 @@ type ServePlan struct {
 	SimulateGitHubToken string   `json:"-"`
 	DefaultUnixUser     string   `json:"defaultUnixUser,omitempty"`
 	TailscaleAuthKey    string   `json:"-"`
+	ACMEDirectory       string   `json:"acmeDirectory,omitempty"`
 }
 
 type Runner interface {
@@ -95,6 +99,9 @@ type HTTPRunner struct {
 	// Projects performs the privileged project scaffolding for the token-gated
 	// POST /api/projects — the tunnel-friendly tenant plane (no broker port).
 	Projects TenantProjectCreator
+	// ProjectDomains is the Incus seam for Project Domains (ADR-0027); see
+	// HandlerOptions.ProjectDomains.
+	ProjectDomains TenantProjectDomainManager
 	// DNSEvents, when set, is started once and subscribes to instance lifecycle
 	// events, calling notify() whenever tenant machine DNS may have changed —
 	// the event-driven half of ADR-0018's registration. It should block until
@@ -103,6 +110,10 @@ type HTTPRunner struct {
 	// DNSReconcile, when set, is invoked periodically to register tenant machine
 	// DNS records (auto-registration of freeform `incus launch` machines).
 	DNSReconcile func(context.Context) error
+	// ZoneMachines, when set (the serving appliance with the mounted socket),
+	// is the Incus seam of the Public DNS Zone reconciler (ADR-0027 §4): it
+	// runs as the zone stage of the same DNS loop, after DNSReconcile.
+	ZoneMachines ZoneMachineServer
 	// Routes, when set (ACME-ingress installs only), is the Incus seam for Public
 	// Routes: per-Route proxy devices + Machine state. Its presence is what makes
 	// `sc route` available on this install.
@@ -110,8 +121,13 @@ type HTTPRunner struct {
 	// RouteCaddy writes the appliance Caddyfile and reloads Caddy for Route
 	// changes. Set alongside Routes.
 	RouteCaddy CaddyController
-	// ACMEEmail is the Let's Encrypt contact email, rendered into the Caddyfile.
+	// ACMEEmail is the Let's Encrypt contact email, rendered into the Caddyfile
+	// and the contact of the Machine Certificate ACME account (ADR-0027).
 	ACMEEmail string
+	// ProjectDomains resolves a tenant project's Project Domain + zone for
+	// POST /api/machine-certificates (ADR-0027). nil until the install has
+	// Project Domain claims: the endpoint then answers 501.
+	ProjectDomainResolver ProjectDomainResolver
 	// AuthIngressMode is how the Auth Hostname itself is served (acme|cloudflare|
 	// none); it governs the login site in the regenerated Caddyfile so routes can
 	// coexist with a Cloudflare-tunnelled login hostname.
@@ -179,7 +195,12 @@ func PlanServe(request ServeRequest) (ServePlan, error) {
 			return ServePlan{}, err
 		}
 	}
+	acmeDirectory, err := NormalizeACMEDirectory(request.ACMEDirectory)
+	if err != nil {
+		return ServePlan{}, err
+	}
 	return ServePlan{
+		ACMEDirectory:       acmeDirectory,
 		Address:             address,
 		DatabasePath:        databasePath,
 		AuthHostname:        strings.Trim(strings.TrimSpace(request.AuthHostname), "."),
@@ -212,6 +233,7 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 		return err
 	}
 	logger.Message(ctx, "INFO", "auth database migrated in %dms", time.Since(migrateStart).Milliseconds())
+	logger.Message(ctx, "INFO", "machine certificates: acme directory %s", plan.ACMEDirectory)
 	if err := BootstrapAdmins(ctx, db, plan.BootstrapAdminUsers); err != nil {
 		return err
 	}
@@ -243,12 +265,15 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			ShareStore:                   r.ShareStore,
 			ShareReconciler:              r.ShareReconciler,
 			Projects:                     r.Projects,
+			ProjectDomains:               r.ProjectDomains,
 			DebugDeviceUser:              plan.DebugDeviceUser,
 			SimulateGitHubToken:          plan.SimulateGitHubToken,
 			TailscaleAuthKey:             plan.TailscaleAuthKey,
 			Routes:                       r.Routes,
 			RouteCaddy:                   r.RouteCaddy,
 			ACMEEmail:                    r.ACMEEmail,
+			ACMEDirectory:                plan.ACMEDirectory,
+			ProjectDomainResolver:        r.ProjectDomainResolver,
 			AuthIngressMode:              r.AuthIngressMode,
 			RouteBaseDomain:              r.RouteBaseDomain,
 			RouteIngress:                 r.RouteIngress,
@@ -263,8 +288,21 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	if r.DNSReconcile != nil {
-		go r.runDNSReconcileLoop(ctx, logger)
+	// The zone stage (ADR-0027 §4) rides the DNS loop: same ticker, same
+	// lifecycle-event trigger, so instance-started pushes a certificate
+	// within seconds. The certmagic issuer is built here because only Serve
+	// holds the database the zone tokens are decrypted from.
+	var zones *zoneReconciler
+	if r.ZoneMachines != nil {
+		issuer := newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
+			return PublicDNSZoneToken(ctx, db, zone)
+		})
+		zones = newZoneReconciler(db, r.ZoneMachines, issuer, plan.ACMEDirectory, func(level, format string, args ...any) {
+			logger.Message(ctx, level, "auth-app "+format, args...)
+		})
+	}
+	if r.DNSReconcile != nil || zones != nil {
+		go r.runDNSReconcileLoop(ctx, logger, zones)
 	}
 	if resourceCache != nil {
 		go RunResourceCache(ctx, resourceCache, r.ResourceCacheServer, func(format string, args ...any) {
@@ -274,7 +312,9 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 	if r.Tenants != nil {
 		// Garbage-collect DNS-suffix claims orphaned by tenants deleted out-of-band
 		// (ADR-0020); `sc-adm tenant delete` runs against Incus and cannot reach the
-		// auth database, so a periodic reconcile is the cleanup path.
+		// auth database, so a periodic reconcile is the cleanup path. The same
+		// loop prunes Project Domain claims of projects deleted out-of-band
+		// (ADR-0027 §4.6).
 		go r.runSuffixClaimReconcileLoop(ctx, db, logger)
 	}
 	if r.Routes != nil && r.RouteCaddy != nil {
@@ -309,21 +349,36 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 // to catch the DHCP lease landing after the event), and a periodic pass every
 // 30s guarantees convergence across missed events and restarts. Errors are
 // logged and the loop continues; it stops when ctx is cancelled.
-func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger) {
+func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger, zones *zoneReconciler) {
 	const interval = 30 * time.Second
 	reconcile := func() {
-		if err := r.DNSReconcile(ctx); err != nil {
-			logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
+		if r.DNSReconcile != nil {
+			if err := r.DNSReconcile(ctx); err != nil {
+				logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
+			}
+		}
+		if zones != nil {
+			if err := zones.Reconcile(ctx); err != nil {
+				logger.Message(ctx, "ERROR", "auth-app zone reconcile: %v", err)
+			}
 		}
 	}
-	if r.DNSEvents != nil {
-		trigger := make(chan struct{}, 1)
-		go r.DNSEvents(ctx, func() {
-			select {
-			case trigger <- struct{}{}:
-			default:
-			}
-		})
+	trigger := make(chan struct{}, 1)
+	notify := func() {
+		select {
+		case trigger <- struct{}{}:
+		default:
+		}
+	}
+	if zones != nil {
+		// A finished order kicks the loop so the push does not wait for the
+		// ticker.
+		zones.kick = notify
+	}
+	if r.DNSEvents != nil || zones != nil {
+		if r.DNSEvents != nil {
+			go r.DNSEvents(ctx, notify)
+		}
 		go func() {
 			for {
 				select {
@@ -597,6 +652,28 @@ CREATE TABLE IF NOT EXISTS routes (
     local_port INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+-- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 2: zone registry ─────────
+CREATE TABLE IF NOT EXISTS public_dns_zones (
+    zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)
+    cloudflare_zone    TEXT NOT NULL DEFAULT '',  -- the Cloudflare zone containing it, resolved at add time ('' = zone itself)
+    cloudflare_zone_id TEXT NOT NULL,             -- resolved at add time
+    encrypted_token    TEXT NOT NULL,             -- AES-GCM under the public_dns_zone_key deployment key (secrets.go)
+    created_by         TEXT NOT NULL DEFAULT '',  -- admin user key
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+-- ── end Public DNS Zones slice 2 ───────────────────────────────────────────
+-- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 3: Project Domain claims ──
+CREATE TABLE IF NOT EXISTS project_domain_claims (
+    domain     TEXT PRIMARY KEY,                  -- normalized Project Domain
+    tenant     TEXT NOT NULL,
+    project    TEXT NOT NULL,                     -- short project name
+    zone       TEXT NOT NULL REFERENCES public_dns_zones(zone),
+    user_key   TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (tenant, project)                      -- one domain per project
+);
+-- ── end Public DNS Zones slice 3 ───────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS logs_user_ts ON logs(user_key, ts);
 CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);
 INSERT INTO auth_app_meta (key, value, updated_at)
@@ -637,6 +714,15 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 		return err
 	}
 	if err := migrateCloudIdentityConfigsTenantScope(ctx, db); err != nil {
+		return err
+	}
+	// Public DNS Zones: a zone may live inside its Cloudflare zone; databases
+	// from before the column carry '' and are read as "the zone itself".
+	if err := ensureColumn(ctx, db, "public_dns_zones", "cloudflare_zone", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Public DNS Zones slice 5 (ADR-0027): acme_storage + machine_certificates.
+	if err := migrateACME(ctx, db); err != nil {
 		return err
 	}
 	return nil
@@ -783,13 +869,17 @@ type HandlerOptions struct {
 	Routes              RouteBackend
 	RouteCaddy          CaddyController
 	ACMEEmail           string
-	AuthIngressMode     string
-	RouteBaseDomain     string
-	RouteIngress        string
-	RouteCNAMETarget    string
-	RouteTLS            string
-	RouteDNSProvider    string
-	RouteDNSWildcards   []string
+	// ACMEDirectory is the running --acme-directory (normalized); it is the
+	// directory_url stamped on machine_certificates rows.
+	ACMEDirectory         string
+	ProjectDomainResolver ProjectDomainResolver
+	AuthIngressMode       string
+	RouteBaseDomain       string
+	RouteIngress          string
+	RouteCNAMETarget      string
+	RouteTLS              string
+	RouteDNSProvider      string
+	RouteDNSWildcards     []string
 	// RouteResolveHost overrides how a custom hostname's DNS is checked for the
 	// awaiting-dns status. Optional; nil uses a real DNS lookup. Injected in tests.
 	RouteResolveHost func(ctx context.Context, host string) bool
@@ -811,6 +901,18 @@ type HandlerOptions struct {
 	// ResourceCacheMachineRenderer converts a cached instance into a
 	// meta.Machine; required whenever ResourceCache is set.
 	ResourceCacheMachineRenderer ResourceCacheMachineRenderer
+	// CloudflareZones validates a Public DNS Zone token at add/set-token
+	// (ADR-0027). nil uses the real Cloudflare API; tests inject a fake.
+	CloudflareZones CloudflareZoneValidator
+	// ProjectDomainClaims answers which Project Domains are claimed under a
+	// zone (the remove refusal, the list CLAIMS column). nil uses the
+	// project_domain_claims table; tests inject a fake.
+	ProjectDomainClaims ProjectDomainClaimSource
+	// ProjectDomains is the Incus seam for Project Domains (ADR-0027): it
+	// stamps KeyV2Domain + re-renders the profile, lists zone-mode machines,
+	// creates a project with a domain and deletes a project. nil means the
+	// domain verbs answer 501 ("not available on this deployment").
+	ProjectDomains TenantProjectDomainManager
 }
 
 // TenantProjectCreator creates an app project for a tenant and extends the
@@ -850,6 +952,8 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		routes:                handlerOptions.Routes,
 		routeCaddy:            handlerOptions.RouteCaddy,
 		acmeEmail:             strings.TrimSpace(handlerOptions.ACMEEmail),
+		acmeDirectory:         handlerACMEDirectory(handlerOptions.ACMEDirectory),
+		projectDomainResolver: handlerOptions.ProjectDomainResolver,
 		authIngressMode:       strings.TrimSpace(handlerOptions.AuthIngressMode),
 		routeBaseDomain:       strings.Trim(strings.TrimSpace(handlerOptions.RouteBaseDomain), "."),
 		routeIngress:          strings.TrimSpace(handlerOptions.RouteIngress),
@@ -863,6 +967,13 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		releases:              &releaseCache{resolve: handlerOptions.ReleaseResolver},
 		resourceCache:         handlerOptions.ResourceCache,
 		resourceCacheRenderer: handlerOptions.ResourceCacheMachineRenderer,
+		cloudflareZones:       handlerOptions.CloudflareZones,
+		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
+		projectDomains:        handlerOptions.ProjectDomains,
+	}
+	if app.projectDomainResolver == nil && app.db != nil {
+		// Slice 3 landed the claims table: it is the production resolver.
+		app.projectDomainResolver = sqlProjectDomainClaims{db: app.db}
 	}
 	if app.githubClient == nil {
 		if app.simulateToken != "" {
@@ -889,6 +1000,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/cloud-identities", app.cloudIdentitiesAPI)
 	mux.HandleFunc("/api/tenants", app.tenantsAPI)
 	mux.HandleFunc("/api/projects", app.projectsAPI)
+	mux.HandleFunc("/api/projects/", app.projectAPI)
 	mux.HandleFunc("/api/resources", app.resourcesAPI)
 	// Tenant Storage Shares are not yet supported on v2 (#70): the registry lives
 	// in a user-writable /workspace file a tenant can forge, so every share
@@ -906,8 +1018,11 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/device/poll", app.devicePoll)
 	mux.HandleFunc("/api/workload/enable", app.workloadEnable)
 	mux.HandleFunc("/api/routes", app.routesAPI)
+	mux.HandleFunc("/api/machine-certificates", app.machineCertificatesAPI)
 	mux.HandleFunc("/api/routes/ask", app.routesAsk)
 	mux.HandleFunc("/api/routes/config", app.routesConfig)
+	mux.HandleFunc("/api/public-dns-zones", app.publicDNSZonesAPI)
+	mux.HandleFunc("/api/public-dns-zones/", app.publicDNSZoneAPI)
 	mux.HandleFunc("/device", app.deviceApprove)
 	if app.debugDeviceUser != "" {
 		mux.HandleFunc("/debug/device/approve", app.debugDeviceApprove)
@@ -974,6 +1089,8 @@ type handler struct {
 	routes                RouteBackend
 	routeCaddy            CaddyController
 	acmeEmail             string
+	acmeDirectory         string
+	projectDomainResolver ProjectDomainResolver
 	authIngressMode       string
 	routeBaseDomain       string
 	routeIngress          string
@@ -987,6 +1104,9 @@ type handler struct {
 	releases              *releaseCache
 	resourceCache         *ResourceCache
 	resourceCacheRenderer ResourceCacheMachineRenderer
+	cloudflareZones       CloudflareZoneValidator
+	projectDomainClaims   ProjectDomainClaimSource
+	projectDomains        TenantProjectDomainManager
 }
 
 // projectsAPI is the tunnel-friendly tenant plane for project creation
@@ -1007,9 +1127,7 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	var request struct {
-		Project string `json:"project"`
-	}
+	var request ProjectCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1017,6 +1135,13 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 	project := strings.TrimSpace(request.Project)
 	if err := naming.ValidateNewProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(request.Domain) != "" || request.DryRun {
+		// The Project Domain path (ADR-0027 §3.2): claim first, then create
+		// with KeyV2Domain in the same Incus request; JSON error bodies so the
+		// CLI prints the verbatim refusal.
+		h.projectCreateWithDomain(w, r, user, project, request)
 		return
 	}
 	clientCertificatePEM, _ := GetUserClientCertificate(r.Context(), h.db, user.UserKey)

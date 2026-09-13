@@ -13,9 +13,15 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
-// v2MachineNames lists every name a v2 machine answers at: its Machine Private
-// Hostname, plus the short alias the default project also serves (ADR-0018).
-func v2MachineNames(summary tenant.Summary, project string, machine string) []string {
+// v2MachineNames lists every name a v2 machine answers at. A zone-mode machine
+// (ADR-0027) answers at exactly its Machine Public Hostname — it has no
+// Machine Private Hostname and no short alias. A private-mode machine
+// (publicHostname empty) answers at its Machine Private Hostname, plus the
+// short alias the default project also serves (ADR-0018).
+func v2MachineNames(summary tenant.Summary, project string, machine string, publicHostname string) []string {
+	if publicHostname = strings.TrimSpace(publicHostname); publicHostname != "" {
+		return []string{publicHostname}
+	}
 	suffix := strings.TrimSpace(summary.DNSSuffix)
 	if suffix == "" {
 		return nil
@@ -197,8 +203,8 @@ func toHostKeys(found []incusx.HostKey) []hostkeys.Key {
 // reclaims the machine's names from stale untagged entries and purges recycled
 // private-IP debris. Returns false when no key could be obtained at all, in
 // which case the caller must fall back to accept-new.
-func ensureV2HostKey(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machineName string, privateIP string, privateCIDR string) bool {
-	names := v2MachineNames(summary, project, machineName)
+func ensureV2HostKey(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machineName string, publicHostname string, privateIP string, privateCIDR string) bool {
+	names := v2MachineNames(summary, project, machineName, publicHostname)
 	keysConfig := hostKeysConfig(config, summary, privateCIDR)
 	if len(names) == 0 || keysConfig.Path == "" {
 		verboseCLI(config, "host key: no hostname or known_hosts path; leaving host key handling to ssh")

@@ -51,9 +51,69 @@ sc project status backend
 sc project delete backend --yes
 ```
 
-`sc project delete` requires the project to be empty. Per-project settings:
-`set-cloud-identity` / `unset-cloud-identity` (default Cloud Identity Config for
-new machines) and `set-docker-autostart <name> on|off`.
+`sc project delete` requires the project to be empty. After `sc login` it goes
+through the Auth App (`DELETE /api/projects/<name>`), which releases the
+project's Project Domain claim and deletes the Incus project with admin rights;
+without a login it deletes directly, which a restricted tenant certificate
+cannot. Per-project settings: `set-cloud-identity` / `unset-cloud-identity`
+(default Cloud Identity Config for new machines) and
+`set-docker-autostart <name> on|off`.
+
+### Project Domains (ADR-0027)
+
+```bash
+sc project create zp --domain baum.hase.de   # claim + create; the admin must have registered hase.de
+sc project set-domain zp baum.hase.de        # claim for an existing project, or replace its domain
+sc project unset-domain zp                   # release it; new machines are private again
+sc project status zp                         # Domain: baum.hase.de   (zone hase.de) + MACHINE/PUBLIC NAME/CERT table
+```
+
+- Every machine created in the project **after** the claim gets the Machine
+  Public Hostname `<machine>.<domain>`; machines created before keep their
+  private name. Naming Mode is per machine and never changes.
+- Claims are install-wide and first-come. Refusals are verbatim: a cross-tenant
+  overlap never names the owner (`… overlaps a domain already claimed on this
+  install; choose another`); a same-tenant overlap does (`… overlaps "<d>"
+  claimed by project "<p>" in this tenant`); a Public Route hostname or the
+  install's own names give `… is reserved by this install`; no zone gives
+  `no Public DNS Zone covers <domain> — ask your admin`; the apex gives `… is a
+  zone apex; claim at least one label below <zone>`.
+- `set-domain`/`unset-domain` are refused while the project has machines with a
+  public name (`project <p> has machines with a public name: …; delete them
+  before changing the project domain`). Re-claiming the same domain is a no-op.
+- The verbs need `sc login`; on a broker-only install they print `--domain is
+  not available on this install`. All take `--dry-run`.
+- `sc create` in a zone project stamps `user.sandcastle.v2.public-hostname`
+  (= `<machine>.<domain>`; `private` in a private project) on the instance in
+  the create call and prints `Public name: <m>.<d> (A record pending,
+  certificate pending — see: sc project status <p>)` instead of the `DNS:`
+  line; `--bare` adds `HTTPS: https://<m>.<d>   (Let's Encrypt, certificate
+  pending)`; a Dev Image machine prints `(A record pending; no Caddy — no
+  certificate)`. Read the mode back with `sc ls` (FQDN + CERT columns) or
+  `sc incus config get <m> user.sandcastle.v2.public-hostname` — never guess it
+  from the project's current domain.
+- On the machine, `caddy-setup` (payload, `MODE=zone` from
+  `/etc/sandcastle/machine.env`) skips the sidecar leaf, writes the Caddyfile for
+  `<m>.<d>, *.<m>.<d>` against `/etc/sandcastle/tls/{cert,key}.pem`, adds a
+  `ConditionPathExists=` drop-in, enables Caddy, and writes the Caddy Setup
+  Marker `/etc/sandcastle/caddy.ready` (`MODE=`/`FQDN=`) last. Caddy stays
+  enabled-inactive until the Auth App pushes the certificate.
+- The Auth App's zone reconciler (30 s + instance events) does the rest with
+  no operator step: public `A` records for `<m>.<d>` and `*.<m>.<d>` (DNS-only,
+  tenant-bridge IP; stopped machines keep them, deleted ones lose them), one
+  Let's Encrypt order per machine via DNS-01 (max 4 at once, backoff 1m → 6h
+  on failure, ARI-timed renewal with a fresh key), the cert + key push once the
+  marker names the hostname (`instance-started` re-pushes a stopped machine
+  within seconds), a per-pass fingerprint drift check, and the mirror into
+  `user.sandcastle.v2.cert-state` / `cert-not-after` that `sc ls` and
+  `sc project status` read. Freeform `incus launch` machines are stamped with
+  their public name on first sight and treated the same; a Dev Image machine
+  gets an A record but no certificate (no Caddy, no marker). Deleting a machine
+  retains its certificate row until expiry, so recreating it with the same
+  name reuses the certificate without a new order. Diagnosis:
+  `reference/troubleshooting.md`.
+- `sc connect` dials the bridge IP but keys `known_hosts` by the public name
+  (`HostKeyAlias=<m>.<d>`); a zone machine has no private name or short alias.
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

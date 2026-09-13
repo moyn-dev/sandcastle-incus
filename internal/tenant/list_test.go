@@ -313,6 +313,35 @@ func TestV2SummaryReportsDefaultProject(t *testing.T) {
 	}
 }
 
+// A project's Project Domain (ADR-0027) rides on its own kind=project Incus
+// project; the summary surfaces it so `sc project status` / `sc create` need
+// no second call. A project without the key is a private-mode project.
+func TestListSurfacesProjectDomain(t *testing.T) {
+	store := MemoryStore{Projects: []IncusProject{
+		{Name: "sc2-acme-default", Config: map[string]string{
+			meta.KeyKind: meta.KindV2Project, meta.KeyTenant: "acme", meta.KeyVersion: "2",
+		}},
+		{Name: "sc2-acme-zp", Config: map[string]string{
+			meta.KeyKind: meta.KindV2Project, meta.KeyTenant: "acme", meta.KeyVersion: "2",
+			meta.KeyV2Domain: " baum.hase.de ",
+		}},
+	}}
+	summaries, err := List(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || len(summaries[0].Projects) != 2 {
+		t.Fatalf("summaries = %#v", summaries)
+	}
+	projects := summaries[0].Projects
+	if projects[0].Name != "default" || projects[0].Domain != "" {
+		t.Fatalf("default project = %#v, want no domain", projects[0])
+	}
+	if projects[1].Name != "zp" || projects[1].Domain != "baum.hase.de" {
+		t.Fatalf("zp project = %#v, want domain baum.hase.de", projects[1])
+	}
+}
+
 // v2ProjectsForTest is the v2 fixture: a kind=infra project carrying the /24,
 // plus one kind=project app project per name.
 func v2ProjectsForTest(name, cidr string, projects ...string) []IncusProject {

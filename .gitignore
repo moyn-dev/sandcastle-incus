@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .env.*
+!.env.e2e.sample
 .secrets
 !.env.default
 /bin/

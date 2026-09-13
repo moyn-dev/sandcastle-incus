@@ -27,6 +27,20 @@ type Config struct {
 	Tailscale     TailscaleConfig
 	Images        ImageConfig
 	Auth          AuthConfig
+	PublicDNSZone PublicDNSZoneConfig
+}
+
+// PublicDNSZoneConfig gates e2e Phase 12 (Public DNS Zones, ADR-0027): a real
+// Cloudflare zone the token can edit, ordered against Let's Encrypt STAGING.
+// Both values absent → the phase is skipped, never failed.
+type PublicDNSZoneConfig struct {
+	CloudflareToken string // SANDCASTLE_E2E_CLOUDFLARE_TOKEN
+	Zone            string // SANDCASTLE_E2E_PUBLIC_DNS_ZONE
+}
+
+// Configured reports whether both Phase 12 gate variables are set.
+func (c PublicDNSZoneConfig) Configured() bool {
+	return c.CloudflareToken != "" && c.Zone != ""
 }
 
 type AuthConfig struct {
@@ -95,6 +109,10 @@ func LoadConfig() Config {
 		Auth: AuthConfig{
 			Host:      os.Getenv("SANDCASTLE_E2E_AUTH_HOST"),
 			DebugUser: getenv("SANDCASTLE_E2E_DEBUG_USER", "thieso2"),
+		},
+		PublicDNSZone: PublicDNSZoneConfig{
+			CloudflareToken: strings.TrimSpace(os.Getenv("SANDCASTLE_E2E_CLOUDFLARE_TOKEN")),
+			Zone:            strings.ToLower(strings.TrimSuffix(strings.TrimSpace(os.Getenv("SANDCASTLE_E2E_PUBLIC_DNS_ZONE")), ".")),
 		},
 	}
 }

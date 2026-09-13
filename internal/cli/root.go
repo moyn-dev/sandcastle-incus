@@ -75,6 +75,11 @@ type commandConfig struct {
 	authShares         authShareClient
 	authRoutes         authRouteClient
 	authResources      authResourceClient
+	authPublicDNSZones authPublicDNSZoneClient
+	// authMachineCertificates overrides the Auth App client `sc create` uses
+	// to order a zone-mode machine's certificate (ADR-0027). nil = a
+	// DeviceClient for the logged-in Auth Hostname; injected in tests.
+	authMachineCertificates authMachineCertificateClient
 	// routeHostResolver overrides the DNS probe `sc route` uses to warn about a
 	// missing wildcard. nil = a real lookup; injected in tests so they never
 	// touch the network. Mirrors authapp's RouteResolveHost seam.
@@ -140,8 +145,14 @@ type authResourceClient interface {
 	ListResources(context.Context, authapp.ResourceListRequest) (authapp.ResourceListResult, error)
 }
 
+// authProjectClient is the token-gated tenant plane for projects: creation
+// (with an optional Project Domain, ADR-0027), the domain verbs and deletion.
 type authProjectClient interface {
-	CreateProject(context.Context, string) (projectbroker.ProjectResult, error)
+	CreateProject(context.Context, authapp.ProjectCreateRequest) (projectbroker.ProjectResult, error)
+	GetProjectDomain(context.Context, string) (authapp.ProjectDomainResult, error)
+	SetProjectDomain(ctx context.Context, project, domain string, dryRun bool) (authapp.ProjectDomainResult, error)
+	UnsetProjectDomain(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
+	DeleteProject(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
 }
 
 type authRouteClient interface {

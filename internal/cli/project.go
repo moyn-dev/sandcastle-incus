@@ -23,6 +23,8 @@ func newProjectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command.AddCommand(newProjectSwitchCommand(config, opts))
 	command.AddCommand(newProjectCreateV2Command(config, opts))
 	command.AddCommand(newProjectStatusCommand(config, opts))
+	command.AddCommand(newProjectSetDomainCommand(config, opts))
+	command.AddCommand(newProjectUnsetDomainCommand(config, opts))
 	command.AddCommand(newProjectSetCloudIdentityCommand(config, opts))
 	command.AddCommand(newProjectUnsetCloudIdentityCommand(config, opts))
 	command.AddCommand(newProjectSetDockerAutostartCommand(config, opts))
@@ -178,6 +180,22 @@ type projectStatusPayload struct {
 	Tenant       tenant.Summary `json:"tenant"`
 	Project      meta.Project   `json:"project"`
 	MachineCount int            `json:"machineCount"`
+	// Domain and Zone are the project's Project Domain and the Public DNS
+	// Zone it is claimed under (ADR-0027); Zone is read from the Auth App and
+	// stays empty when the CLI has no login.
+	Domain string `json:"domain,omitempty"`
+	Zone   string `json:"zone,omitempty"`
+	// Machines is the per-machine public-name table of a domain project.
+	Machines []projectMachineStatus `json:"machines,omitempty"`
+}
+
+// projectMachineStatus is one row of `sc project status`'s machine table.
+type projectMachineStatus struct {
+	Machine        string `json:"machine"`
+	PublicHostname string `json:"publicHostname,omitempty"`
+	CertState      string `json:"certState,omitempty"`
+	CertNotAfter   string `json:"certNotAfter,omitempty"`
+	Detail         string `json:"detail,omitempty"`
 }
 
 func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -197,20 +215,144 @@ func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if !ok {
 				return fmt.Errorf("Sandcastle project %s not found in tenant %s", args[0], tenantSummary.Tenant)
 			}
-			count := 0
+			payload := projectStatusPayload{
+				Tenant:  tenantSummary,
+				Project: project,
+				Domain:  project.Domain,
+			}
 			for _, machine := range machines {
-				if machine.Project == project.Name {
-					count++
+				if machine.Project != project.Name {
+					continue
+				}
+				payload.MachineCount++
+				if project.Domain != "" {
+					payload.Machines = append(payload.Machines, projectMachineStatusOf(machine))
 				}
 			}
-			payload := projectStatusPayload{
-				Tenant:       tenantSummary,
-				Project:      project,
-				MachineCount: count,
+			if project.Domain != "" && projectAuthAppAvailable(config, "") {
+				// The zone lives on the claim row, not on Incus: best-effort,
+				// the status still renders without it.
+				if claim, err := projectAuthClient(config).GetProjectDomain(cmd.Context(), project.Name); err == nil {
+					payload.Zone = claim.Zone
+				}
 			}
 			return writeOutput(config.stdout, opts.output, formatProjectNamespaceStatus(payload), payload)
 		},
 	}
+}
+
+// projectMachineStatusOf renders one machine for the status table: private
+// machines show "private mode"; a failed certificate carries its reason.
+func projectMachineStatusOf(machine meta.Machine) projectMachineStatus {
+	row := projectMachineStatus{Machine: machine.Name, PublicHostname: machine.PublicHostname}
+	if machine.PublicHostname == "" {
+		row.Detail = "private mode"
+		return row
+	}
+	row.CertState = machine.CertState
+	if row.CertState == "" {
+		row.CertState = meta.CertStatePending
+	}
+	row.CertNotAfter = machine.CertNotAfter
+	if strings.HasPrefix(row.CertState, meta.CertStateFailedPrefix) {
+		row.Detail = strings.TrimPrefix(row.CertState, meta.CertStateFailedPrefix)
+		row.CertState = "failed"
+	}
+	return row
+}
+
+// projectDomainVerbsUnavailable is the broker-only refusal of set-domain and
+// unset-domain — the same sentence as the create flag's, since the cause is
+// the same: no Auth App login to claim through.
+const projectDomainVerbsUnavailable = "--domain is not available on this install"
+
+func newProjectSetDomainCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use:   "set-domain name domain",
+		Short: "Claim (or replace) the Project Domain of a project",
+		Long: `Claim a Project Domain for an existing project (ADR-0027). Refused while the
+project has machines with a public name — a machine's Naming Mode is fixed at
+creation. Private machines are untouched; machines created afterwards get the
+public name <machine>.<domain>.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := strings.TrimSpace(args[0])
+			if err := naming.ValidateProjectName(project); err != nil {
+				return err
+			}
+			domainValue, err := authapp.NormalizeProjectDomain(args[1])
+			if err != nil {
+				return err
+			}
+			if !projectAuthAppAvailable(config, "") {
+				return fmt.Errorf("%s", projectDomainVerbsUnavailable)
+			}
+			result, err := projectAuthClient(config).SetProjectDomain(cmd.Context(), project, domainValue, dryRun)
+			if err != nil {
+				return err
+			}
+			return writeOutput(config.stdout, opts.output, formatProjectDomainResult("set-domain", result), result)
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate the claim (zone, conflicts, machines) without changing anything")
+	return command
+}
+
+func newProjectUnsetDomainCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use:   "unset-domain name",
+		Short: "Release the Project Domain of a project",
+		Long: `Release a project's Project Domain (ADR-0027) so new machines are private
+again. Refused while the project has machines with a public name.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := strings.TrimSpace(args[0])
+			if err := naming.ValidateProjectName(project); err != nil {
+				return err
+			}
+			if !projectAuthAppAvailable(config, "") {
+				return fmt.Errorf("%s", projectDomainVerbsUnavailable)
+			}
+			result, err := projectAuthClient(config).UnsetProjectDomain(cmd.Context(), project, dryRun)
+			if err != nil {
+				return err
+			}
+			return writeOutput(config.stdout, opts.output, formatProjectDomainResult("unset-domain", result), result)
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "check the release (machines) without changing anything")
+	return command
+}
+
+// formatProjectDomainResult renders the domain verbs' outcome. The
+// same-project identical re-claim is a no-op with its own §2.2 text.
+func formatProjectDomainResult(verb string, result authapp.ProjectDomainResult) string {
+	var what string
+	switch verb {
+	case "set-domain":
+		if result.AlreadyClaimed {
+			return fmt.Sprintf("project domain %q already claimed by this project", result.Domain)
+		}
+		what = fmt.Sprintf("claimed project domain %s (zone %s) for project %s", result.Domain, result.Zone, result.Project)
+	case "unset-domain":
+		if result.Released == "" {
+			what = fmt.Sprintf("project %s has no project domain to release", result.Project)
+		} else {
+			what = fmt.Sprintf("released project domain %s from project %s", result.Released, result.Project)
+		}
+	default:
+		if result.Released != "" {
+			what = fmt.Sprintf("deleted project %s and released project domain %s", result.Project, result.Released)
+		} else {
+			what = fmt.Sprintf("deleted project %s", result.Project)
+		}
+	}
+	if result.DryRun {
+		return "[dry-run] would have: " + what
+	}
+	return what
 }
 
 func newProjectDeleteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -242,6 +384,20 @@ func newProjectDeleteCommand(config commandConfig, opts *rootOptions) *cobra.Com
 				return err
 			}
 			plan.Tenant = tenantSummary
+			if projectAuthAppAvailable(config, "") {
+				// The tenant plane (ADR-0027 §3.2): DELETE /api/projects/<name>
+				// releases the Project Domain claim, then deletes the Incus
+				// project with admin credentials — a restricted tenant
+				// certificate cannot. Falls through to the direct path only
+				// when the deployment has no delete endpoint.
+				result, err := projectAuthClient(config).DeleteProject(cmd.Context(), args[0], dryRun)
+				if err == nil {
+					return writeOutput(config.stdout, opts.output, formatProjectDomainResult("delete", result), result)
+				}
+				if !strings.Contains(err.Error(), "not available on this deployment") {
+					return err
+				}
+			}
 			if !dryRun {
 				// Deleting the Incus project IS the deletion: a tenant's project
 				// list is derived from its Incus projects. This used to only
@@ -252,11 +408,11 @@ func newProjectDeleteCommand(config commandConfig, opts *rootOptions) *cobra.Com
 				}
 				if err := config.projectDeleter.DeleteProjectV2(cmd.Context(), tenantSummary.V2IncusProjectName(args[0]), config.adminConfig.StoragePool); err != nil {
 					// A tenant's restricted certificate may not delete an Incus
-					// project, and the tenant plane has no delete endpoint yet
-					// (it exposes POST /api/projects only). Say so, rather than
+					// project; without an Auth App login the tenant plane's
+					// delete endpoint is out of reach. Say so, rather than
 					// surfacing a bare "Certificate is restricted".
 					if strings.Contains(err.Error(), "restricted") || strings.Contains(err.Error(), "not authorized") {
-						return fmt.Errorf("deleting a project needs admin rights: your tenant certificate is restricted and the Auth App has no project-delete endpoint yet.\nAsk an admin to run: sc-adm project delete %s %s --yes", tenantSummary.Tenant, args[0])
+						return fmt.Errorf("deleting a project needs admin rights: your tenant certificate is restricted (run sc login so `sc project delete` can use the Auth App).\nOr ask an admin to run: sc-adm project delete %s %s --yes", tenantSummary.Tenant, args[0])
 					}
 					return err
 				}
@@ -443,7 +599,53 @@ func formatProjectNamespaceStatus(status projectStatusPayload) string {
 	if status.Project.DockerAutostart {
 		fmt.Fprintln(&builder, "Docker autostart: on")
 	}
-	fmt.Fprintf(&builder, "Machines: %d", status.MachineCount)
+	fmt.Fprintf(&builder, "Machines: %d\n", status.MachineCount)
+	if status.Domain == "" {
+		fmt.Fprint(&builder, "Domain: (none)")
+		return builder.String()
+	}
+	fmt.Fprintf(&builder, "Domain: %s", status.Domain)
+	if status.Zone != "" {
+		fmt.Fprintf(&builder, "   (zone %s)", status.Zone)
+	}
+	if len(status.Machines) == 0 {
+		return builder.String()
+	}
+	fmt.Fprintln(&builder)
+	table := [][]string{{"MACHINE", "PUBLIC NAME", "CERT", "NOT AFTER", "DETAIL"}}
+	for _, m := range status.Machines {
+		table = append(table, []string{m.Machine, orDash(m.PublicHostname), orDash(m.CertState), orDash(m.CertNotAfter), m.Detail})
+	}
+	fmt.Fprint(&builder, formatAlignedTable(table))
+	return builder.String()
+}
+
+// formatAlignedTable renders rows as space-aligned columns (two spaces between
+// columns, no trailing spaces).
+func formatAlignedTable(rows [][]string) string {
+	widths := map[int]int{}
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+	var builder strings.Builder
+	for r, row := range rows {
+		line := ""
+		for i, cell := range row {
+			if i == len(row)-1 {
+				line += cell
+			} else {
+				line += fmt.Sprintf("%-*s  ", widths[i], cell)
+			}
+		}
+		builder.WriteString(strings.TrimRight(line, " "))
+		if r < len(rows)-1 {
+			builder.WriteString("\n")
+		}
+	}
 	return builder.String()
 }
 

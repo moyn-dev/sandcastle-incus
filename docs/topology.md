@@ -66,6 +66,17 @@ Tenant  (the ownership/identity/infra boundary; handle = GitHub username for
   registers every running machine automatically. The Tenant DNS Suffix is
   tenant-chosen, single-label, and immutable — it defaults to the tenant name but
   is not required to equal it.
+- **A second DNS authority for public names (ADR-0027).** A project may claim a
+  Project Domain under a Cloudflare-hosted Public DNS Zone the admin registered;
+  machines created in it afterwards carry the Machine Public Hostname
+  `<machine>.<domain>` instead of a private one. The same Auth App reconciler
+  runs a zone stage for those machines: it writes the public `A` records (base +
+  wildcard, DNS-only, pointing at the tenant-bridge address — reachable over the
+  tailnet only), orders one Let's Encrypt certificate per machine centrally via
+  DNS-01 with the zone's token, pushes cert + key into the machine's Caddy, renews
+  on the CA's ARI schedule, and mirrors the certificate state into instance
+  config. The sidecar CoreDNS and the Tenant CA are not involved for such
+  machines; private-mode machines are unchanged.
 
 ## Native `incus`, brokered lifecycle
 
@@ -89,7 +100,7 @@ deployed in one command by `sc-adm install`:
 
 | Appliance | Role |
 |---|---|
-| **Auth App** (`sc2-auth-app`) | GitHub OAuth login + device login; provisions tenants; the OIDC provider for workload identity; the DNS auto-registration reconciler. Terminates its own public hostname (embedded caddy; optional cloudflared for tunnel mode) — no separate edge appliance. |
+| **Auth App** (`sc2-auth-app`) | GitHub OAuth login + device login; provisions tenants; the OIDC provider for workload identity; the DNS auto-registration reconciler and, for projects with a Project Domain, the zone reconciler (public A records, Let's Encrypt Machine Certificates via DNS-01, cert push into machines — ADR-0027). Terminates its own public hostname (embedded caddy; optional cloudflared for tunnel mode) — no separate edge appliance. |
 | **Broker** (`sc2-broker`) | Authorizes and performs tenant + project lifecycle over the host Incus socket. |
 | **Sidecar** (instance `sidecar`, in project `sc2-<tenant>`) | Per tenant: CoreDNS (the tenant zone) + Tailscale subnet-router + the Incus Reach proxy. |
 

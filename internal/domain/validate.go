@@ -89,6 +89,24 @@ func deniedSpecialUseDomain(domain string) string {
 	return ""
 }
 
+// NormalizePublicDNSZone normalizes a Public DNS Zone name (ADR-0027):
+// lowercase, trimmed, one trailing dot stripped, labels validated like every
+// other DNS name on the install. A zone is a registered domain, so it must
+// carry at least two labels — a bare TLD is never a zone an admin can hold.
+func NormalizePublicDNSZone(value string) (string, error) {
+	zone := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if zone == "" {
+		return "", fmt.Errorf("public DNS zone is required")
+	}
+	if err := validateDomainLabels(zone, value, "public DNS zone"); err != nil {
+		return "", err
+	}
+	if !strings.Contains(zone, ".") {
+		return "", fmt.Errorf("invalid public DNS zone %q: a zone needs at least two labels", value)
+	}
+	return zone, nil
+}
+
 func validateDomainLabels(domain string, original string, label string) error {
 	if strings.ContainsAny(domain, "/ ") {
 		return fmt.Errorf("invalid %s %q", label, original)
@@ -105,4 +123,26 @@ func validateDomainLabels(domain string, original string, label string) error {
 		}
 	}
 	return nil
+}
+
+// NormalizeProjectDomain normalizes a Project Domain (ADR-0027): lowercase,
+// trimmed, one trailing dot stripped, ASCII labels only. Labels starting with
+// `_` (service records) or `*` (wildcards) are named explicitly because a
+// tenant will try them; validateDomainLabels would reject them anyway. Zone
+// coverage, apex and length are the Auth App's checks — they need the
+// registry.
+func NormalizeProjectDomain(value string) (string, error) {
+	domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if domain == "" {
+		return "", fmt.Errorf("project domain is required")
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if strings.HasPrefix(label, "_") || strings.HasPrefix(label, "*") {
+			return "", fmt.Errorf("invalid project domain %q: labels may not start with %q", value, label[:1])
+		}
+	}
+	if err := validateDomainLabels(domain, value, "project domain"); err != nil {
+		return "", err
+	}
+	return domain, nil
 }

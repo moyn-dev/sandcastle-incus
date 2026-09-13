@@ -118,6 +118,7 @@ func ExecuteAdmin(name string, args []string) int {
 	authAppTenants := incusx.NewTenantStoreForSharedRemote(sharedRemote)
 	authAppMachines := incusx.NewHostOverrideManagerForSharedRemote(sharedRemote)
 	authAppCreator := incusx.NewTenantCreator(adminConfig.Remote).WithVerbose(verbose, os.Stderr)
+	authAppDeleter := incusx.NewTenantDeleter(adminConfig.Remote).WithVerbose(verbose, os.Stderr)
 	authAppTrust := incusx.NewTrustManager(adminConfig.Remote)
 	authAppSSHKeys := incusx.NewMachineSSHKeyReconciler(adminConfig.Remote, authAppMachines)
 	authAppMetadataUpdater := incusx.TenantSSHKeyManager{Remote: adminConfig.Remote}
@@ -132,12 +133,17 @@ func ExecuteAdmin(name string, args []string) int {
 	// assigned unconditionally would box into a non-nil interface even with a
 	// nil inner server, defeating HTTPRunner's `ResourceCacheServer != nil` gate.
 	var authAppResourceCache authapp.ResourceCacheServer
+	// Same nil-interface care for the Public DNS Zone reconciler seam
+	// (ADR-0027 §4): only the serving appliance runs it.
+	var authAppZoneMachines authapp.ZoneMachineServer
 	if authAppServeArgs(args) {
 		if socketServer, err := adminSocketServer(); err == nil && socketServer != nil {
 			authAppSocketServer = socketServer
 			authAppTenants = incusx.NewTenantStoreForServer(socketServer)
+			authAppZoneMachines = incusx.NewZoneMachineServer(socketServer, authAppTenants, adminConfig.IncusProjectPrefix)
 			authAppMachines = incusx.NewHostOverrideManagerForServer(socketServer)
 			authAppCreator = incusx.NewTenantCreatorForServer(socketServer).WithVerbose(verbose, os.Stderr)
+			authAppDeleter = incusx.NewTenantDeleterForServer(socketServer).WithVerbose(verbose, os.Stderr)
 			authAppTrust = incusx.NewTrustManagerForServer(socketServer)
 			authAppSSHKeys = incusx.NewMachineSSHKeyReconcilerForServer(socketServer, authAppMachines)
 			authAppMetadataUpdater = incusx.NewTenantSSHKeyManagerForServer(socketServer)
@@ -219,10 +225,19 @@ func ExecuteAdmin(name string, args []string) int {
 				}
 				return authAppDNSReconciler(authAppSocketServer, authAppTenants, adminConfig.IncusProjectPrefix).Reconcile(ctx)
 			},
+			ZoneMachines: authAppZoneMachines,
 			Projects: incusx.ProjectBrokerCreator{
 				Creator: authAppCreator,
 				Trust:   authAppTrust,
 				Prefix:  adminConfig.IncusProjectPrefix,
+			},
+			// The Project Domain seam (ADR-0027): the same scaffolder, plus a
+			// deleter for the tenant-plane DELETE /api/projects/{name}.
+			ProjectDomains: incusx.ProjectBrokerCreator{
+				Creator: authAppCreator,
+				Trust:   authAppTrust,
+				Prefix:  adminConfig.IncusProjectPrefix,
+				Deleter: &authAppDeleter,
 			},
 			DNSEvents: func(ctx context.Context, notify func()) {
 				if authAppSocketServer == nil {
@@ -423,6 +438,7 @@ func NewAdminRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newAdminInstallCommand(config))
 	root.AddCommand(newAdminInstallIncusCommand(config))
 	root.AddCommand(newAdminAuthAppCommand(config))
+	root.AddCommand(newPublicDNSZoneCommand(config, opts))
 	root.AddCommand(newAdminMachineWorkloadCommand(config, opts))
 	root.AddCommand(newConfigCommand(config, opts))
 	root.AddCommand(newSidecarCommand())

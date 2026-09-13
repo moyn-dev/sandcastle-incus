@@ -89,6 +89,15 @@ func UpsertRoute(ctx context.Context, db *sql.DB, route Route) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
+	if !found {
+		// Reverse of the Project Domain conflict scan (ADR-0027 §3.3): a new
+		// custom hostname may not sit inside a claimed Project Domain. The
+		// auto-subdomain path cannot collide — the route base domain is
+		// install-reserved for claims — so this only ever bites custom names.
+		if err := RouteHostnameInsideProjectDomain(ctx, db, route.Hostname); err != nil {
+			return Route{}, err
+		}
+	}
 	if found {
 		if existing.Tenant != route.Tenant {
 			return Route{}, &RouteConflictError{Hostname: route.Hostname, ExistingTenant: existing.Tenant, ExistingMachine: existing.Machine, CrossTenant: true}

@@ -139,3 +139,48 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
   freshens a cloned machine's identity — regenerates SSH host keys + machine-id
   and drops the stale TLS leaf — so children of a base image don't share the
   source machine's identity.
+
+## Public DNS Zones (ADR-0027)
+
+- **Public DNS Zone** — A Cloudflare-hosted public domain (e.g. `hase.de`) an
+  admin registers with the install (`sc-adm public-dns-zone add`, also
+  `sc admin public-dns-zone`) together with an API token (`Zone > DNS > Edit`
+  + `Zone > Zone > Read`, that zone only) the Auth App uses to manage records
+  in it. Zones may not nest; the token is stored encrypted and shown only as
+  a fingerprint.
+- **Project Domain** — The public name a project claims under a Public DNS Zone
+  (`sc project create zp --domain baum.hase.de`, `set-domain`,
+  `unset-domain`; shown by `sc project status`). At least one label below the
+  zone; reserved install-wide, first come, including everything below it. A
+  project without one is a private-mode project.
+- **Machine Public Hostname** — `<machine>.<Project Domain>`: the public DNS
+  name of a machine created in a project that has a Project Domain. Its A
+  records (base + `*.` wildcard, DNS-only) point at the machine's tenant-bridge
+  address, so it is reachable only over the tenant tailnet; distinct from a
+  Public Route, which goes through the edge.
+- **Naming Mode** — The per-machine choice, fixed at creation and recorded in
+  `user.sandcastle.v2.public-hostname`, between `private` (Machine Private
+  Hostname, Tenant CA leaf) and `zone` (Machine Public Hostname, Let's Encrypt
+  certificate). Set by the project's Project Domain at create time; a later
+  `set-domain`/`unset-domain` never changes an existing machine, which is why
+  both are refused while zone-mode machines exist.
+- **Machine Certificate** — The publicly trusted certificate the Auth App orders
+  (Let's Encrypt, DNS-01 with the zone's token, one per machine for
+  `<m>.<d>` + `*.<m>.<d>`), holds, pushes into `/etc/sandcastle/tls/` and
+  renews on the CA's ARI schedule. Its state — `pending`, `issued`,
+  `installed`, `renewing`, `failed:<reason>` — is mirrored into
+  `user.sandcastle.v2.cert-state` (+ `cert-not-after`) and read by `sc ls`
+  (CERT column: `pending` / `ok` / `failed` / `-`) and `sc project status`.
+- **Caddy Setup Marker** — `/etc/sandcastle/caddy.ready` (`MODE=` / `FQDN=`),
+  written last by the payload's `caddy-setup`. The Auth App pushes a
+  certificate only when the marker names the expected Machine Public Hostname;
+  Dev Image machines never write one and never get a certificate.
+- **Zone reconciler** — The zone stage of the Auth App's DNS reconciler (30 s
+  ticker + instance events): stamps Freeform Machines' Naming Mode, writes and
+  prunes the public A records, orders/renews/pushes Machine Certificates, checks
+  for drift, and mirrors the state. Logs as
+  `auth-app zone reconcile: <hostname>: …`.
+- **ACME directory** (`--acme-directory`) — The Let's Encrypt endpoint the
+  install orders Machine Certificates from: production by default,
+  `https://acme-staging-v02.api.letsencrypt.org/directory` for e2e and first
+  runs. Staging and production never mix; switching re-orders every certificate.

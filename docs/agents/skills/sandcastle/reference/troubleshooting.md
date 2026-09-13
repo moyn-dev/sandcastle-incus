@@ -92,6 +92,90 @@ dig +short <machine>.<suffix>          @<tenant-cidr>.3
 - Nothing resolves at all → the sidecar or its tailnet route is down. Check
   `sc tailscale status`.
 
+## A zone-mode machine shows `CERT pending`, Caddy is inactive, or HTTPS refuses
+
+A machine in a project with a Project Domain (`sc ls` FQDN `<m>.<domain>`)
+gets its certificate **pushed by the Auth App's zone reconciler**, not fetched
+at boot. The reconciler runs every 30 s and on instance events; a fresh machine
+normally goes `pending` → (order, 1–3 min with DNS-01 propagation) → `issued` →
+`installed` (`sc ls` CERT `ok`) within about five minutes of cloud-init
+finishing. Until then `pending` and an inactive Caddy are the designed state.
+
+```bash
+sc ls                                                   # FQDN <m>.<domain>, CERT pending|ok|failed
+sc project status <project>                             # per-machine PUBLIC NAME / CERT / NOT AFTER / DETAIL
+sc incus config get <m> user.sandcastle.v2.public-hostname   # the Naming Mode record (never changes)
+sc incus config get <m> user.sandcastle.v2.cert-state   # pending | issued | installed | renewing | failed:<reason>
+sc incus config get <m> user.sandcastle.v2.cert-not-after    # expiry of the INSTALLED certificate
+dig +short <m>.<domain> @1.1.1.1                        # the public A record → tenant-bridge IP
+sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: MODE=zone / FQDN=<m>.<domain>
+sc incus exec <m> -- systemctl is-enabled caddy         # enabled
+sc incus exec <m> -- systemctl is-active caddy          # inactive until the first push, then active
+sc incus exec <m> -- ls /etc/sandcastle/tls             # empty until the push; cert.pem + key.pem after
+openssl s_client -connect <bridge-ip>:443 -servername <m>.<domain> </dev/null 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName -issuer     # both SANs + the Let's Encrypt issuer
+sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
+  journalctl -u sandcastle-auth-app --no-pager | grep "zone reconcile: <m>.<domain>"
+```
+
+Reading the states (`sc project status` CERT column; `sc ls` folds them):
+
+| state | meaning | what to do |
+|---|---|---|
+| `pending` | no certificate yet, no error | wait; check the marker (below) and the auth-app log for the order |
+| `issued` | certificate held by the Auth App, not on the machine yet | machine stopped, or the marker gate refused — start it / check the marker |
+| `installed` | pushed and confirmed; `NOT AFTER` is its expiry | nothing |
+| `renewing` | installed and past the ARI renewal window; a renewal order is due or failing | the old certificate still serves; a `DETAIL` here is the last renewal error |
+| `failed:<reason>` | no valid certificate and the last order failed; in backoff (1m, 5m, 30m, 2h, 6h) | read `DETAIL` (the `<reason>` token) and the auth-app log for the full ACME problem; fix the cause, the reconciler retries on schedule |
+
+`<reason>` is one of `rate-limited` (Let's Encrypt budget — 50 per zone per
+week, 5 per identifier set per week; wait for the window), `dns-propagation`
+(the `_acme-challenge` TXT was not visible in time — resolver or Cloudflare
+lag), `cloudflare-rejected` (the zone token lost DNS:Edit — `sc-adm
+public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
+`other`.
+
+- **Marker missing** (`cat` fails) — cloud-init has not finished
+  (`sc incus exec <m> -- cloud-init status --wait`), the machine is a Dev Image
+  machine (no Caddy, no certificate — by design), or `caddy-setup` failed
+  (`sc incus exec <m> -- journalctl -u cloud-final`). The Auth App never pushes
+  without a marker naming the expected public hostname.
+- **Marker says `MODE=private`** — the machine was created before the domain
+  was claimed. Naming Mode is fixed at creation; recreate the machine.
+- **Caddy `inactive` with the marker present** — expected before the push: the
+  `sandcastle-zone.conf` drop-in makes the start conditional on the certificate
+  files (`systemctl status caddy` shows the `ConditionPathExists` skip, no crash
+  loop). `sc restart <m>` is safe and leaves it inactive again.
+- **`CERT failed`** — `sc project status <project>` DETAIL carries the reason
+  token only; the reconciler retries with backoff (see the table above). The
+  raw error is in the auth-app log line `zone reconcile: <m>.<domain>: order
+  failed: …` (the full ACME problem). No CLI command reads the Auth Database;
+  the row's `last_error` is reachable only with `sqlite3` inside the appliance
+  (`/var/lib/sandcastle/auth/auth.db`, table `machine_certificates`), which the
+  stock image does not carry.
+- **`CERT pending` for every machine of the tenant, with A records present and
+  no marker anywhere** — the tenant's `/.sc` payload predates the zone-aware
+  `caddy-setup` (provisioned by an older binary). Converge it once:
+  `sc payload-sync` (tenant, after `sc update`) or `sc-adm tenant payload-sync
+  <tenant>`; then recreate the affected machines (their setup already ran).
+- **`issued` that never becomes `installed`** — the machine is stopped (start
+  it; `instance-started` pushes within seconds) or the push failed: the log
+  shows `push certificate to … : command exited with status …`; run the
+  `caddy.ready` / `systemctl` checks above.
+- **No A record** (`dig` empty) — the machine has no tenant-bridge address yet
+  (booting; records follow the DHCP lease), the project's domain has no claim
+  row (auth-app log: `carries user.sandcastle.v2.domain without a claim` — run
+  `sc project set-domain`), or the zone token cannot edit DNS (log:
+  `zone <zone>: set … A record(s): …`). A public name answering with a private
+  address is also what DNS-rebind filters drop — allowlist the zone on the
+  resolver.
+- **Certificate serves but `openssl` shows an old serial** — the drift check
+  re-pushes within a pass once the machine is running; if the on-disk
+  `cert.pem` was edited by hand it is overwritten.
+- **Private-mode siblings unreachable over HTTPS from the zone machine** — they
+  should not be: `caddy-setup` still installs the Tenant CA in zone mode. Check
+  `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists.
+
 ## A published route is `awaiting-dns` or serves no certificate
 
 ```bash
