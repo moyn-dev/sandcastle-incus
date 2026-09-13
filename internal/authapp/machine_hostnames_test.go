@@ -126,6 +126,9 @@ func TestClaimMachineHostname_ConflictClasses(t *testing.T) {
 		if _, err := ClaimMachineHostname(ctx, db, req); err != nil {
 			t.Fatalf("a hostname below the route base must be claimable: %v", err)
 		}
+		if _, err := ReleaseMachineHostname(ctx, db, "acme", "zp", "web", "x.routes.hase.de"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
 	}
 	// Siblings never conflict; a same-machine identical re-claim is a no-op.
 	claimHostname(t, db, "web13.tc42.uk", "evil", "x", "m")
