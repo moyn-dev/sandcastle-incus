@@ -57,33 +57,57 @@ func (o fakeExitOperation) Get() api.Operation {
 	return api.Operation{Metadata: map[string]any{"return": o.code}}
 }
 
+// The push lands in the hostname's own directory (created first — the file
+// API makes no parents), swaps both files in one exec, lists the name and
+// runs caddy-setup --refresh. The private leaf paths are never written.
 func TestPushMachineCertificate_FilesAndOneExec(t *testing.T) {
 	server := &fakeCertPushServer{}
-	if err := pushMachineCertificate(server, "web", "CERT\n", "KEY\n", true); err != nil {
+	if err := pushMachineCertificate(server, "web", "Web12.TC42.uk.", "CERT\n", "KEY\n"); err != nil {
 		t.Fatal(err)
 	}
-	cert := server.files["/etc/sandcastle/tls/cert.pem.new"]
-	key := server.files["/etc/sandcastle/tls/key.pem.new"]
-	if cert.Mode != 0o644 || key.Mode != 0o600 || cert.WriteMode != "overwrite" || key.UID != 0 || key.GID != 0 {
-		t.Fatalf("file args: cert=%+v key=%+v", cert, key)
+	dir := server.files["/etc/sandcastle/tls/web12.tc42.uk"]
+	cert := server.files["/etc/sandcastle/tls/web12.tc42.uk/cert.pem.new"]
+	key := server.files["/etc/sandcastle/tls/web12.tc42.uk/key.pem.new"]
+	if dir.Type != "directory" || dir.Mode != 0o755 || cert.Mode != 0o644 || key.Mode != 0o600 || cert.WriteMode != "overwrite" || key.UID != 0 || key.GID != 0 {
+		t.Fatalf("file args: dir=%+v cert=%+v key=%+v", dir, cert, key)
 	}
-	if server.body["/etc/sandcastle/tls/cert.pem.new"] != "CERT\n" || server.body["/etc/sandcastle/tls/key.pem.new"] != "KEY\n" {
+	if server.body["/etc/sandcastle/tls/web12.tc42.uk/cert.pem.new"] != "CERT\n" || server.body["/etc/sandcastle/tls/web12.tc42.uk/key.pem.new"] != "KEY\n" {
 		t.Fatalf("bodies = %+v", server.body)
+	}
+	for path := range server.files {
+		if path == "/etc/sandcastle/tls/cert.pem.new" || path == "/etc/sandcastle/tls/key.pem.new" {
+			t.Fatalf("push wrote the private leaf path %s", path)
+		}
 	}
 	if len(server.execs) != 1 {
 		t.Fatalf("execs = %v, want one", server.execs)
 	}
-	want := "/bin/sh -c mv -f /etc/sandcastle/tls/cert.pem.new /etc/sandcastle/tls/cert.pem && mv -f /etc/sandcastle/tls/key.pem.new /etc/sandcastle/tls/key.pem && (systemctl reload caddy 2>/dev/null || systemctl restart caddy) && systemctl start caddy"
+	want := "/bin/sh -c mv -f /etc/sandcastle/tls/web12.tc42.uk/cert.pem.new /etc/sandcastle/tls/web12.tc42.uk/cert.pem && mv -f /etc/sandcastle/tls/web12.tc42.uk/key.pem.new /etc/sandcastle/tls/web12.tc42.uk/key.pem && (grep -qxF web12.tc42.uk /etc/sandcastle/hostnames 2>/dev/null || echo web12.tc42.uk >> /etc/sandcastle/hostnames) && /usr/local/sbin/sandcastle-caddy-setup --refresh"
 	if server.execs[0] != want {
 		t.Fatalf("exec = %q\nwant  %q", server.execs[0], want)
 	}
-	if strings.HasSuffix(machineCertificateInstallScript(false), "systemctl start caddy") {
-		t.Fatal("a non-first push must not append systemctl start")
+	if err := pushMachineCertificate(server, "web", " ", "CERT\n", "KEY\n"); err == nil {
+		t.Fatal("empty hostname accepted")
 	}
 	// A nonzero exit is an error (op.Wait alone would not report it).
 	server.exit = 1
-	if err := pushMachineCertificate(server, "web", "CERT\n", "KEY\n", false); err == nil || !strings.Contains(err.Error(), "status 1") {
+	if err := pushMachineCertificate(server, "web", "web12.tc42.uk", "CERT\n", "KEY\n"); err == nil || !strings.Contains(err.Error(), "status 1") {
 		t.Fatalf("exit 1 not reported: %v", err)
+	}
+}
+
+// The hostnames push writes the normalized, sorted set whole and refreshes.
+func TestPushMachineHostnames_FileAndRefresh(t *testing.T) {
+	server := &fakeCertPushServer{}
+	if err := pushMachineHostnames(server, "web", []string{"Web12.TC42.uk.", "api.tc42.uk", "web12.tc42.uk"}); err != nil {
+		t.Fatal(err)
+	}
+	file := server.files["/etc/sandcastle/hostnames"]
+	if file.Mode != 0o644 || file.WriteMode != "overwrite" || server.body["/etc/sandcastle/hostnames"] != "api.tc42.uk\nweb12.tc42.uk\n" {
+		t.Fatalf("hostnames file: %+v %q", file, server.body["/etc/sandcastle/hostnames"])
+	}
+	if len(server.execs) != 1 || server.execs[0] != "/bin/sh -c /usr/local/sbin/sandcastle-caddy-setup --refresh" {
+		t.Fatalf("execs = %v", server.execs)
 	}
 }
 

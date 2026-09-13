@@ -97,6 +97,11 @@ func UpsertRoute(ctx context.Context, db *sql.DB, route Route) (Route, error) {
 		if err := RouteHostnameInsideProjectDomain(ctx, db, route.Hostname); err != nil {
 			return Route{}, err
 		}
+		// Same reverse rule for explicit Machine Public Hostnames (ADR-0028):
+		// a hostname reserves itself and its wildcard subtree.
+		if err := RouteHostnameInsideMachineHostname(ctx, db, route.Hostname); err != nil {
+			return Route{}, err
+		}
 	}
 	if found {
 		if existing.Tenant != route.Tenant {

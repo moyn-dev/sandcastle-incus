@@ -218,7 +218,7 @@ sc project status <name>                          # gains Domain: + cert summary
   - no zone: tenant sees `no Public DNS Zone covers <domain> — ask your admin`; the admin roots (`sc-adm project …`, if a domain flag is ever added there) see `no Public DNS Zone covers <domain>; registered zones: <z1>, <z2>`
   - apex: `project domain "<d>" is a zone apex; claim at least one label below <zone>`
   - too long: `project domain "<d>" is too long: "*.<63-char machine>.<d>" must fit in 253 characters`
-  - zone-mode Machines exist (`set-domain`/`unset-domain`): `project <p> has machines with a public name: <m1>, <m2>; delete them before changing the project domain`
+  - ~~zone-mode Machines exist (`set-domain`/`unset-domain`): `project <p> has machines with a public name: <m1>, <m2>; delete them before changing the project domain`~~ — **retired** by ADR-0028 slice 3 (machine-hostnames §6.1): both verbs are allowed with machines; the reconciler re-derives their names
 - Same-project identical re-claim is a no-op (exit 0, `project domain "<d>" already claimed by this project`).
 - `sc project status <name>` output gains, after the existing lines:
 
@@ -387,19 +387,31 @@ try when the window frees — see Open §9 for whether creation should refuse in
 
 ## 4. Reconciler (`internal/incusx/dns_v2.go` + new `internal/authapp/zone_reconcile.go`)
 
+> **Superseded in part by machine-hostnames §6 (ADR-0028, slice 3 of #172).** The unit of work is a
+> (Machine, Machine Public Hostname) pair — the derived name plus every explicit hostname — not a
+> zone-mode Machine. §4.1 (Naming Mode stamp), the "per Machine" reading of §4.2, the record GC of
+> §4.6 and §4.7 (mirroring) are replaced there; §4.3 (orders), §4.4 (push, as amended by
+> machine-hostnames §5.3), §4.5 (drift) and the retention rules of §4.6 still hold per pair.
+
 The existing ADR-0018 pass (30s ticker + lifecycle events) gains a zone stage. The private stage
-skips zone-mode Machines (no private name for them) and is otherwise unchanged. Every per-Machine
-error is collected with `errors.Join` and logged; a pass never fails as a whole.
+serves every Machine's Machine Private Hostname (ADR-0028) and is otherwise unchanged. Every
+per-Machine error is collected with `errors.Join` and logged; a pass never fails as a whole.
 
 ### 4.1 Inputs per pass
 
+> Superseded: machine-hostnames §6.1. The list key `user.sandcastle.v2.public-hostnames` is
+> converged to derived + explicit on every pass (a Freeform Machine is stamped on first sight), the
+> legacy `public-hostname` key is deleted, and `private` is never stamped.
+
 Live: every app project of the install (prefix-scoped) with `KeyV2Domain`, its instances with config
-+ state + bridge IPv4. DB: `project_domain_claims`, `machine_certificates`, `public_dns_zones`.
-Per instance: Naming Mode (§1.1). Unstamped instance in a domain project → stamp
-`KeyV2PublicHostname=<m>.<pd>` (Freeform Machine, first sight); unstamped in a non-domain project →
-stamp `private`.
++ state + bridge IPv4. DB: `project_domain_claims`, `machine_hostnames`, `machine_certificates`,
+`public_dns_zones`.
 
 ### 4.2 A records
+
+> Per (Machine, hostname) since machine-hostnames §6.2: records for every name of a Machine, a zone
+> reconciled when it holds a claim or an explicit hostname, and "managed" records = under a claimed
+> domain or exactly an explicit hostname's base/wildcard.
 
 For each zone-mode Machine with a bridge IPv4: ensure Cloudflare `A <m>.<pd> → <ip>` and
 `A *.<m>.<pd> → <ip>`, `proxied: false`, TTL 60 (the wildcard record is what makes the wildcard SAN
@@ -435,6 +447,10 @@ Machine, `--bare`). A dev-image Machine never writes the marker and never gets a
 
 ### 4.4 Push protocol
 
+> Amended by machine-hostnames §5.3/§5.5: the push targets `/etc/sandcastle/tls/<hostname>/`, the
+> gate is "a per-name marker exists", and the exec ends in `sandcastle-caddy-setup --refresh`
+> instead of a reload (no first-push `systemctl start`).
+
 Trigger: row `issued` (pushed_serial ≠ serial) and the Machine is running and the marker gate passes.
 
 1. `GetInstanceFile("/etc/sandcastle/caddy.ready")` → must parse as `MODE=zone` and
@@ -465,6 +481,11 @@ the trigger set, so this cannot feed back into the loop.
 
 ### 4.6 Garbage collection (slow loop, `suffixClaimReconcileInterval` cadence — 5 min)
 
+> Amended by machine-hostnames §6.2/§6.4/§6.5: the record GC covers all names of a deleted Machine
+> (explicit ones included); a released explicit hostname's records go through
+> `onMachineHostnameReleased` with the row retained; a row is live while its name is a target or
+> still reserved in `machine_hostnames`.
+
 - **Claims**: `project_domain_claims` row whose `<tenant>/<project>` is not a live app project →
   delete the row, delete all A records under the domain, drop its certificate rows (they are retained
   by *hostname*, but a released domain can be re-claimed by another tenant, so its certificates must
@@ -485,14 +506,26 @@ the trigger set, so this cannot feed back into the loop.
 
 ### 4.7 Instance-config mirroring
 
-After each pass the reconciler writes `KeyV2CertState`/`KeyV2CertNotAfter` on every zone-mode instance
-where the derived value changed (compare first; an unchanged fleet makes no `UpdateInstance` calls —
-each write emits `instance-updated`, which the resource cache consumes). `KeyV2PublicHostname` is
-written only when absent (§1.1), never updated.
+> Superseded: machine-hostnames §6.3. `KeyV2CertState` is per hostname (`host=state,…`, sorted),
+> `KeyV2CertNotAfter` the earliest installed expiry; `sc ls` shows the worst state, `sc project
+> status` one row per name. `KeyV2PublicHostname` is no longer written (deleted when seen).
+
+After each pass the reconciler writes `KeyV2CertState`/`KeyV2CertNotAfter` on every instance with a
+public name where the derived value changed (compare first; an unchanged fleet makes no
+`UpdateInstance` calls — each write emits `instance-updated`, which the resource cache consumes).
 
 ## 5. Machine contract
 
-### 5.1 Profile and `machine.env`
+> **Superseded (2026-09-13, ADR-0028 / `docs/spec/machine-hostnames.md` §5).** Naming Mode is
+> retired: there is no `MODE=`, no zone-mode `fqdn:`, no `ConditionPathExists` drop-in and no
+> enabled-inactive Caddy. Every machine keeps its Machine Private Hostname (private leaf at the
+> fixed `/etc/sandcastle/tls` paths, Caddy always started) and additionally serves one site block
+> per Machine Public Hostname from `/etc/sandcastle/tls/<hostname>/`, listed in
+> `/etc/sandcastle/hostnames` (seeded from `PUBLIC_HOSTNAMES=` in `machine.env`); the marker is
+> `PRIVATE=`/`PUBLIC=`/`RENDERED=` and `sandcastle-caddy-setup --refresh` re-renders on a running
+> machine. §5.1–§5.4 below are kept as the historical record of what ADR-0027 shipped; §5.5 stands.
+
+### 5.1 Profile and `machine.env` (superseded)
 
 The project default profile's cloud-init (`V2DefaultProfileUserData`, `create_plan_v2.go`) is rendered
 per project from the project's domain. For a domain project:
@@ -510,7 +543,7 @@ working). `set-domain`/`unset-domain` re-render the profile; existing Machines n
 so they keep their `machine.env` — consistent with Naming Mode being fixed at creation. The `--bare`
 user-data template is rendered the same way.
 
-### 5.2 Mode-aware `caddy-setup` (platform payload `sbin/caddy-setup`, ADR-0022)
+### 5.2 Mode-aware `caddy-setup` (platform payload `sbin/caddy-setup`, ADR-0022) (superseded)
 
 ```bash
 #!/bin/bash
@@ -551,7 +584,7 @@ fi
 The Caddyfile is the same template in both modes — only the site names and where the cert came from
 differ. The same script serves `sc create`, `--bare`, Freeform Machines, containers and VMs.
 
-### 5.3 Caddy Setup Marker
+### 5.3 Caddy Setup Marker (superseded — see machine-hostnames §5.5)
 
 Path `/etc/sandcastle/caddy.ready`, mode 0644, shell-sourceable `KEY=value` lines:
 
@@ -564,7 +597,7 @@ Written once by `caddy-setup` after the Caddyfile and unit drop-ins exist. The r
 parse failure, a missing `MODE`, `MODE=private`, or an `FQDN` that differs from the expected Machine
 Public Hostname as "no marker".
 
-### 5.4 systemd drop-in
+### 5.4 systemd drop-in (superseded — removed)
 
 `/etc/systemd/system/caddy.service.d/sandcastle-zone.conf` with `ConditionPathExists=` for both
 `cert.pem` and `key.pem`. With the condition unmet, `systemctl start` exits 0 and logs a skipped

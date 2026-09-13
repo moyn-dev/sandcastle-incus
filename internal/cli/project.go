@@ -185,17 +185,23 @@ type projectStatusPayload struct {
 	// stays empty when the CLI has no login.
 	Domain string `json:"domain,omitempty"`
 	Zone   string `json:"zone,omitempty"`
-	// Machines is the per-machine public-name table of a domain project.
+	// Machines is the public-name table: one row per (machine, Machine
+	// Public Hostname) — shown when the project has a Project Domain or any
+	// of its machines carries an explicit hostname (ADR-0028).
 	Machines []projectMachineStatus `json:"machines,omitempty"`
 }
 
-// projectMachineStatus is one row of `sc project status`'s machine table.
+// projectMachineStatus is one row of `sc project status`'s table: one
+// Machine Public Hostname of one machine with the state mirrored for it. A
+// machine without a public name has one row with an empty PublicHostname.
 type projectMachineStatus struct {
 	Machine        string `json:"machine"`
 	PublicHostname string `json:"publicHostname,omitempty"`
 	CertState      string `json:"certState,omitempty"`
-	CertNotAfter   string `json:"certNotAfter,omitempty"`
-	Detail         string `json:"detail,omitempty"`
+	// CertNotAfter is the machine's EARLIEST installed expiry (the mirror
+	// carries one value per machine), shown on its installed/renewing rows.
+	CertNotAfter string `json:"certNotAfter,omitempty"`
+	Detail       string `json:"detail,omitempty"`
 }
 
 func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -220,13 +226,21 @@ func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Com
 				Project: project,
 				Domain:  project.Domain,
 			}
+			showTable := project.Domain != ""
+			var projectMachines []meta.Machine
 			for _, machine := range machines {
 				if machine.Project != project.Name {
 					continue
 				}
 				payload.MachineCount++
-				if project.Domain != "" {
-					payload.Machines = append(payload.Machines, projectMachineStatusOf(machine))
+				projectMachines = append(projectMachines, machine)
+				if machine.HasPublicHostname() {
+					showTable = true
+				}
+			}
+			if showTable {
+				for _, machine := range projectMachines {
+					payload.Machines = append(payload.Machines, projectMachineStatusOf(machine)...)
 				}
 			}
 			if project.Domain != "" && projectAuthAppAvailable(config, "") {
@@ -241,24 +255,28 @@ func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Com
 	}
 }
 
-// projectMachineStatusOf renders one machine for the status table: private
-// machines show "private mode"; a failed certificate carries its reason.
-func projectMachineStatusOf(machine meta.Machine) projectMachineStatus {
-	row := projectMachineStatus{Machine: machine.Name, PublicHostname: machine.PublicHostname}
-	if machine.PublicHostname == "" {
-		row.Detail = "private mode"
-		return row
+// projectMachineStatusOf renders one machine for the status table: one row
+// per Machine Public Hostname with the state mirrored for that name (a
+// failed certificate carries its reason); a machine without a public name
+// is one row reading "private name only".
+func projectMachineStatusOf(machine meta.Machine) []projectMachineStatus {
+	names := machine.PublicNames()
+	if len(names) == 0 {
+		return []projectMachineStatus{{Machine: machine.Name, Detail: "private name only"}}
 	}
-	row.CertState = machine.CertState
-	if row.CertState == "" {
-		row.CertState = meta.CertStatePending
+	rows := make([]projectMachineStatus, 0, len(names))
+	for _, name := range names {
+		row := projectMachineStatus{Machine: machine.Name, PublicHostname: name, CertState: machine.CertStateOf(name)}
+		switch {
+		case strings.HasPrefix(row.CertState, meta.CertStateFailedPrefix):
+			row.Detail = strings.TrimPrefix(row.CertState, meta.CertStateFailedPrefix)
+			row.CertState = "failed"
+		case row.CertState == meta.CertStateInstalled || row.CertState == meta.CertStateRenewing:
+			row.CertNotAfter = machine.CertNotAfter
+		}
+		rows = append(rows, row)
 	}
-	row.CertNotAfter = machine.CertNotAfter
-	if strings.HasPrefix(row.CertState, meta.CertStateFailedPrefix) {
-		row.Detail = strings.TrimPrefix(row.CertState, meta.CertStateFailedPrefix)
-		row.CertState = "failed"
-	}
-	return row
+	return rows
 }
 
 // projectDomainVerbsUnavailable is the broker-only refusal of set-domain and
@@ -271,10 +289,11 @@ func newProjectSetDomainCommand(config commandConfig, opts *rootOptions) *cobra.
 	command := &cobra.Command{
 		Use:   "set-domain name domain",
 		Short: "Claim (or replace) the Project Domain of a project",
-		Long: `Claim a Project Domain for an existing project (ADR-0027). Refused while the
-project has machines with a public name — a machine's Naming Mode is fixed at
-creation. Private machines are untouched; machines created afterwards get the
-public name <machine>.<domain>.`,
+		Long: `Claim (or replace) the Project Domain of an existing project (ADR-0027/0028).
+Every machine of the project gets the public name <machine>.<domain> beside its
+Machine Private Hostname: existing machines are re-derived by the zone reconciler
+(records, a new certificate, the hostnames file), a replaced domain's names and
+certificates are released. Explicit hostnames are unaffected.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project := strings.TrimSpace(args[0])
@@ -295,7 +314,7 @@ public name <machine>.<domain>.`,
 			return writeOutput(config.stdout, opts.output, formatProjectDomainResult("set-domain", result), result)
 		},
 	}
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate the claim (zone, conflicts, machines) without changing anything")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate the claim (zone, conflicts) without changing anything")
 	return command
 }
 
@@ -304,8 +323,10 @@ func newProjectUnsetDomainCommand(config commandConfig, opts *rootOptions) *cobr
 	command := &cobra.Command{
 		Use:   "unset-domain name",
 		Short: "Release the Project Domain of a project",
-		Long: `Release a project's Project Domain (ADR-0027) so new machines are private
-again. Refused while the project has machines with a public name.`,
+		Long: `Release a project's Project Domain (ADR-0027/0028). Every machine loses its
+derived <machine>.<domain> name (records and certificates are released; the zone
+reconciler pushes the shrunken hostnames file); explicit hostnames and the Machine
+Private Hostname stay.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project := strings.TrimSpace(args[0])
@@ -602,11 +623,11 @@ func formatProjectNamespaceStatus(status projectStatusPayload) string {
 	fmt.Fprintf(&builder, "Machines: %d\n", status.MachineCount)
 	if status.Domain == "" {
 		fmt.Fprint(&builder, "Domain: (none)")
-		return builder.String()
-	}
-	fmt.Fprintf(&builder, "Domain: %s", status.Domain)
-	if status.Zone != "" {
-		fmt.Fprintf(&builder, "   (zone %s)", status.Zone)
+	} else {
+		fmt.Fprintf(&builder, "Domain: %s", status.Domain)
+		if status.Zone != "" {
+			fmt.Fprintf(&builder, "   (zone %s)", status.Zone)
+		}
 	}
 	if len(status.Machines) == 0 {
 		return builder.String()

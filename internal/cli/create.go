@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
@@ -11,6 +13,7 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var vm bool
 	var homeShare bool
 	var bare bool
+	var hostnames []string
 	command := &cobra.Command{
 		Use:   "create [[remote:]project:]machine",
 		Short: "Create a Sandcastle container machine",
@@ -31,6 +34,7 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				DryRun:    dryRun,
 				HomeShare: homeShare,
 				Bare:      bare,
+				Hostnames: hostnames,
 			})
 		},
 	}
@@ -47,5 +51,30 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	// A bare machine has no way in, by design — say so on the flag itself,
 	// because `sc connect` to one can only ever time out waiting for sshd.
 	command.Flags().BoolVar(&bare, "bare", false, "no login user, no SSH key, no sshd — just the machine's hostname and a Caddy serving its tenant-CA leaf (sc connect will not work)")
+	// Explicit Machine Public Hostnames (ADR-0028): claimed through the Auth
+	// App BEFORE the instance exists, released again if the create fails.
+	// Both flags append to ONE list (a plain StringArrayVar per flag would
+	// let the second flag's first value replace the first flag's), so
+	// --hostname and --fqdn mix freely.
+	command.Flags().Var(&appendStringFlag{target: &hostnames}, "hostname", "explicit public hostname under a registered Public DNS Zone (repeatable; alias --fqdn); claimed before the machine is created")
+	command.Flags().Var(&appendStringFlag{target: &hostnames}, "fqdn", "alias of --hostname")
 	return command
 }
+
+// appendStringFlag is a repeatable string flag whose every occurrence appends
+// to a shared slice — the shape that lets two flag names feed one list.
+type appendStringFlag struct{ target *[]string }
+
+func (f *appendStringFlag) String() string {
+	if f.target == nil {
+		return "[]"
+	}
+	return fmt.Sprintf("%v", *f.target)
+}
+
+func (f *appendStringFlag) Set(value string) error {
+	*f.target = append(*f.target, value)
+	return nil
+}
+
+func (f *appendStringFlag) Type() string { return "stringArray" }

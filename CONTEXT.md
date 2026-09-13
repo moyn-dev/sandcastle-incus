@@ -36,19 +36,19 @@ A public DNS domain (e.g. `hase.de`) an admin registers with the Sandcastle inst
 _Avoid_: Tenant zone, install zone, DNS provider account
 
 **Project Domain**:
-The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one is a private-mode project. Reserved install-wide, first come, including everything below it.
+The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one gives its Machines no derived public name (they keep their Machine Private Hostname and may still carry explicit Machine Public Hostnames). Reserved install-wide, first come, including everything below it.
 _Avoid_: Project suffix, project zone
 
 **Machine Public Hostname**:
-The public DNS name `<machine>.<Project Domain>` of a Machine created in a Project that has a Project Domain, carrying a publicly trusted certificate for itself and one wildcard level below. Distinct from a Public Route: the Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
-_Avoid_: Public hostname, route hostname, public machine
+One of a Machine's set of public DNS names, each carrying a publicly trusted certificate for itself and one wildcard level below: the *derived* name `<machine>.<Project Domain>` when the Project has a Project Domain, plus any *explicit* names the tenant claims under a Public DNS Zone (`sc create --hostname`, `sc hostname add`). A Machine has zero or more; it always keeps its Machine Private Hostname beside them. An explicit name reserves itself and its wildcard subtree install-wide, first come. Distinct from a Public Route: a Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
+_Avoid_: Public hostname, route hostname, public machine, zone-mode machine
 
 **Naming Mode**:
-The per-Machine choice, fixed at creation, between `private` (Machine Private Hostname, Tenant CA) and `zone` (Machine Public Hostname, publicly trusted certificate). Set by the Project's Project Domain at the time the Machine is created; never changes afterwards.
-_Avoid_: Zone-mode project, private-mode project, TLS mode
+Superseded by ADR-0028 (2026-09-13). ADR-0027's per-Machine `private`/`zone` choice fixed at creation no longer exists: every Machine has its Machine Private Hostname and additionally a set of Machine Public Hostnames. The literal `private` survives only as the value of the legacy `user.sandcastle.v2.public-hostname` instance key, read for one release.
+_Avoid_: Zone-mode project, private-mode project, TLS mode, zone mode, private mode
 
 **Caddy Setup Marker**:
-The file a Machine's Caddy setup leaves behind stating which Naming Mode and hostname it configured. The Auth App delivers a certificate to a Machine only when the marker is present and names the expected Machine Public Hostname.
+The file a Machine's Caddy setup leaves behind (`/etc/sandcastle/caddy.ready`) stating which names it configured: the Machine Private Hostname (`PRIVATE=`) and every Machine Public Hostname whose certificate it rendered a site block for (`PUBLIC=`), plus when (`RENDERED=`). The Auth App delivers a certificate to a Machine only when the marker is present in this per-name form; the machine then re-renders with `sandcastle-caddy-setup --refresh`.
 _Avoid_: Setup flag, ready file
 
 **Freeform Machine**:

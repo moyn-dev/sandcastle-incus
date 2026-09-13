@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/thieso2/sandcastle-incus/internal/naming"
@@ -32,18 +31,19 @@ import (
 // reported by wrapping projectbroker.ErrProjectNotFound.
 type TenantProjectDomainManager interface {
 	// CreateTenantProjectWithDomain is CreateTenantProject with KeyV2Domain
-	// set in the same project-create request (and the profile rendered for
-	// zone mode).
+	// set in the same project-create request (and the profile rendered with
+	// the derived-name seed).
 	CreateTenantProjectWithDomain(ctx context.Context, tenant, project, clientCertificatePEM, domain string) (projectbroker.ProjectResult, error)
 	// SetProjectDomain writes (domain != "") or removes (domain == "")
 	// KeyV2Domain on the app project and re-renders its default profile.
 	SetProjectDomain(ctx context.Context, tenant, project, domain string) error
-	// ListZoneModeMachines names the project's instances whose
-	// KeyV2PublicHostname is set to something other than "private".
-	ListZoneModeMachines(ctx context.Context, tenant, project string) ([]string, error)
 	// DeleteTenantProject deletes the app project with its machines, volumes
 	// and profiles.
 	DeleteTenantProject(ctx context.Context, tenant, project string) error
+	// SetMachinePublicHostnames rewrites the machine's KeyV2PublicHostnames
+	// list (ADR-0028); an empty list deletes the key. A missing machine is
+	// reported by wrapping ErrMachineNotFound.
+	SetMachinePublicHostnames(ctx context.Context, tenant, project, machine string, hostnames []string) error
 }
 
 // ProjectCreateRequest is the body of POST /api/projects.
@@ -73,25 +73,12 @@ type ProjectDomainResult struct {
 	DryRun         bool `json:"dryRun,omitempty"`
 }
 
-// ProjectDomainMachinesError is the set-domain/unset-domain refusal while
-// zone-mode Machines exist (spec §2.2) — a Machine's Naming Mode is fixed at
-// creation, so the project cannot change domain underneath it.
-type ProjectDomainMachinesError struct {
-	Project  string
-	Machines []string
-}
-
-func (e *ProjectDomainMachinesError) Error() string {
-	return fmt.Sprintf("project %s has machines with a public name: %s; delete them before changing the project domain", e.Project, strings.Join(e.Machines, ", "))
-}
-
 // projectDomainErrorStatus maps the claim/validation refusals to a status.
 func projectDomainErrorStatus(err error) int {
 	var claimErr *DomainClaimError
-	var machinesErr *ProjectDomainMachinesError
 	var validationErr *ProjectDomainError
 	switch {
-	case errors.As(err, &claimErr), errors.As(err, &machinesErr):
+	case errors.As(err, &claimErr):
 		return http.StatusConflict
 	case errors.As(err, &validationErr):
 		return http.StatusBadRequest
@@ -207,18 +194,11 @@ func (h handler) projectDomainGet(w http.ResponseWriter, r *http.Request, user U
 	writeJSON(w, http.StatusOK, result)
 }
 
-// requireNoZoneModeMachines is the set-domain/unset-domain guard.
-func (h handler) requireNoZoneModeMachines(ctx context.Context, tenantName, project string) error {
-	machines, err := h.projectDomains.ListZoneModeMachines(ctx, tenantName, project)
-	if err != nil {
-		return err
-	}
-	if len(machines) > 0 {
-		sort.Strings(machines)
-		return &ProjectDomainMachinesError{Project: project, Machines: machines}
-	}
-	return nil
-}
+// set-domain and unset-domain are allowed with machines in the project
+// (machine-hostnames §7.1): the zone reconciler re-derives every machine's
+// `<machine>.<domain>`, converges its public-name list, pushes its hostnames
+// file and orders the new name's certificate; the released domain's records
+// and certificate rows go with the claim (onProjectDomainReleased).
 
 func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user User, project string) {
 	if h.projectDomains == nil {
@@ -232,10 +212,6 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 	}
 	if _, err := NormalizeProjectDomain(request.Domain); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.requireNoZoneModeMachines(r.Context(), user.UserKey, project); err != nil {
-		writeAPIError(w, projectDomainErrorStatus(err), err)
 		return
 	}
 	claim, previous, err := ClaimProjectDomain(r.Context(), h.db, ClaimProjectDomainRequest{
@@ -281,16 +257,21 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 		writeAPIError(w, projectDomainErrorStatus(err), err)
 		return
 	}
+	if previous != nil && previous.Domain != claim.Domain {
+		// A replaced domain is a released one: its records and certificate
+		// rows go, exactly as with unset-domain; the reconciler re-derives
+		// every machine's name under the new domain on its next pass.
+		if err := onProjectDomainReleased(r.Context(), h.db, *previous); err != nil {
+			svclog.Logf(r.Context(), "project domain %s replaced with cleanup errors: %v", previous.Domain, err)
+		}
+	}
+	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user User, project string, dryRun bool) {
 	if h.projectDomains == nil {
 		writeAPIError(w, http.StatusNotImplemented, errors.New(projectDomainsUnavailableMessage))
-		return
-	}
-	if err := h.requireNoZoneModeMachines(r.Context(), user.UserKey, project); err != nil {
-		writeAPIError(w, projectDomainErrorStatus(err), err)
 		return
 	}
 	result := ProjectDomainResult{Tenant: user.UserKey, Project: project, DryRun: dryRun}
@@ -329,6 +310,7 @@ func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user
 		writeAPIError(w, projectDomainErrorStatus(err), err)
 		return
 	}
+	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -366,6 +348,18 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		result.Released = claim.Domain
 		if err := onProjectDomainReleased(r.Context(), h.db, claim); err != nil {
 			svclog.Logf(r.Context(), "project domain %s released with cleanup errors: %v", claim.Domain, err)
+		}
+	}
+	// The project's machines go with it: their explicit Machine Public
+	// Hostnames (ADR-0028) are released the same way, before Incus.
+	hostnames, err := ReleaseMachineHostnamesOfProject(r.Context(), h.db, user.UserKey, project)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, hostname := range hostnames {
+		if err := onMachineHostnameReleased(r.Context(), h.db, hostname); err != nil {
+			svclog.Logf(r.Context(), "machine hostname %s released with cleanup errors: %v", hostname.Hostname, err)
 		}
 	}
 	err = svclog.Span(r.Context(), "project.delete", func() error {

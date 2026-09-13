@@ -68,9 +68,11 @@ sc project unset-domain zp                   # release it; new machines are priv
 sc project status zp                         # Domain: baum.hase.de   (zone hase.de) + MACHINE/PUBLIC NAME/CERT table
 ```
 
-- Every machine created in the project **after** the claim gets the Machine
-  Public Hostname `<machine>.<domain>`; machines created before keep their
-  private name. Naming Mode is per machine and never changes.
+- Every machine created in the project **after** the claim gets the derived
+  Machine Public Hostname `<machine>.<domain>` beside its private name;
+  machines created before keep only their private name until the follow-on
+  slices of #172 re-derive names. See "Explicit machine hostnames" below for
+  the rest of a machine's public-name set.
 - Claims are install-wide and first-come. Refusals are verbatim: a cross-tenant
   overlap never names the owner (`… overlaps a domain already claimed on this
   install; choose another`); a same-tenant overlap does (`… overlaps "<d>"
@@ -78,42 +80,95 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   install's own names give `… is reserved by this install`; no zone gives
   `no Public DNS Zone covers <domain> — ask your admin`; the apex gives `… is a
   zone apex; claim at least one label below <zone>`.
-- `set-domain`/`unset-domain` are refused while the project has machines with a
-  public name (`project <p> has machines with a public name: …; delete them
-  before changing the project domain`). Re-claiming the same domain is a no-op.
+- `set-domain`/`unset-domain` are allowed with machines in the project (ADR-0028
+  slice 3): the zone reconciler re-derives every machine's `<m>.<domain>` —
+  list key, A records, a fresh certificate, the hostnames file — within a
+  minute; the replaced/released domain's records and certificate rows go with
+  the claim; explicit hostnames are untouched. Re-claiming the same domain is a
+  no-op.
 - The verbs need `sc login`; on a broker-only install they print `--domain is
   not available on this install`. All take `--dry-run`.
-- `sc create` in a zone project stamps `user.sandcastle.v2.public-hostname`
-  (= `<machine>.<domain>`; `private` in a private project) on the instance in
-  the create call and prints `Public name: <m>.<d> (A record pending,
-  certificate pending — see: sc project status <p>)` instead of the `DNS:`
-  line; `--bare` adds `HTTPS: https://<m>.<d>   (Let's Encrypt, certificate
-  pending)`; a Dev Image machine prints `(A record pending; no Caddy — no
-  certificate)`. Read the mode back with `sc ls` (FQDN + CERT columns) or
-  `sc incus config get <m> user.sandcastle.v2.public-hostname` — never guess it
-  from the project's current domain.
-- On the machine, `caddy-setup` (payload, `MODE=zone` from
-  `/etc/sandcastle/machine.env`) skips the sidecar leaf, writes the Caddyfile for
-  `<m>.<d>, *.<m>.<d>` against `/etc/sandcastle/tls/{cert,key}.pem`, adds a
-  `ConditionPathExists=` drop-in, enables Caddy, and writes the Caddy Setup
-  Marker `/etc/sandcastle/caddy.ready` (`MODE=`/`FQDN=`) last. Caddy stays
-  enabled-inactive until the Auth App pushes the certificate.
-- The Auth App's zone reconciler (30 s + instance events) does the rest with
-  no operator step: public `A` records for `<m>.<d>` and `*.<m>.<d>` (DNS-only,
-  tenant-bridge IP; stopped machines keep them, deleted ones lose them), one
-  Let's Encrypt order per machine via DNS-01 (max 4 at once, backoff 1m → 6h
-  on failure, ARI-timed renewal with a fresh key), the cert + key push once the
-  marker names the hostname (`instance-started` re-pushes a stopped machine
-  within seconds), a per-pass fingerprint drift check, and the mirror into
-  `user.sandcastle.v2.cert-state` / `cert-not-after` that `sc ls` and
-  `sc project status` read. Freeform `incus launch` machines are stamped with
-  their public name on first sight and treated the same; a Dev Image machine
-  gets an A record but no certificate (no Caddy, no marker). Deleting a machine
-  retains its certificate row until expiry, so recreating it with the same
-  name reuses the certificate without a new order. Diagnosis:
+- `sc create` in a project with a domain stamps the set
+  `user.sandcastle.v2.public-hostnames` (derived `<machine>.<domain>` + any
+  `--hostname`) on the instance in the create call and prints the usual `DNS:`
+  line followed by one `Public name: <h> (A record pending, certificate pending
+  — see: sc project status <p>)` line per name; `--bare` adds `HTTPS:
+  https://<m>.<p>.<suffix>   (Caddy with the tenant-CA leaf, …)` and `HTTPS
+  (public): https://<h>   (Let's Encrypt; served once the certificate lands)`;
+  a Dev Image machine prints `(A record pending; no Caddy — no certificate)`.
+  Read the set back with `sc ls` (FQDN + CERT columns), `sc hostname list`, or
+  `sc incus config get <m> user.sandcastle.v2.public-hostnames` — never guess
+  it from the project's current domain.
+- On the machine (ADR-0028, one contract for every machine): `caddy-setup`
+  (payload) fetches the **private** leaf from the sidecar into
+  `/etc/sandcastle/tls/{cert,key}.pem`, seeds `/etc/sandcastle/hostnames` from
+  `PUBLIC_HOSTNAMES=` in `/etc/sandcastle/machine.env` (once; the Auth App owns
+  the file afterwards), renders the private site block plus one block per
+  listed name whose `/etc/sandcastle/tls/<name>/{cert,key}.pem` both exist,
+  validates, enables + starts Caddy, and writes the Caddy Setup Marker
+  `/etc/sandcastle/caddy.ready` last (`PRIVATE=<m>.<p>.<suffix>`, one
+  `PUBLIC=<name>` per rendered block, `RENDERED=<unix ts>`). Caddy is always
+  running; a public name is served as soon as its certificate lands and
+  `sandcastle-caddy-setup --refresh` (execed by the reconciler after every
+  push; safe to run by hand) re-renders.
+- The Auth App's zone reconciler (30 s + instance events + a kick from every
+  `sc hostname add|remove` / `set-domain` / `unset-domain`) does the rest with
+  no operator step, **per (machine, public name)** — the derived `<m>.<d>` plus
+  every explicit hostname: public `A` records for `<name>` and `*.<name>`
+  (DNS-only, tenant-bridge IP; stopped machines keep them, deleted ones lose
+  the records of all their names), one Let's Encrypt order per name via DNS-01
+  (max 4 at once, backoff 1m → 6h on failure, ARI-timed renewal with a fresh
+  key; adding a name never reissues the others), the cert + key push into
+  `/etc/sandcastle/tls/<name>/` once a per-name marker exists
+  (`instance-started` re-pushes a stopped machine within seconds), a push of
+  `/etc/sandcastle/hostnames` whole whenever the machine's file does not list
+  exactly its set (add, remove, re-derived domain, empty first-boot seed), a
+  per-pass fingerprint drift check per name, and the mirror into
+  `user.sandcastle.v2.cert-state` (per name: `host=state,…`) /
+  `cert-not-after` (earliest) that `sc ls` (worst state) and `sc project
+  status` (one row per name) read. Freeform `incus launch` machines get their
+  list key stamped on first sight and are treated the same; a Dev Image
+  machine gets A records but no certificate (no Caddy, no marker). Deleting a
+  machine or removing a hostname retains its certificate row until expiry, so
+  the same name reuses the certificate without a new order. Diagnosis:
   `reference/troubleshooting.md`.
-- `sc connect` dials the bridge IP but keys `known_hosts` by the public name
-  (`HostKeyAlias=<m>.<d>`); a zone machine has no private name or short alias.
+- `sc connect` dials the bridge IP; `known_hosts` records the private names
+  and every public name, and `HostKeyAlias` stays the Machine Private Hostname
+  (ADR-0028; slice 2 of #172 finalizes SSH naming).
+
+### Explicit machine hostnames (ADR-0028)
+
+```bash
+sc create zp:web --hostname web12.tc42.uk --fqdn shop.tc42.uk   # claimed BEFORE the instance exists; a refusal creates nothing
+sc hostname add zp:web api.tc42.uk [--dry-run]                  # claim + certificate row + instance key rewritten
+sc hostname list zp:web                                         # PUBLIC NAME / KIND (derived|explicit) / ZONE
+sc hostname remove zp:web api.tc42.uk [--dry-run]               # release (alias rm); the derived name is not removable per machine
+sc ls                                                           # FQDN = first public name + "(+N)"; --json carries publicHostnames
+sc incus config get web user.sandcastle.v2.public-hostnames     # the sorted list the Auth App maintains
+```
+
+- A machine's public names are a **set**: the derived `<m>.<domain>` (when
+  the project has a domain) plus explicit names under any registered Public
+  DNS Zone — apex-level names (`web12.tc42.uk`) included, in a project with or
+  without a domain. Each is an install-wide, first-come reservation of itself
+  plus its wildcard subtree, with its own certificate (`name` + `*.name`).
+- Refusals are verbatim and mirror Project Domains: cross-tenant `machine
+  hostname "<h>" overlaps a name already claimed on this install; choose
+  another`; same tenant `… overlaps "<x>" held by machine "<p>:<m>" in this
+  tenant` / `… overlaps project domain "<d>" claimed by project "<p>" in this
+  tenant`; routes and install names `… is reserved by this install`; the zone
+  apex `… is a zone apex; use at least one label below <zone>`; no zone `no
+  Public DNS Zone covers <h> — ask your admin`. The reverse checks refuse a
+  Project Domain or a custom Public Route that overlaps a hostname.
+- Needs `sc login`: `--hostname is not available on this install (log in to
+  an Auth App with sc login)` otherwise. `sc project delete` releases the
+  project's hostnames; a machine deleted out-of-band is pruned by the 5-minute
+  loop; `sc-adm public-dns-zone remove` is refused while hostnames are held.
+- Every name — derived or explicit — gets its own A records, certificate and
+  Caddy site block from the zone reconciler (above); `sc hostname add` shows
+  up on the machine within seconds (hostnames file), records within a minute,
+  the certificate within about five. `sc hostname remove` deletes the name's
+  records at once and keeps its certificate row for a re-add.
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

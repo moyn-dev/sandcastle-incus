@@ -918,14 +918,15 @@ func machineTypeShort(instanceType string) string {
 	}
 }
 
-// machineCertCell is the `sc ls` CERT column (ADR-0027 spec §1.5): a
-// private-mode machine has no Machine Certificate, so "-"; a zone-mode
-// machine's mirrored state collapses to pending / ok / failed. A zone-mode
-// machine the reconciler has not stamped yet is pending — `sc create` returns
-// before any certificate exists. An unrecognised state is shown verbatim
-// rather than guessed at.
+// machineCertCell is the `sc ls` CERT column (ADR-0027 spec §1.5, folded
+// per ADR-0028): a machine without a public name has no Machine
+// Certificate, so "-"; otherwise the WORST of the machine's per-hostname
+// states (meta.Machine.CertState) collapses to pending / ok / failed. A
+// machine the reconciler has not stamped yet is pending — `sc create`
+// returns before any certificate exists. An unrecognised state is shown
+// verbatim rather than guessed at.
 func machineCertCell(machine meta.Machine) string {
-	if machine.NamingMode() != meta.NamingModeZone {
+	if !machine.HasPublicHostname() {
 		return "-"
 	}
 	state := strings.TrimSpace(machine.CertState)
@@ -941,11 +942,15 @@ func machineCertCell(machine meta.Machine) string {
 	}
 }
 
-// machineFQDN is the `sc ls` FQDN column: the Machine Public Hostname for a
-// zone-mode machine (ADR-0027), else the canonical Machine Private Hostname.
+// machineFQDN is the `sc ls` FQDN column: the first Machine Public Hostname
+// — with "(+N)" when the machine has more (ADR-0028; `--json` carries the
+// whole list) — else the canonical Machine Private Hostname.
 func machineFQDN(tenant tenant.Summary, machine meta.Machine) string {
-	if machine.NamingMode() == meta.NamingModeZone {
-		return machine.PublicHostname
+	if names := machine.PublicNames(); len(names) > 0 {
+		if extra := len(names) - 1; extra > 0 {
+			return fmt.Sprintf("%s (+%d)", names[0], extra)
+		}
+		return names[0]
 	}
 	suffix := strings.Trim(strings.TrimSpace(tenant.DNSSuffix), ".")
 	if suffix == "" {

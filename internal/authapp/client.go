@@ -269,6 +269,54 @@ func (c DeviceClient) RequestMachineCertificate(ctx context.Context, request Mac
 	return MachineCertificateView{}, fmt.Errorf("request machine certificate: %s: %s", response.Status, strings.TrimSpace(string(payload)))
 }
 
+// ListMachineHostnames reads GET /api/machines/{project}/{machine}/hostnames
+// (ADR-0028). tenant "" means the caller's own.
+func (c DeviceClient) ListMachineHostnames(ctx context.Context, tenant, project, machine string) (MachineHostnamesResult, error) {
+	var result MachineHostnamesResult
+	err := c.publicDNSZoneCall(ctx, http.MethodGet, machineHostnamesPath(project, machine, "")+tenantQuery(tenant, false), nil, &result)
+	return result, err
+}
+
+// AddMachineHostname drives POST /api/machines/{project}/{machine}/hostnames
+// (`sc hostname add`, `sc create --hostname`).
+func (c DeviceClient) AddMachineHostname(ctx context.Context, request MachineHostnameRequest, project, machine string) (MachineHostnamesResult, error) {
+	var result MachineHostnamesResult
+	err := c.publicDNSZoneCall(ctx, http.MethodPost, machineHostnamesPath(project, machine, ""), request, &result)
+	return result, err
+}
+
+// RemoveMachineHostname drives DELETE /api/machines/{project}/{machine}/hostnames/{hostname}
+// (`sc hostname remove`, and `sc create`'s release on a failed create).
+func (c DeviceClient) RemoveMachineHostname(ctx context.Context, tenant, project, machine, hostname string, dryRun bool) (MachineHostnamesResult, error) {
+	var result MachineHostnamesResult
+	err := c.publicDNSZoneCall(ctx, http.MethodDelete, machineHostnamesPath(project, machine, hostname)+tenantQuery(tenant, dryRun), nil, &result)
+	return result, err
+}
+
+func machineHostnamesPath(project, machine, hostname string) string {
+	path := "/api/machines/" + url.PathEscape(strings.TrimSpace(project)) + "/" + url.PathEscape(strings.TrimSpace(machine)) + "/hostnames"
+	if hostname = strings.TrimSpace(hostname); hostname != "" {
+		path += "/" + url.PathEscape(hostname)
+	}
+	return path
+}
+
+// tenantQuery renders the optional ?tenant= and dryRun=1 query of the
+// hostname endpoints.
+func tenantQuery(tenant string, dryRun bool) string {
+	values := url.Values{}
+	if tenant = strings.TrimSpace(tenant); tenant != "" {
+		values.Set("tenant", tenant)
+	}
+	if dryRun {
+		values.Set("dryRun", "1")
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return "?" + values.Encode()
+}
+
 // GetProjectDomain reads GET /api/projects/{name}/domain (ADR-0027).
 func (c DeviceClient) GetProjectDomain(ctx context.Context, project string) (ProjectDomainResult, error) {
 	var result ProjectDomainResult

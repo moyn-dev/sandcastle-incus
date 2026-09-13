@@ -5469,3 +5469,315 @@ removed them. Two causes in `zoneReconciler.Reconcile`, both fixed:
   probe registers a *sibling* of the zone (`bad-<id>.<parent>`), because a
   name under the zone is refused by the nesting check before the token is
   ever tried.
+
+## 2026-09-13 — Machine Public Hostnames slice 1 (#173): ADR-0028, reservations, API, `sc create --hostname` / `sc hostname`
+
+Decisions of #172 are the ADR's; what the slice ticket left to the implementer:
+
+- **The reservation transaction is shared, not duplicated.** `ClaimProjectDomain`'s
+  hand-rolled `BEGIN IMMEDIATE` block became `withReservationLock` +
+  `loadInstallReservations` (claims, hostnames, route hostnames read on the locked
+  connection); `ClaimMachineHostname` and `ClaimProjectDomain` both run their scan +
+  INSERT inside it. `scanProjectDomainConflicts` now takes the snapshot struct and
+  gained the hostname half; the domain-vs-domain part is `scanProjectDomainClaimConflicts`.
+  `DomainClaimError` grew `Machine` and the class `hostname`; the cross-tenant text is
+  unchanged (flat), the same-tenant text names `"<p>:<m>"`.
+- **The derived name is not a `machine_hostnames` row.** It is implied by the project's
+  domain claim (whole subtree), so the table holds explicit names only; every reader
+  that needs the full set (`PublicHostnamesOfMachine`, the GET view) renders derived +
+  explicit. Alternative — a row per derived name, kept in sync by the reconciler — was
+  rejected: two rows reserving one name would need a special case in every scan.
+- **A hostname inside the caller's own Project Domain is refused.** The issue said
+  "any Project Domain it is inside or that is inside it"; no own-project exemption was
+  asked for and `api.baum.hase.de` is the future machine `api`'s derived name, so the
+  scan treats the own domain like any other (same-tenant text names the project).
+- **The zone apex itself is refused; apex-level is allowed.** Decision 2 allows
+  `web12.tc42.uk`; `tc42.uk` would reserve the whole zone, which is what registering
+  the zone is for. Text mirrors the Project Domain apex rule ("use at least one label
+  below <zone>").
+- **Routes: symmetric one-level semantics.** A hostname conflicts with a route equal
+  to or inside it (wildcard stripped); a route is refused equal to or inside a
+  hostname; a route *above* a hostname (`*.y` vs `deep.x.y`) is allowed in both
+  directions, exactly as with Project Domains (slice 3 of ADR-0027 chose this; a
+  one-level wildcard does not cover a deeper name).
+- **`beforeCreate` on POST instead of swallowing 404.** `sc create --hostname` claims
+  before the instance exists, so the Auth App cannot stamp the key; rather than
+  ignoring "machine not found" (which would let a typo in `sc hostname add` hold a
+  name), the create flow says so explicitly and the create call stamps the set. A
+  `sc hostname add` on a missing machine is 404 and the reservation is released again
+  (compensation like `CreateTenantProjectWithDomain`). `authapp.ErrMachineNotFound` is
+  wrapped by the Incus seam for that.
+- **The Incus seam is `TenantProjectDomainManager` widened by one method**
+  (`SetMachinePublicHostnames`), not a new interface: it is the same wiring
+  (`ProjectBrokerCreator`) and the one test fake grows one method. It writes via the
+  existing `stampInstanceConfig` (an empty list deletes the key).
+- **Writers write only the list; the reconciler is touched minimally.** `sc create`
+  stamps `KeyV2PublicHostnames` and never the single key (an empty set stamps nothing —
+  the `private` pin has no purpose without Naming Mode). The zone reconciler reads the
+  list when present (derived target = the name under the claim; explicit names ignored
+  until slice 3) and never stamps the legacy key on such a machine; the legacy
+  first-sight stamp survives only for machines with neither key. Explicit hostnames are
+  added to the reconciler's `liveHostnames` so their pending `machine_certificates` rows
+  are not GC'd 30 s after `sc hostname add`.
+- **`ListZoneModeMachines` now means "machines with a derived name under the current
+  domain"** (reads both keys, filters by suffix; a project without a domain returns
+  none). This keeps the transitional `set-domain`/`unset-domain` refusal honest while
+  letting a private project with explicit hostnames claim a domain later — the issue
+  says explicit names in a private project are allowed, and blocking `set-domain` on
+  them would contradict that. The refusal itself goes with slice 3.
+- **Output policy until slice 2.** A project with a domain prints only `Public name:`
+  lines (as ADR-0027 did — its machine contract still serves only the derived name);
+  a project without a domain keeps its `DNS:` line and adds the `Public name:` lines
+  (its private name *is* served). `formatCreateMachineV2` takes a per-name outcome map;
+  the golden test summary now carries `Projects[].Domain` because the formatter reads
+  the derived name off the summary rather than off a single field.
+- **`meta.Machine.PublicNames()`** tolerates a payload with only the legacy single
+  field (an older Auth App's resource cache still serves `publicHostname`), so `sc ls`
+  against a not-yet-updated appliance keeps rendering. `NamingMode()` stays one release
+  as a shim over `HasPublicHostname()`.
+- **`--hostname`/`--fqdn` are one `appendStringFlag`.** Two `StringArrayVar`s on one
+  slice do not merge: pflag's array value replaces the slice on each flag's first `Set`,
+  so `--hostname a --fqdn b` would have kept only `b`.
+- **`sc hostname list` needs no seam and answers without the Incus seam**; mutations are
+  501 without it (`machine hostnames are not available on this deployment`).
+- **GC listing.** The slow loop's hostname GC uses `HTTPRunner.Machines` (the
+  `machine.Store` the handler already has) for the live machine set; a listing error
+  degrades to project-level pruning only, never to "no machines".
+- **e2e 12g is a placeholder**, written for what slice 1 can show; slice 4 automates it.
+
+## 2026-09-13 — Machine Public Hostnames slice 2 (#174): the per-name machine contract
+
+Issue #174 (decisions on #172; ADR-0028; spec `docs/spec/machine-hostnames.md` §5). What the
+ticket left to the implementer:
+
+- **How the explicit names reach `machine.env` at first boot.** The profile is per project; an
+  explicit `--hostname` is per instance, and cloud-init runs the *profile's* user-data. Three
+  options: (a) an instance-level `cloud-init.user-data` override carrying the set (would make every
+  `--hostname` machine diverge from its profile forever, like `--bare` does on purpose), (b) let
+  `caddy-setup` query the guest socket (`/dev/incus/sock`, `GET /1.0/config/user.…`) at boot, (c) a
+  jinja read of the instance key through cloud-init's datasource. Chose (c):
+  `PUBLIC_HOSTNAMES={{ v1.local_hostname }}.<pd>,{{ ds.config['user.sandcastle.v2.public-hostnames']
+  | default('') if ds is defined and ds.config is defined else '' }}` — the LXD/Incus datasource
+  exposes every `user.*` instance key under `ds.config`, and the guard makes any other datasource
+  render `''` instead of a `CI_MISSING_JINJA_VAR` token or a template error. The derived name is
+  rendered **explicitly** from the Project Domain as well, so a project with a domain is correct even
+  if the datasource read yields nothing; `caddy-setup` normalizes and deduplicates. The seed is read
+  **once** (only when `/etc/sandcastle/hostnames` does not exist); the reconciler owns the file after
+  that (slice 3 pushes it whole). `PUBLIC_HOSTNAMES` rather than the spec's `FQDNS` — the line
+  carries public names only, never the private FQDN. The read is unverified on a live image in this
+  slice; e2e 12c/12g record what the image gives.
+- **The private identity is unconditional.** `fqdn:` and `FQDN=` are `<m>.<p>.<suffix>` for every
+  project; `V2ProfileUserData`'s `projectDomain` now only shapes the seed line. The profile of a
+  private project changes too (it gains the seed line, reading the instance record) because a
+  machine in a private project can carry explicit hostnames — so "private profile byte-identical to
+  pre-feature" (ADR-0027's promise) is gone on purpose; the *behaviour* of a private-only machine is
+  pinned instead by `TestCaddySetupPrivateOnly` (leaf fetch, private block, enable + restart, same
+  calls as before) and a `machine.env` without the line at all is tested to work.
+- **One `site_block` function, not a heredoc constant.** The per-name render loops over a bash
+  function; the golden test pins the rendered block text (handlers byte-identical to the ADR-0027
+  Caddyfile) and asserts exactly one `cat <<EOF` in the script, so every name goes through the same
+  block.
+- **Render to `.new`, `caddy validate`, then `mv`.** Not in the ticket. A refresh execed by the
+  reconciler must never replace a working Caddyfile with a broken one; a failed validate exits
+  nonzero, keeps the old Caddyfile *and* the old marker (the marker asserts what is in place).
+- **Both files must be non-empty (`-s`)**, not merely exist: a zero-byte `cert.pem` would fail
+  validation and take every name down with it.
+- **Marker gate = "per-name marker present".** `ReadyFor(host)` no longer compares names: a name
+  cannot be in the marker before its certificate is pushed, and the push's `--refresh` renders it.
+  What the gate now guards is "this machine runs the per-name contract" (`PRIVATE=` present), i.e.
+  it has per-name directories and `--refresh`. `Serves(host)` is the per-name question for
+  diagnostics and slice 3. **Legacy `MODE=` markers parse but never clear the gate** — the old push
+  path (private-leaf paths + `systemctl reload`) is gone with the drop-in, and pushing into a
+  machine running the old script would overwrite its only certificate. Those machines (ADR-0027
+  zone mode, or a stale payload) are recreated after a payload sync, not migrated in place; the
+  docs say so.
+- **The push moved to the per-host directory in this slice**, though the ticket said slice 3
+  rewires the reconciler. Leaving it would have had the interim reconciler overwrite the private
+  leaf with the derived name's Let's Encrypt certificate and never render the public block. Minimal
+  change: `PushMachineCertificate` gains `hostname` and loses `start` (the refresh starts Caddy when
+  inactive), creates the directory with a directory-type file push (the Incus file API makes no
+  parents), and its one exec appends the name to `/etc/sandcastle/hostnames` if missing before
+  `--refresh` — a Freeform Machine (no seed) is served as soon as its certificate lands, without
+  waiting for slice 3's hostnames push. `PushMachineHostnames` (file + refresh) is provided now as
+  the seam slice 3 wires; drift is checked against the name's `cert.pem`.
+- **`--refresh` does not re-seed a present file and never rewrites it**; an empty file means "no
+  public names". `machine-generalize` removes the file and every `tls/<name>/` directory so an
+  `sc image save` clone never inherits names or certificates.
+- **`sc create --bare` output** prints the private `HTTPS:` line always and an `HTTPS (public):`
+  line listing the public names (served once the certificate lands) — the old "Let's Encrypt,
+  certificate pending" line named a URL that did not serve yet; now the served one is first.
+- **HostKeyAlias** needed no code change (slice 1 already ordered private names first); the test
+  now pins derived-only, explicit-only, mixed and default-project orders, and the no-suffix case.
+- **Payload version bump.** Any change to `caddyIngressSetupScript`/`machineGeneralizeScript`
+  changes the content-derived payload version; existing tenants converge with `sc payload-sync` /
+  `sc-adm tenant payload-sync` (`--check` shows the drift) — only machines created *after* the sync
+  run the per-name script, hence "recreate" above.
+- **`sc project set-domain` help** no longer says "Naming Mode is fixed at creation"; the refusal
+  is described as the transitional guard it is.
+
+## 2026-09-13 — Machine Public Hostnames slice 3 (#175): the reconciler per (machine, hostname)
+
+Issue #175 (decisions on #172; ADR-0028; spec `docs/spec/machine-hostnames.md` §6). What the
+ticket left to the implementer:
+
+- **The list key is converged, not stamped once.** The ticket asked for the Freeform first-sight
+  stamp "now as a list"; the spec (§4) also owed the derived-name re-derivation on a domain change.
+  One rule covers both: every pass computes the machine's set (derived + explicit) and rewrites
+  `user.sandcastle.v2.public-hostnames` when it differs (deleting the key when the set is empty),
+  and deletes the legacy `public-hostname` key in the same write — `PublicHostnamesFromConfig`
+  falls back to the legacy key once the list is gone, so a stale `web.baum.hase.de` there would have
+  resurrected a released derived name. Cost: one `UpdateInstance` per legacy-stamped machine on the
+  first pass after the upgrade (every machine the v0.10.0 reconciler saw carries `private` or a
+  derived name), never again. Alternative — stamp only when the key is absent, as before — rejected:
+  it cannot express unset-domain, set-domain or a failed API write. The "Incus key without claim"
+  and "key disagrees with claim" projects keep the old behaviour (nothing written, logged once),
+  because the tenant may still repair them; their explicit names are served regardless.
+- **`set-domain`/`unset-domain` refusal retired, and `ListZoneModeMachines` with it.** The seam
+  method, its incusx implementation, the adapter, `ProjectDomainMachinesError` and the handler guard
+  are gone rather than left as dead code. `projectDomainSet` now runs `onProjectDomainReleased` for
+  a **replaced** domain (the previous claim) — before this slice the refusal made replacement with
+  machines impossible, so the replaced domain's records and rows were never released; without it
+  the old derived names' A records would leak (they are under no claimed domain any more, so the
+  stale-record GC would not touch them). Both verbs kick the reconciler.
+- **The API kicks the reconciler.** `HandlerOptions.ZoneReconcileKick` / `zoneReconciler.RequestPass`
+  (mutex-guarded, nil-safe, set by the loop) so `sc hostname add|remove` and the domain verbs
+  converge within seconds instead of at the next 30 s tick. The reconciler is built before the
+  handler in `Serve` for that. Alternative — have the DELETE handler push the hostnames file itself
+  — rejected: the handler has no `ZoneMachineServer` and no Incus project name, and one owner of
+  the file (the reconciler) is the whole point of §5.2.
+- **Hostnames-file convergence is bounded, not fleet-wide.** Reading `/etc/sandcastle/hostnames`
+  on every running machine every 30 s would add a file read per private-only machine that never
+  had a public name. The pass reads it for machines with ≥1 target and for machines this process
+  remembers having had names (`namedBefore`), so the last-name removal converges to an empty file
+  in the same process. The one gap — the last name removed and the Auth App restarted before the
+  next pass — leaves a stale (harmless: the name's records are gone) file until `--refresh` by hand
+  or the next add/remove; documented in the skill. Alternatives: reading every machine (rejected,
+  cost on the private fleet), or persisting "had names" in the DB (rejected as a table for one
+  edge). The marker is read once per machine per pass (`markerByMachine`) since several names share
+  it.
+- **The certificate-row GC keeps rows "live" while the hostname is reserved.** The ticket said
+  explicit rows should stop being exempt "by fiat"; the reason they must stay is now concrete:
+  `sc create --hostname` records the row *before* the instance exists (`beforeCreate`), so a pass
+  between the claim and the create would drop a never-issued row of a "vanished" machine — and a
+  Dev Image machine would never get it back. A reservation that exists says the tenant wants the
+  name; the hostname GC (5 min) ends the reservation of a vanished machine and the row follows on
+  the next pass. The old exemption had no such tie to the reservation's lifetime.
+- **Mirror format and folding.** `cert-state` = `host=state,…` sorted by host (the parser also
+  accepts a bare pre-slice-3 value as the first name's); `cert-not-after` = the earliest expiry
+  among names whose pushed serial is the issued one (a renewed-but-unpushed name contributes the
+  machine's previous value, as before). Worst-state order `failed > (unknown) > pending > issued >
+  renewing > installed`, a name without an entry counting as pending — so `sc ls` reads `pending`
+  until *every* name serves, which is what the operator wants to see. An unknown state ranks just
+  below failed so the CERT column still shows it verbatim rather than hiding it behind a healthy
+  sibling. `WorstCertState` returns "" when nothing is mirrored yet, keeping the pre-slice JSON
+  (`certState` absent for a fresh machine) and the existing decode tests.
+- **`sc project status` per name.** One row per (machine, name); NOT AFTER — one value per machine
+  in the mirror — is printed on the machine's `installed`/`renewing` rows as its earliest expiry
+  (conservative; documented) rather than only on the first row, where a `pending` first row would
+  have carried an expiry that is not its own. A machine without a name reads `private name only`
+  ("private mode" was Naming Mode vocabulary). The table now also appears for a project without a
+  domain once a machine carries an explicit hostname — before, such a project ended at
+  `Domain: (none)` and the hostname's state was invisible outside `sc ls`.
+- **Managed records for explicit names are exactly base + wildcard**, not the subtree the
+  reservation covers: the reconciler deletes only what it writes, so a record a tenant might add by
+  hand below a reserved name is never read as stale. Zones are reconciled when they hold a claim or
+  a hostname row (with an empty target list when nothing is live), so a zone holding only explicit
+  names still GC's a deleted machine's records.
+- **Removal hook deletes records only.** `onMachineHostnameReleased` → `releaseMachineHostnameRecords`
+  (base + wildcard A, the name's `_acme-challenge` TXT) through the same provider factory as the
+  domain release, so the package's tests stay off Cloudflare; the row is untouched (§4.6 retention —
+  the tests pin that a re-added name reaches `installed` with no order).
+- **Tests.** The reconciler tests were rewritten for the pair model (fake fleet gained
+  `PushMachineHostnames` and list-key stamping; the harness routes the release hooks to its own fake
+  DNS) and gained: add later, remove (records gone, row retained, file pushed, re-add reuses), the
+  last name removed (empty file, keys deleted, machine not revisited), explicit name in a private
+  project (empty seed pushed), derived + explicit mixed with per-name mirror and earliest expiry,
+  machine deletion covering all names, set-domain / unset-domain re-derivation, list-key convergence
+  + legacy-key deletion + a legacy-marker machine, and the API kick. `meta` tests cover the mirror
+  format, parsing, worst-state folding and `CertStateOf`; the CLI golden covers per-name rows and
+  the private-project table.
+
+## 2026-09-13 — MPH slice 4 (#176): e2e Phase 12g automation + docs sweep
+
+Decisions the ticket left open while extending `scripts/e2e-pdz.sh` and Phase 12 of `docs/e2e-sc2.md`:
+
+- **12c/12f had to change, not only grow.** The script still asserted ADR-0027 behaviour that slices
+  2–3 retired: "no `DNS:` line for a zone-mode machine" and the `unset-domain` "has machines with a
+  public name" refusal. Keeping "every existing step intact" literally would have made the phase fail
+  on the first run, so 12c now asserts the `DNS: <m>.<p>.<suffix>` line *and* the `Public name:` line
+  (and pins `publicHostnames == [<derived>]`), and 12f replaces the refusal with
+  `sc project unset-domain --dry-run` succeeding with machines present — a dry-run, because a real
+  unset would release both machines' derived names and re-order certificates mid-run. The zone-remove
+  refusal ("still has claimed project domains") is unchanged; the hostname variant of that refusal is
+  reachable only once the domain is gone, so it stays a manual extra.
+- **Private FQDN is derived, not read.** `sc ls --json` carries no private-name field (`meta.Machine`
+  has none; the private name is `<name>.<project>.<tenant.dnsSuffix>` by construction), so the script
+  reads `.tenant.dnsSuffix` once in 12c and builds `PRIVATE`/`PRIVATE2` from it rather than adding a
+  JSON field for the harness. The tenant-CA check is `issuer contains "Sandcastle"` (the CA CN is
+  `Sandcastle <suffix> tenant CA`) and `SAN = the private name`, plus "not STAGING".
+- **Per-hostname certificates are proven by serial.** Rather than trusting the log, 12g captures the
+  serial of `api-<id>.<zone>`'s certificate before `sc hostname add alt-…` and asserts it is unchanged
+  after the add *and* after the remove — the observable form of "adding/removing a name never reissues
+  the others".
+- **"alt no longer served" is asserted loosely.** After the remove, Caddy either fails the handshake
+  for SNI `alt-…` or answers with another block's certificate (Caddy's default-site fallback), so the
+  check is "no certificate carrying `DNS:alt-…`", polled up to 120 s (hostnames-file push + `--refresh`
+  come from the reconciler pass the endpoint kicks). The mirror check waits for `certStates` to drop
+  the name the same way.
+- **Retained certificate row: note, not assertion.** `sc project status` renders the instance mirror
+  (one row per name in `public-hostnames`), so a removed hostname's retained `machine_certificates` row
+  is invisible through `sc`; the script asserts the row is *gone from the status table* and prints a
+  note pointing at the (DB) check in the doc instead of skipping silently.
+- **Refusal texts are asserted verbatim** (the same-tenant classes: inside own Project Domain, held by
+  another machine of the tenant, domain over a hostname, apex, derived name not removable) — the
+  cross-tenant flat texts need a second tenant and stay manual. The taken-name `sc create --hostname`
+  probe is `--dry-run` (server-side validation, rolled back) followed by `sc ls <project>:api2` empty.
+- **Cleanup order.** `api` is deleted before `web` (its records — explicit *and* derived — must vanish
+  on their own, not through the project-delete hook), then the existing web/project/zone teardown; the
+  EXIT trap deletes `api` too. No new env vars: the two hostnames derive from `SANDCASTLE_E2E_RUN_ID`
+  (`api-<id>.<zone>`, `alt-<id>.<zone>`), documented in `.env.e2e.sample`.
+
+## 2026-09-13 — MPH live run defects: caddy-setup under dash, silent marker gate, 404 on stale delete
+
+The first live e2e run of explicit Machine Public Hostnames (Debian trixie cloud image, real
+Cloudflare + ACME) surfaced three defects that the pure tests could not see. Fixes on the same
+branch; no spec change beyond a §5 note.
+
+- **F6 — the payload body runs under dash, not bash.** `caddyIngressSetupScript` carried a
+  `#!/bin/bash` shebang and, since slice 2, `done < <(hostnames_normalized < …)`. The shebang is
+  irrelevant: the boot shim `/usr/local/sbin/sandcastle-caddy-setup` is `#!/bin/sh` and *sources*
+  the body, so on Debian it executes under dash — which stopped at the process substitution
+  (`Syntax error: redirection unexpected`) after the private leaf was fetched: no Caddyfile with
+  public blocks, no `caddy.ready`, and the reconciler never pushed the issued certificate.
+  *Fix:* the script is strictly POSIX sh. The normalized names are captured into `HOSTS="$(…)"`
+  and iterated with `for host in $HOSTS` (they contain only DNS characters, so word-splitting is
+  exact, and unlike a pipe into `while read` the loop keeps `RENDERED` in the calling shell — a
+  temp file would have worked too but adds a file to clean up). `generalize` was already POSIX
+  apart from its shebang; both shebangs are `#!/bin/sh` now for honesty.
+  *Rule (new):* every script sourced by a `/bin/sh` shim is POSIX sh. The goldens now execute the
+  script with `sh` (falling back to `dash`, then `bash --posix`), and `TestPayloadScriptsArePOSIXSh`
+  statically rejects `<(`, `>(`, `[[`, `pipefail`, `declare`, `local -a/-n`, `+=(`, `read -a`,
+  `function`, `&>`, `|&`, ANSI-C `$'…'` (word-start only — grep's `*$'` anchor is not quoting),
+  any `${…}` beyond `${name}`/`${name:-…}`, and a non-`#!/bin/sh` shebang, and runs `dash -n`
+  where dash exists — a `bash --posix` run alone would still have accepted the original bug.
+  Also seen in the run: `PUBLIC_HOSTNAMES=m1.dbg…,` — the profile rendered `<derived>,<record>`
+  with an empty record. Harmless after normalization, but the jinja tail is now
+  `{{ ',' ~ record if … and record | default('') else '' }}`, so no trailing comma is emitted.
+- **F7 — a missing marker held the certificate back silently.** `markerReady` returned false for
+  `!ok` without a word (only `readMarker`'s generic "no caddy setup marker; A record only" existed,
+  which reads as "private-only machine"). It now logs once per (instance, hostname):
+  `caddy setup marker missing or unreadable (/etc/sandcastle/caddy.ready); certificate for <host>
+  not pushed`, so a broken machine-side setup is visible in the journal instead of looking like a
+  slow boot.
+- **F8 — a zone pass failed on records another path had already deleted.** The project-delete
+  hook and the pass GC race for the same stale A records; the loser got Cloudflare's
+  `HTTP 404: [{Code:81044 Message:Record does not exist.}]` from libdns and failed the whole
+  zone pass. `recordsAlreadyGone(err)` (matches `Record does not exist`, `81044`, `HTTP 404` in
+  the error text — libdns/cloudflare exposes no typed error) turns that into an INFO
+  "already gone" in `reconcileZoneRecords` and a nil result in the zone GC delete; any other
+  delete failure still fails the pass. The fake provider grew a `deleteErr` for the test.
+
+
+## 2026-09-13 — F9 (live run mph3): hostnames below the Auth Hostname are not install-reserved
+
+`scanMachineHostnameConflicts` refused any hostname *inside* the Auth Hostname / route base subtree, while `scanProjectDomainConflicts` refused only the reserved name itself or an ancestor. With the e2e zone `e2e.sc.tc42.uk` registered under the Auth Hostname `sc.tc42.uk`, a Project Domain claim passed and an explicit hostname of the same shape was refused ("reserved by this install"). Aligned the hostname rule to the domain rule: equal/ancestor conflicts, descendants do not — a real collision with a Public Route (`<label>.<tenant>.<route base>`) is caught by the route reservation scan in both directions. Alternative rejected: making Project Domains refuse the subtree too, which would forbid registering any zone under the Auth Hostname, a layout an admin may well choose.

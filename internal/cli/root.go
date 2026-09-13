@@ -80,6 +80,11 @@ type commandConfig struct {
 	// to order a zone-mode machine's certificate (ADR-0027). nil = a
 	// DeviceClient for the logged-in Auth Hostname; injected in tests.
 	authMachineCertificates authMachineCertificateClient
+	// authMachineHostnames overrides the Auth App client `sc create
+	// --hostname` and `sc hostname` use for explicit Machine Public
+	// Hostnames (ADR-0028). nil = a DeviceClient for the logged-in Auth
+	// Hostname; injected in tests.
+	authMachineHostnames authMachineHostnameClient
 	// routeHostResolver overrides the DNS probe `sc route` uses to warn about a
 	// missing wildcard. nil = a real lookup; injected in tests so they never
 	// touch the network. Mirrors authapp's RouteResolveHost seam.
@@ -378,6 +383,7 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newMachineLifecycleCommand(config, opts, "restart", machine.ActionRestart, false))
 	root.AddCommand(newMachineLifecycleCommand(config, opts, "delete", machine.ActionDelete, true))
 	root.AddCommand(newProjectCommand(config, opts))
+	root.AddCommand(newHostnameCommand(config, opts))
 	root.AddCommand(newDNSCommand(config, opts))
 	root.AddCommand(newDNSProxyCommand(config, opts))
 	root.AddCommand(newTailscaleCommand(config, opts))

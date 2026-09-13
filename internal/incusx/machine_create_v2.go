@@ -32,7 +32,8 @@ type CreateMachineV2Request struct {
 	HomeShare bool
 	// Bare overrides the profile's cloud-init user-data at the INSTANCE level
 	// with tenant.V2BareUserData: correct hostname and a Caddy serving the
-	// tenant-CA leaf, but no login user, no SSH key and no sshd. The profile
+	// tenant-CA leaf (and the public names once their certificates land), but
+	// no login user, no SSH key and no sshd. The profile
 	// still applies, so the machine keeps its NIC, root disk, /workspace and
 	// /.sc — only the cloud-init half is replaced.
 	Bare bool
@@ -43,13 +44,13 @@ type CreateMachineV2Request struct {
 	// the requested image resolves to admin.Images.Dev. Ignored when Bare is
 	// also set — an explicit --bare wins.
 	DevImage bool
-	// PublicHostname is the Naming Mode the caller decided for the machine
-	// (ADR-0027): the Machine Public Hostname <machine>.<Project Domain> when
-	// the project has a Project Domain, "" for a private-mode project. It is
-	// stamped as meta.KeyV2PublicHostname in the SAME instance-create call
-	// (the literal "private" when empty) — never a second write — and is the
-	// one record the fleet reads the machine's mode from afterwards.
-	PublicHostname string
+	// PublicHostnames is the machine's set of Machine Public Hostnames
+	// (ADR-0028): the derived <machine>.<Project Domain> when the project has
+	// a domain, plus every explicit --hostname the caller claimed BEFORE this
+	// call. It is stamped as meta.KeyV2PublicHostnames (sorted, comma-
+	// separated) in the SAME instance-create call — never a second write; an
+	// empty set stamps nothing. The legacy single-name key is not written.
+	PublicHostnames []string
 	// ConfirmCreate, when set, is consulted by EnsureMachineV2 just before it
 	// brings a MISSING machine into existence — the one branch of an ensure
 	// that provisions rather than reuses. Returning an error aborts without
@@ -90,33 +91,38 @@ type CreateMachineV2Result struct {
 	// cloud-init (login + sshd, no Caddy/TLS ingress). Callers use it to skip
 	// the HTTPS advice.
 	DevImage bool `json:"devImage,omitempty"`
-	// PublicHostname is the Machine Public Hostname stamped on the instance
-	// (ADR-0027); empty for a private-mode machine. It is the stamped value,
-	// not a recomputation, so the create output and the certificate request
-	// name exactly what the instance records.
-	PublicHostname string `json:"publicHostname,omitempty"`
+	// PublicHostnames is the set of Machine Public Hostnames stamped on the
+	// instance (ADR-0028), sorted; empty for a machine with no public name.
+	// It is the stamped value, not a recomputation, so the create output and
+	// the certificate request name exactly what the instance records.
+	// PublicHostname is its first element, kept one release for readers of
+	// the single-name JSON field.
+	PublicHostname  string   `json:"publicHostname,omitempty"`
+	PublicHostnames []string `json:"publicHostnames,omitempty"`
 }
 
-// namingModeRecord is the meta.KeyV2PublicHostname value for a create request:
-// the Machine Public Hostname, or the literal private marker. Stamped at
-// create time so a later `sc project set-domain` can never retroactively
-// flip a machine that was created private (spec §1.1).
-func namingModeRecord(publicHostname string) string {
-	if publicHostname = strings.TrimSpace(publicHostname); publicHostname != "" {
-		return publicHostname
-	}
-	return meta.NamingModePrivate
-}
-
-// v2InstanceConfigWithNamingMode returns config with the Naming Mode record
-// added (a nil config becomes a one-entry map). The record is written by the
-// create call itself, never rewritten.
-func v2InstanceConfigWithNamingMode(config api.ConfigMap, publicHostname string) api.ConfigMap {
+// v2InstanceConfigWithPublicHostnames returns config with the
+// KeyV2PublicHostnames record added (a nil config becomes a map). An empty
+// set adds nothing — the key is absent, never written empty. The record is
+// written by the create call itself; only the Auth App rewrites it, when a
+// hostname is added or removed.
+func v2InstanceConfigWithPublicHostnames(config api.ConfigMap, publicHostnames []string) api.ConfigMap {
 	if config == nil {
 		config = api.ConfigMap{}
 	}
-	config[meta.KeyV2PublicHostname] = namingModeRecord(publicHostname)
+	if value := meta.FormatPublicHostnames(publicHostnames); value != "" {
+		config[meta.KeyV2PublicHostnames] = value
+	}
 	return config
+}
+
+// firstPublicHostname is the compatibility single name: the first of the
+// sorted set, "" when there is none.
+func firstPublicHostname(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }
 
 // CreateMachineV2 launches the instance and waits (bounded) for it to lease an
@@ -137,15 +143,17 @@ func (c TenantCreator) CreateMachineV2(ctx context.Context, request CreateMachin
 	if request.VM {
 		instanceType = api.InstanceTypeVM
 	}
+	publicHostnames := meta.ParsePublicHostnames(strings.Join(request.PublicHostnames, ","))
 	result := CreateMachineV2Result{
-		Name:           request.Name,
-		Type:           string(instanceType),
-		Project:        request.IncusProject,
-		Image:          request.Image,
-		HomeShare:      request.HomeShare,
-		Bare:           request.Bare,
-		DevImage:       request.DevImage && !request.Bare,
-		PublicHostname: strings.TrimSpace(request.PublicHostname),
+		Name:            request.Name,
+		Type:            string(instanceType),
+		Project:         request.IncusProject,
+		Image:           request.Image,
+		HomeShare:       request.HomeShare,
+		Bare:            request.Bare,
+		DevImage:        request.DevImage && !request.Bare,
+		PublicHostname:  firstPublicHostname(publicHostnames),
+		PublicHostnames: publicHostnames,
 	}
 	// A bare machine has no login user to report — and the profile read that
 	// would find one is spent on its cloud-init override instead.
@@ -167,9 +175,9 @@ func (c TenantCreator) CreateMachineV2(ctx context.Context, request CreateMachin
 	default:
 		result.LoginUser = v2ProfileLoginUser(project)
 	}
-	// The Naming Mode record rides the create call itself (ADR-0027 §2.3):
-	// a machine is born private or zone and stays that way.
-	instanceConfig = v2InstanceConfigWithNamingMode(instanceConfig, result.PublicHostname)
+	// The public-name set rides the create call itself (ADR-0028): the
+	// instance records its names from its first second.
+	instanceConfig = v2InstanceConfigWithPublicHostnames(instanceConfig, result.PublicHostnames)
 	c.log("launching " + result.Type + " " + request.Name + " from " + request.Image + " into " + request.IncusProject)
 	op, err := project.CreateInstance(api.InstancesPost{
 		Name:   request.Name,
@@ -202,11 +210,13 @@ type EnsureMachineV2Result struct {
 	PrivateIP   string `json:"privateIP,omitempty"`
 	PrivateCIDR string `json:"privateCIDR,omitempty"`
 	LoginUser   string `json:"loginUser"`
-	// PublicHostname is the machine's Naming Mode record (ADR-0027), read off
-	// the instance's own config for an existing machine and taken from the
-	// request for one this call created; "" is private mode. `sc connect`
-	// keys the SSH host-key alias by it.
-	PublicHostname string `json:"publicHostname,omitempty"`
+	// PublicHostnames is the machine's set of Machine Public Hostnames
+	// (ADR-0028), read off the instance's own config for an existing machine
+	// and taken from the request for one this call created; empty means no
+	// public name. `sc connect` records every name in known_hosts.
+	// PublicHostname is the first of them, kept one release.
+	PublicHostname  string   `json:"publicHostname,omitempty"`
+	PublicHostnames []string `json:"publicHostnames,omitempty"`
 }
 
 // EnsureMachineV2 makes the named v2 machine exist and run: creates it from the
@@ -226,7 +236,8 @@ func (c TenantCreator) EnsureMachineV2(ctx context.Context, request CreateMachin
 	}
 	instance, _, err := project.GetInstance(request.Name)
 	if err == nil {
-		result.PublicHostname = meta.PublicHostnameFromConfig(instance.Config)
+		result.PublicHostnames = meta.PublicHostnamesFromConfig(instance.Config)
+		result.PublicHostname = firstPublicHostname(result.PublicHostnames)
 	}
 	switch {
 	case err == nil && instance.StatusCode == api.Stopped:
@@ -253,6 +264,7 @@ func (c TenantCreator) EnsureMachineV2(ctx context.Context, request CreateMachin
 		}
 		result.Created = true
 		result.PrivateIP, result.PrivateCIDR = created.PrivateIP, created.PrivateCIDR
+		result.PublicHostnames = created.PublicHostnames
 		result.PublicHostname = created.PublicHostname
 	default:
 		return EnsureMachineV2Result{}, fmt.Errorf("get machine %s: %w", request.Name, err)
@@ -283,10 +295,6 @@ var v2ProfileUserPattern = regexp.MustCompile(`(?m)^\s*-\s*name:\s*(\S+)`)
 var (
 	v2ProfileFQDNPattern   = regexp.MustCompile(`(?m)^fqdn:\s*\{\{\s*v1\.local_hostname\s*\}\}\.(\S+?)\s*$`)
 	v2ProfileSignerPattern = regexp.MustCompile(`(?m)^\s*SIGNER=(\S+)\s*$`)
-	// v2ProfileModePattern reads the Naming Mode the profile hands caddy-setup
-	// (the MODE= line of machine.env, ADR-0027 §5.1); absent on a private
-	// project's profile, which every consumer reads as private.
-	v2ProfileModePattern = regexp.MustCompile(`(?m)^\s*MODE=(\S+)\s*$`)
 )
 
 // v2BareInstanceConfig builds the instance-level config of a `--bare` machine:
@@ -310,12 +318,12 @@ func v2BareInstanceConfig(project TenantResourceServer, incusProject string) (ap
 			"so the machine would boot with no certificate and no way in — re-provision the project (sc project create %s) to re-render it",
 			incusProject, shortProjectName(incusProject))
 	}
-	// The Naming Mode of the bare document follows the profile too (its
-	// MODE=zone line), so a bare machine's machine.env is exactly what the
-	// profile would have given a non-bare sibling: same FQDN, same mode.
-	mode := firstSubmatch(v2ProfileModePattern, userData)
+	// The public-name seed of the bare document follows the profile too (its
+	// PUBLIC_HOSTNAMES= line, ADR-0028), so a bare machine's machine.env is
+	// exactly what the profile would have given a non-bare sibling: same
+	// private FQDN, same seed.
 	return api.ConfigMap{
-		"cloud-init.user-data": tenant.V2BareUserDataForMode(domain, signer, mode),
+		"cloud-init.user-data": tenant.V2BareUserDataWithPublicHostnames(domain, signer, tenant.PublicHostnamesEnvLineOf(userData)),
 		// The durable "this machine has no way in" marker. `sc connect` reads it
 		// to exec a shell over the Incus API instead of waiting out an sshd that
 		// is never coming.

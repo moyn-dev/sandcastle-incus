@@ -758,54 +758,67 @@ func TestPlanCreateV2InitialProject(t *testing.T) {
 	}
 }
 
-// ADR-0027 §5.1: a private project's profile is byte-identical to the
-// pre-feature rendering — MODE is absent and every consumer defaults it to
-// private, so pre-feature Machines and private projects share one contract.
-func TestV2ProfileUserDataPrivateProjectUnchanged(t *testing.T) {
+// ADR-0028: every project's profile names the machine by its Machine Private
+// Hostname and seeds machine.env's PUBLIC_HOSTNAMES from the instance record;
+// a private project's line carries no derived name. No MODE anywhere.
+func TestV2ProfileUserDataPrivateProject(t *testing.T) {
 	legacy := V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "default", "acme", "http://10.0.0.3:9443")
 	private := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "default", "acme", "", "http://10.0.0.3:9443")
 	if legacy != private {
-		t.Fatalf("private project rendering drifted from the legacy profile:\n%s\n---\n%s", legacy, private)
+		t.Fatalf("private project rendering drifted from the default profile:\n%s\n---\n%s", legacy, private)
 	}
 	if strings.Contains(private, "MODE=") {
 		t.Fatalf("private profile carries a MODE line:\n%s", private)
 	}
-	if !strings.Contains(private, "fqdn: {{ v1.local_hostname }}.default.acme\n") || !strings.Contains(private, "      FQDN={{ v1.local_hostname }}.default.acme\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n") {
+	wantEnv := "      FQDN={{ v1.local_hostname }}.default.acme\n      " + PublicHostnamesEnvLine("") + "\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n"
+	if !strings.Contains(private, "fqdn: {{ v1.local_hostname }}.default.acme\n") || !strings.Contains(private, wantEnv) {
 		t.Fatalf("private identity lines changed:\n%s", private)
 	}
+	if PublicHostnamesEnvLineOf(private) != PublicHostnamesEnvLine("") {
+		t.Fatalf("seed line not read back off the private profile")
+	}
 }
 
-// A zone project's profile names the machine <machine>.<Project Domain> and
-// hands caddy-setup MODE=zone; SIGNER stays for the Tenant CA trust step.
-func TestV2ProfileUserDataZoneProject(t *testing.T) {
+// A project with a Project Domain keeps the private identity (fqdn, FQDN)
+// and only changes the seed line: the derived name first, then the instance
+// record. Everything else is byte-identical to the private profile.
+func TestV2ProfileUserDataDomainProject(t *testing.T) {
 	data := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", " baum.hase.de ", "http://10.0.0.3:9443")
-	if !strings.HasPrefix(data, "## template: jinja\n#cloud-config\nfqdn: {{ v1.local_hostname }}.baum.hase.de\nprefer_fqdn_over_hostname: true\n") {
-		t.Fatalf("zone identity header:\n%s", data)
+	if !strings.HasPrefix(data, "## template: jinja\n#cloud-config\nfqdn: {{ v1.local_hostname }}.zp.acme\nprefer_fqdn_over_hostname: true\n") {
+		t.Fatalf("domain project identity header:\n%s", data)
 	}
-	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.baum.hase.de\n      MODE=zone\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n"
+	seed := PublicHostnamesEnvLine("baum.hase.de")
+	// The instance record is joined with a leading comma only when it is
+	// non-empty: an unstamped instance must not render a trailing comma.
+	if seed != "PUBLIC_HOSTNAMES={{ v1.local_hostname }}.baum.hase.de{{ ',' ~ ds.config['user.sandcastle.v2.public-hostnames'] if ds is defined and ds.config is defined and ds.config['user.sandcastle.v2.public-hostnames'] | default('') else '' }}" {
+		t.Fatalf("seed line = %q", seed)
+	}
+	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.zp.acme\n      " + seed + "\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n"
 	if !strings.Contains(data, wantEnv) {
-		t.Fatalf("zone machine.env:\n%s", data)
+		t.Fatalf("domain project machine.env:\n%s", data)
 	}
-	if strings.Contains(data, "zp.acme") {
-		t.Fatalf("zone profile still carries the private name:\n%s", data)
+	if strings.Contains(data, "MODE=") {
+		t.Fatalf("domain project profile carries a MODE line:\n%s", data)
 	}
-	// Everything else — shims, generalize, caddy-setup, runcmd — is the same
-	// as the private profile once the identity lines are swapped back.
+	if PublicHostnamesEnvLineOf(data) != seed {
+		t.Fatalf("seed line not read back off the profile: %q", PublicHostnamesEnvLineOf(data))
+	}
 	private := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", "", "http://10.0.0.3:9443")
-	normalized := strings.ReplaceAll(strings.ReplaceAll(data, ".baum.hase.de", ".zp.acme"), "      MODE=zone\n", "")
-	if normalized != private {
-		t.Fatalf("zone profile differs beyond identity + MODE:\n%s\n---\n%s", normalized, private)
+	if normalized := strings.ReplaceAll(data, seed, PublicHostnamesEnvLine("")); normalized != private {
+		t.Fatalf("domain profile differs beyond the seed line:\n%s\n---\n%s", normalized, private)
+	}
+	// A document without the seed line (older binary) reads back as the
+	// private default rather than nothing.
+	if PublicHostnamesEnvLineOf("FQDN=x\nSIGNER=y\n") != PublicHostnamesEnvLine("") {
+		t.Fatalf("missing seed line must read back as the private default")
 	}
 }
 
-// A zone project without a signer (no sidecar address) still gets the zone
-// identity: the Project Domain alone selects the jinja header.
-func TestV2ProfileUserDataZoneProjectWithoutSigner(t *testing.T) {
+// Without project + suffix there is no identity to render, domain or not:
+// the Project Domain never substitutes for the private name.
+func TestV2ProfileUserDataDomainWithoutIdentity(t *testing.T) {
 	data := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "", "", "baum.hase.de", "")
-	if !strings.HasPrefix(data, "## template: jinja\n#cloud-config\nfqdn: {{ v1.local_hostname }}.baum.hase.de\n") {
-		t.Fatalf("header:\n%s", data)
-	}
-	if strings.Contains(data, "machine.env") {
-		t.Fatalf("no-signer profile wrote machine.env:\n%s", data)
+	if strings.HasPrefix(data, "## template: jinja") || strings.Contains(data, "machine.env") || strings.Contains(data, "baum.hase.de") {
+		t.Fatalf("no-identity profile:\n%s", data)
 	}
 }
