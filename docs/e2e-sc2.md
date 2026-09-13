@@ -2654,8 +2654,9 @@ sc-adm public-dns-zone list
 #       Cloudflare id, an 8-hex token fingerprint and CLAIMS 0.
 sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")   # again
 # PASS: "public DNS zone $ZONE is already registered (use set-token to rotate its token)".
-sc-adm public-dns-zone add garbage.$ZONE --token-file <(printf %s not-a-token)
+sc-adm public-dns-zone add bad.${ZONE#*.} --token-file <(printf %s not-a-token)   # a SIBLING of $ZONE, not a name under it
 # PASS: "Cloudflare rejected the token for zone …" and `list` is unchanged (nothing stored).
+#       (a name under $ZONE would be refused by the nesting check first — that check runs before the token is tried)
 sc-adm public-dns-zone add sub.$ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")
 # PASS: "… overlaps registered zone $ZONE; zones may not nest".
 # PASS: `sc admin public-dns-zone list` prints the same table (both roots, one tree);

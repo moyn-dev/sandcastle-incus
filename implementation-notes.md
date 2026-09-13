@@ -5429,3 +5429,43 @@ libdns, which would have failed the same way one step later.
   listing orders, paging across two pages, the migration of an old-schema DB,
   and a reconciler run with a subdomain zone (records, sweep, release all
   relative to `tc42.uk.`, nothing written under `e2e.sc.tc42.uk.`).
+
+## 2026-09-13 — Public DNS Zones: GC records after the last Machine in a zone is deleted
+
+The live e2e run showed `sc delete zp-p12c:web` (the tenant's only Machine)
+leaving both A records in Cloudflare for 180 s; only the project-delete hook
+removed them. Two causes in `zoneReconciler.Reconcile`, both fixed:
+
+- **Zones are reconciled by claim, not by live target.** `byZone` was built
+  from targets only, so a zone whose claims had no live Machine was never
+  passed to `reconcileZoneRecords` and stale records under its claimed domains
+  were never GC'd. Now the zone set is the union of zones-with-targets and
+  zones-of-claims, with an empty target list where nothing is live. A
+  registered zone with no claims is still skipped — nothing to converge, and
+  no Cloudflare read for it. Alternative: reconciling every registered zone
+  — rejected, it costs a read per idle zone per pass for nothing.
+- **The empty-fleet early return is gone.** It was copied from the claim GC
+  ("an empty live set is never trusted"), but `ListZoneMachines` returns an
+  error on a listing failure, so an empty slice is a real state — and after
+  the last Machine is deleted it is the *expected* state. Records are
+  self-healing (a wrong deletion is re-created by the next pass within 30 s)
+  and certificate rows are retained on Machine deletion by design, so the
+  record and certificate passes run on an empty fleet. The one step that is
+  destructive and not self-healing is `gcMachineCertificates` (dropping
+  never-issued / expired / foreign-directory rows): a row dropped on a wrong
+  empty listing takes its persisted backoff and ARI state with it, and a
+  re-created row would order at once. That step alone keeps the guard
+  (`len(machines) > 0`), with a comment. Alternatives: dropping the guard
+  entirely (rejected for the backoff-loss reason) or keeping the whole early
+  return and deleting records from the machine-delete path instead
+  (rejected — the reconciler is the single owner of records per §4.6, and
+  out-of-band `incus delete` would still leak).
+- Tests: last Machine of one zone deleted while another zone's Machine
+  remains (base + wildcard deleted, other zone untouched, deletion logged);
+  fleet empty after the last Machine (records deleted, `retained` row kept);
+  registered zone without claims (no provider, no read). The existing GC
+  test's empty-fleet step now documents that only the row GC is skipped.
+- The commit also carries the harness fix from the same run: the bad-token
+  probe registers a *sibling* of the zone (`bad-<id>.<parent>`), because a
+  name under the zone is refused by the nesting check before the token is
+  ever tried.

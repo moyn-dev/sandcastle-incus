@@ -123,7 +123,9 @@ echo "$LIST" | jq -e --arg z "$ZONE" 'map(select(.zone==$z)) | .[0] | (.cloudfla
   || fail "zone $ZONE not listed with a Cloudflare id and a token fingerprint: $LIST"
 pass "$ZONE listed with a Cloudflare id and a token fingerprint"
 expect_fail "already registered" -- sc_adm public-dns-zone add "$ZONE" --token-file <(printf %s "$TOKEN")
-expect_fail "Cloudflare rejected the token" -- sc_adm public-dns-zone add "garbage-$ID.$ZONE" --token-file <(printf %s "not-a-token")
+# A sibling of $ZONE (not nested under it, so the nesting refusal cannot fire first)
+# with a garbage token: Cloudflare must reject the token before anything is stored.
+expect_fail "Cloudflare rejected the token" -- sc_adm public-dns-zone add "bad-$ID.${ZONE#*.}" --token-file <(printf %s "not-a-token")
 expect_fail "zones may not nest" -- sc_adm public-dns-zone add "sub.$ZONE" --token-file <(printf %s "$TOKEN")
 [[ "$(sc_adm public-dns-zone list --output json | jq -c 'map(.zone)|sort')" == "$(echo "$LIST" | jq -c 'map(.zone)|sort')" ]] \
   || fail "the registry changed after refused adds"

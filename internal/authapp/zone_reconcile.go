@@ -179,11 +179,12 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list machines for zone reconcile: %w", err)
 	}
-	if len(machines) == 0 {
-		// An empty fleet is never trusted (same guard as the claim GC): no
-		// records are deleted and no rows are dropped on a listing hiccup.
-		return nil
-	}
+	// An empty fleet is a real state, not a listing failure (that returns an
+	// error above): once the last Machine is deleted its records must still be
+	// GC'd. Records are self-healing (a wrong deletion is re-created by the
+	// next pass) and certificate rows are retained on Machine deletion by
+	// design, so both passes run on an empty fleet; only the certificate-row
+	// GC is skipped, see below.
 	claims, err := ListProjectDomainClaims(ctx, r.db)
 	if err != nil {
 		return fmt.Errorf("list project domain claims for zone reconcile: %w", err)
@@ -208,8 +209,15 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Public A records: one Cloudflare read per zone per pass (§4.2).
+	// Public A records: one Cloudflare read per zone per pass (§4.2). Every
+	// zone with at least one claim gets a pass — with an empty target list
+	// when none of its claimed projects has a live zone-mode Machine — so the
+	// records of the last Machine deleted in a zone are GC'd (§4.6). A
+	// registered zone without claims has nothing to converge and is not read.
 	byZone := map[string][]zoneTarget{}
+	for _, c := range claims {
+		byZone[c.Zone] = nil
+	}
 	for _, t := range targets {
 		byZone[t.claim.Zone] = append(byZone[t.claim.Zone], t)
 	}
@@ -239,8 +247,15 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	}
 	r.scheduleOrders(ctx, candidates)
 
-	if err := r.gcMachineCertificates(ctx, liveHostnames, now); err != nil {
-		errs = append(errs, err)
+	// The row GC is the one step that is not self-healing: a never-issued or
+	// expired row dropped on a wrong empty listing takes its persisted
+	// backoff and ARI state with it, and a re-created row orders at once.
+	// Retained rows survive either way; the GC simply waits for a non-empty
+	// fleet (the claim GC in project_domain_claims.go keeps the same guard).
+	if len(machines) > 0 {
+		if err := r.gcMachineCertificates(ctx, liveHostnames, now); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }

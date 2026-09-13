@@ -472,7 +472,12 @@ the trigger set, so this cannot feed back into the loop.
 - **Incus key without row** (`KeyV2Domain` set, no claim): logged once, ignored; never auto-claimed.
   Machines in such a project are treated as private for DNS and get no certificate.
 - **Records**: A records under a claimed domain with no matching zone-mode Machine → deleted (covers
-  out-of-band `incus delete`).
+  out-of-band `incus delete`). Every zone with at least one claim is reconciled each pass, with an
+  empty target list when none of its claimed projects has a live Machine — so the records of the last
+  Machine deleted in a zone go on the next pass, not with the project. An empty fleet is a real state
+  here (a listing failure is an error, not an empty list): records are self-healing and certificate
+  rows are retained by design, so both passes run; only the certificate-row drop below is skipped on an
+  empty fleet, since a row dropped on a wrong listing loses its backoff/ARI state.
 - **Certificate rows**: a row whose Machine is gone stays until `not_after` (retained for reuse), then is
   dropped. Rows whose `directory_url` ≠ the running setting are dropped.
 - **Machine reappears** (same hostname, row retained, `not_after − now > 0`): the row is reused as-is

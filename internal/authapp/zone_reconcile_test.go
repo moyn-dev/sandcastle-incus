@@ -1011,7 +1011,8 @@ func TestZoneReconcile_GCRetentionAndReuse(t *testing.T) {
 	if _, err := getMachineCertificate(h.ctx, h.db, "web.baum.hase.de"); err == nil {
 		t.Fatal("expired row of an absent machine retained")
 	}
-	// Empty fleet: nothing is trusted, nothing dropped.
+	// Empty fleet: the row GC (the one non-self-healing step) is skipped, so
+	// a never-issued row of an absent machine is not dropped.
 	if _, err := requestMachineCertificate(h.ctx, h.db, testCertRequest("ghost.baum.hase.de"), h.now); err != nil {
 		t.Fatal(err)
 	}
@@ -1090,6 +1091,97 @@ func TestZoneReconcile_UnclaimedDomainIsPrivateForDNS(t *testing.T) {
 	}
 	if len(h.dns.list("hase.de.")) != 0 || len(h.fleet.stamps) != 0 {
 		t.Fatalf("unclaimed project got records/stamps: %v %v", h.dns.list("hase.de."), h.fleet.stamps)
+	}
+}
+
+// The last zone-mode Machine of a zone is deleted while Machines remain in
+// another zone: the deleted Machine's A records (base + wildcard) are GC'd on
+// the next pass — the zone is reconciled because it holds a claim, even with
+// no live target (the live e2e bug: records only went with the project).
+func TestZoneReconcile_LastMachineInZoneDeletedGCsRecords(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	h := newZoneHarness(t, web)
+	addZone(t, h.db, "igel.de")
+	claim(t, h.db, "dachs.igel.de", "acme", "zp2")
+	other := ZoneMachine{Tenant: "acme", Project: "zp2", IncusProject: "sc2-acme-zp2", Name: "api",
+		ProjectDomain: "dachs.igel.de", PublicHostname: "api.dachs.igel.de", BridgeIPv4: "10.249.8.4", Running: true}
+	h.fleet.mu.Lock()
+	h.fleet.machines = append(h.fleet.machines, other)
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 2 {
+		t.Fatalf("hase.de A records after first pass = %v", got)
+	}
+	// sc delete web: the tenant's only machine in hase.de is gone, api stays.
+	h.fleet.mu.Lock()
+	h.fleet.machines = []ZoneMachine{other}
+	h.fleet.mu.Unlock()
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 0 {
+		t.Fatalf("deleted machine's A records survived: %v", got)
+	}
+	if got := recordNames(h.dns.list("igel.de."), "A"); strings.Join(got, ",") != "*.api.dachs=10.249.8.4,api.dachs=10.249.8.4" {
+		t.Fatalf("other zone's records = %v", got)
+	}
+	if h.logged("zone hase.de: deleted 2 stale A record(s)") != 1 {
+		t.Fatalf("no stale-record deletion logged: %v", h.logs)
+	}
+}
+
+// The whole fleet is empty after the last Machine is deleted: its A records
+// are still GC'd and its valid certificate row is retained for reuse.
+func TestZoneReconcile_EmptyFleetGCsRecordsKeepsRetainedRow(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	h := newZoneHarness(t, web)
+	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("web.baum.hase.de"))
+	for i := 0; i < 2; i++ { // order, then push
+		if err := h.pass(); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+	if h.state("web.baum.hase.de") != "installed" {
+		t.Fatalf("state = %s, want installed", h.state("web.baum.hase.de"))
+	}
+	issued := h.row("web.baum.hase.de")
+	// sc delete web: the fleet is empty, the rootfs is gone with it.
+	h.fleet.mu.Lock()
+	h.fleet.machines = nil
+	h.fleet.files = map[string]string{}
+	h.fleet.mu.Unlock()
+	h.now = h.now.Add(time.Minute)
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 0 {
+		t.Fatalf("empty fleet left A records: %v", got)
+	}
+	if h.logged("zone hase.de: deleted 2 stale A record(s)") != 1 {
+		t.Fatalf("no stale-record deletion logged: %v", h.logs)
+	}
+	// The valid certificate row is retained for reuse (not_after is in the
+	// future), untouched by the pass.
+	if retained := h.row("web.baum.hase.de"); retained.Serial != issued.Serial || !retained.usable(LetsEncryptStagingDirectory, h.now) {
+		t.Fatalf("row not retained across the empty fleet: %+v", retained)
+	}
+}
+
+// A registered zone without a claim has nothing to converge: no provider is
+// built for it and Cloudflare is not read.
+func TestZoneReconcile_ZoneWithoutClaimsIsNotRead(t *testing.T) {
+	h := newZoneHarness(t)
+	addZone(t, h.db, "igel.de")
+	if _, err := h.db.ExecContext(h.ctx, `DELETE FROM project_domain_claims`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if h.dns.gets != 0 || len(h.dns.tokens) != 0 {
+		t.Fatalf("zones without claims were read: gets=%d providers=%d", h.dns.gets, len(h.dns.tokens))
 	}
 }
 
