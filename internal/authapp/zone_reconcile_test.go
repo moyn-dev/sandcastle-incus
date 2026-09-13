@@ -202,6 +202,9 @@ type fakeDNS struct {
 	sets    int
 	deletes int
 	getErr  error
+	// deleteErr, when set, is what every DeleteRecords returns (after
+	// counting the call) without touching the records.
+	deleteErr error
 }
 
 func newFakeDNS() *fakeDNS { return &fakeDNS{records: map[string][]libdns.RR{}} }
@@ -285,6 +288,9 @@ func (p *fakeDNSProvider) DeleteRecords(_ context.Context, zone string, recs []l
 	p.dns.mu.Lock()
 	defer p.dns.mu.Unlock()
 	p.dns.deletes++
+	if p.dns.deleteErr != nil {
+		return nil, p.dns.deleteErr
+	}
 	var deleted []libdns.Record
 	for _, rec := range recs {
 		rr := rec.RR()
@@ -601,6 +607,11 @@ func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	}
 	if h.logged("no caddy setup marker") != 1 {
 		t.Fatal("marker-absent logged again on the next pass")
+	}
+	// The push gate names the hostname whose certificate is held back, once
+	// per (instance, hostname), so a machine-side setup failure is visible.
+	if got := h.logged("sc2-acme-zp/ff: caddy setup marker missing or unreadable (/etc/sandcastle/caddy.ready); certificate for ff.baum.hase.de not pushed"); got != 1 {
+		t.Fatalf("not-pushed logged %d times, want once: %v", got, h.logs)
 	}
 	// Marker appears (seeded file lists the name): row created, order runs,
 	// push happens, mirror installed.
@@ -1263,6 +1274,40 @@ func TestZoneReconcile_LastMachineInZoneDeletedGCsRecords(t *testing.T) {
 	}
 	if h.logged("zone hase.de: deleted 2 stale A record(s)") != 1 {
 		t.Fatalf("no stale-record deletion logged: %v", h.logs)
+	}
+}
+
+// The stale records were removed by another path first (the project-delete
+// hook vs the pass GC): Cloudflare answers the delete with 404 / "Record does
+// not exist". The desired state holds, so the pass logs it and succeeds. Any
+// other delete failure still fails the pass.
+func TestZoneReconcile_StaleRecordsAlreadyGoneIsNotAnError(t *testing.T) {
+	web := zoneMachine("web", "10.249.7.9", true)
+	h := newZoneHarness(t, web)
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := recordNames(h.dns.list("hase.de."), "A"); len(got) != 2 {
+		t.Fatalf("A records after first pass = %v", got)
+	}
+	h.fleet.mu.Lock()
+	h.fleet.machines = nil
+	h.fleet.files = map[string]string{}
+	h.fleet.mu.Unlock()
+	h.dns.deleteErr = errors.New("got error status: HTTP 404: [{Code:81044 Message:Record does not exist.}]")
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass must tolerate an already-deleted record: %v", err)
+	}
+	if h.logged("zone hase.de: 2 stale A record(s) already gone (got error status: HTTP 404") != 1 {
+		t.Fatalf("already-gone not logged: %v", h.logs)
+	}
+	if h.logged("deleted 2 stale A record(s)") != 0 {
+		t.Fatalf("a tolerated 404 must not be reported as a deletion: %v", h.logs)
+	}
+	h.dns.deleteErr = errors.New("got error status: HTTP 500: [{Code:10000 Message:Internal error}]")
+	err := h.pass()
+	if err == nil || !strings.Contains(err.Error(), "delete 2 stale A record(s): got error status: HTTP 500") {
+		t.Fatalf("a real delete failure must fail the pass, got %v", err)
 	}
 }
 

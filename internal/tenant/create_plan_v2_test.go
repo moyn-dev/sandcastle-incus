@@ -788,7 +788,9 @@ func TestV2ProfileUserDataDomainProject(t *testing.T) {
 		t.Fatalf("domain project identity header:\n%s", data)
 	}
 	seed := PublicHostnamesEnvLine("baum.hase.de")
-	if seed != "PUBLIC_HOSTNAMES={{ v1.local_hostname }}.baum.hase.de,{{ ds.config['user.sandcastle.v2.public-hostnames'] | default('') if ds is defined and ds.config is defined else '' }}" {
+	// The instance record is joined with a leading comma only when it is
+	// non-empty: an unstamped instance must not render a trailing comma.
+	if seed != "PUBLIC_HOSTNAMES={{ v1.local_hostname }}.baum.hase.de{{ ',' ~ ds.config['user.sandcastle.v2.public-hostnames'] if ds is defined and ds.config is defined and ds.config['user.sandcastle.v2.public-hostnames'] | default('') else '' }}" {
 		t.Fatalf("seed line = %q", seed)
 	}
 	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.zp.acme\n      " + seed + "\n      SIGNER=http://10.0.0.3:9443\n      HOME=/home/dev\n"

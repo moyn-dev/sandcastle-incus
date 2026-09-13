@@ -217,6 +217,15 @@ platform payload's `sbin/caddy-setup` (ADR-0022; `tenant.caddyIngressSetupScript
 script for `sc create`, `--bare`, Freeform Machines, containers and VMs. Dev Image machines run
 no `caddy-setup` (no Caddy, no marker, no certificate — they carry public names as records only).
 
+**Payload scripts are POSIX sh.** The boot shims (`/usr/local/sbin/sandcastle-caddy-setup`,
+`sandcastle-generalize`) are `#!/bin/sh` and *source* the payload body, so `caddy-setup` and
+`generalize` execute under whatever `/bin/sh` is on the image — dash on Debian. They may use nothing
+beyond POSIX sh: no process substitution (`<(…)`), `[[ ]]`, arrays, `local -n`, `+=`, `${x//…}`,
+`pipefail`, `read -a`, `$'…'`. The goldens in `internal/tenant/caddy_setup_test.go` run the script
+with `sh` (dash) exactly as the shim does, and `TestPayloadScriptsArePOSIXSh` rejects the listed
+bashisms statically — the live run of 2026-09-13 found a `done < <(…)` that dash refused
+("Syntax error: redirection unexpected"): no Caddyfile, no marker, no certificate push.
+
 ### 5.1 `machine.env` (cloud-init, per machine)
 
 ```

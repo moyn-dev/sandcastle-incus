@@ -88,8 +88,80 @@ func TestCaddySetupScriptContract(t *testing.T) {
 	}
 }
 
-// caddySetupRoot executes the real caddy-setup script under bash against a
-// throwaway root, with the tools it calls stubbed on PATH. The absolute
+// posixShell is the interpreter the goldens run the script with. The boot
+// shim is `#!/bin/sh` and sources the payload body, so on a Debian machine
+// the body executes under dash: run it with sh (dash when sh is something
+// else), and only as a last resort with `bash --posix`, which still accepts
+// most bashisms — TestPayloadScriptsArePOSIXSh covers that gap statically.
+func posixShell(t *testing.T) []string {
+	t.Helper()
+	for _, name := range []string{"sh", "dash"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return []string{path}
+		}
+	}
+	if path, err := exec.LookPath("bash"); err == nil {
+		return []string{path, "--posix"}
+	}
+	t.Skip("no POSIX shell available")
+	return nil
+}
+
+// bashisms are constructs dash rejects (or silently misparses) that a
+// payload script sourced by a /bin/sh shim must never carry. The live e2e
+// run found `done < <(…)` in caddy-setup: dash failed with "Syntax error:
+// redirection unexpected", no Caddyfile and no marker were written, and the
+// issued certificate was never pushed.
+var bashisms = []string{"<(", ">(", "[[", "pipefail", "declare ", "local -a", "local -n", "+=(", "read -a", "#!/bin/bash", "function ", "${", "&>", "|&"}
+
+// bashismWordStart is ANSI-C quoting ($'…'), which only opens a word — a
+// bare `$'` inside a regex like '…*$' is the anchor, not quoting.
+var bashismWordStart = regexp.MustCompile(`(^|[\s=(])\$'`)
+
+// bashismAllowed lists the `${` forms that are POSIX (the only ${…}
+// expansions the scripts use); everything else under `${` is suspect
+// (`${x//…}`, `${x^^}`, `${arr[@]}`, `${x:1:2}`).
+var bashismAllowed = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}|\$\{[0-9]+(:-[^}]*)?\}`)
+
+func assertPOSIXSh(t *testing.T, name, script string) {
+	t.Helper()
+	stripped := bashismAllowed.ReplaceAllString(script, "")
+	for _, b := range bashisms {
+		if strings.Contains(stripped, b) {
+			t.Errorf("%s carries the bashism %q (must stay POSIX sh: dash runs it):\n%s", name, b, script)
+		}
+	}
+	if loc := bashismWordStart.FindStringIndex(stripped); loc != nil {
+		t.Errorf("%s carries ANSI-C quoting ($'…') at offset %d (must stay POSIX sh)", name, loc[0])
+	}
+	if !strings.HasPrefix(script, "#!/bin/sh\n") {
+		t.Errorf("%s does not start with #!/bin/sh", name)
+	}
+	if sh, err := exec.LookPath("dash"); err == nil {
+		cmd := exec.Command(sh, "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s: dash -n rejects the script: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// Every boot-time script — the two payload bodies and the two shims that
+// source them — is POSIX sh. The shims are `#!/bin/sh`; cloud-init runs them
+// as such, and `.` inherits that interpreter for the body.
+func TestPayloadScriptsArePOSIXSh(t *testing.T) {
+	for name, script := range map[string]string{
+		"caddy-setup":      caddyIngressSetupScript,
+		"generalize":       machineGeneralizeScript,
+		"caddy-setup shim": SCCaddySetupShim,
+		"generalize shim":  SCGeneralizeShim,
+	} {
+		assertPOSIXSh(t, name, script)
+	}
+}
+
+// caddySetupRoot executes the real caddy-setup script under sh (dash) against
+// a throwaway root, with the tools it calls stubbed on PATH. The absolute
 // paths the script writes are rebased under root by textual substitution, so
 // what lands on disk is what a machine would get — same Caddyfile, same
 // marker, same hostnames file — and the systemctl/curl calls are recorded.
@@ -99,14 +171,13 @@ type caddySetupRoot struct {
 	t      *testing.T
 	root   string
 	script string
+	shell  []string
 	log    string
 }
 
 func newCaddySetupRoot(t *testing.T, machineEnv string) *caddySetupRoot {
 	t.Helper()
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available")
-	}
+	shell := posixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}
@@ -145,7 +216,14 @@ esac
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &caddySetupRoot{t: t, root: root, script: scriptPath}
+	return &caddySetupRoot{t: t, root: root, script: scriptPath, shell: shell}
+}
+
+// command builds the interpreter invocation the boot shim would make: sh
+// running the body, with args.
+func (r *caddySetupRoot) command(args ...string) *exec.Cmd {
+	argv := append(append([]string{}, r.shell[1:]...), r.script)
+	return exec.Command(r.shell[0], append(argv, args...)...)
 }
 
 // run executes the script with args and returns the calls it made (the log
@@ -161,7 +239,7 @@ func (r *caddySetupRoot) run(active bool, args ...string) string {
 			r.t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("bash", append([]string{r.script}, args...)...)
+	cmd := r.command(args...)
 	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(r.root, "bin")+":"+os.Getenv("PATH"), "SC_TEST_LOG="+logPath, "SC_TEST_ACTIVE="+activePath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		r.t.Fatalf("caddy-setup %v failed: %v\n%s", args, err, out)
@@ -320,7 +398,8 @@ func TestCaddySetupLegacyEnvWithoutPublicHostnames(t *testing.T) {
 // first boot its certificate has not landed, so the Caddyfile carries only
 // the private block and the marker lists no PUBLIC line — Caddy still
 // starts (the private block has a certificate). The seed's trailing comma
-// (an empty instance record) is harmless.
+// (an empty instance record, as profiles rendered before the tail-expression
+// fix seeded it) is harmless.
 func TestCaddySetupDerivedOnlyBeforeCert(t *testing.T) {
 	r := newCaddySetupRoot(t, derivedEnv)
 	r.run(false)
@@ -474,7 +553,7 @@ func TestCaddySetupRefreshKeepsCaddyfileOnValidateFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.root, "bin", "caddy"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", r.script, "--refresh")
+	cmd := r.command("--refresh")
 	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(r.root, "bin")+":"+os.Getenv("PATH"), "SC_TEST_LOG="+filepath.Join(r.root, "calls.log"), "SC_TEST_ACTIVE=/nonexistent")
 	if err := cmd.Run(); err == nil {
 		t.Fatal("refresh with a failing validate must exit nonzero")

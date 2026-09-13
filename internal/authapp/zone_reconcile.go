@@ -576,12 +576,32 @@ func (r *zoneReconciler) reconcileZoneRecords(ctx context.Context, zone string, 
 	}
 	if len(stale) > 0 {
 		if _, err := provider.DeleteRecords(ctx, lz, stale); err != nil {
-			errs = append(errs, fmt.Errorf("zone %s: delete %d stale A record(s): %w", zone, len(stale), err))
+			if recordsAlreadyGone(err) {
+				r.logf("INFO", "zone reconcile: zone %s: %d stale A record(s) already gone (%v)", zone, len(stale), err)
+			} else {
+				errs = append(errs, fmt.Errorf("zone %s: delete %d stale A record(s): %w", zone, len(stale), err))
+			}
 		} else {
 			r.logf("INFO", "zone reconcile: zone %s: deleted %d stale A record(s)", zone, len(stale))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// recordsAlreadyGone reports a DeleteRecords failure that only says the
+// records were removed by someone else first — the project-delete hook and
+// the pass GC race for the same stale records, and the loser gets Cloudflare's
+// 404 (`HTTP 404: [{Code:81044 Message:Record does not exist.}]` through
+// libdns/cloudflare). The desired state holds either way, so the caller logs
+// it and does not fail the pass.
+func recordsAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Record does not exist") ||
+		strings.Contains(msg, "81044") ||
+		strings.Contains(msg, "HTTP 404")
 }
 
 // reconcileMachine does the per-Machine work of a pass: the hostnames-file
@@ -840,6 +860,12 @@ func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, e
 		return false, fmt.Errorf("%s: %w", t.hostname, err)
 	}
 	if !ok {
+		// Visible in the journal per (instance, hostname): a machine whose
+		// caddy-setup never wrote the marker (the live run's dash syntax
+		// error) otherwise looks like a machine that is merely slow to boot.
+		r.logOnce(r.markerLogged, m.key()+"/not-pushed/"+t.hostname, "INFO",
+			"zone reconcile: %s: caddy setup marker missing or unreadable (%s); certificate for %s not pushed",
+			m.key(), tenant.CaddySetupMarkerPath, t.hostname)
 		return false, nil
 	}
 	if !marker.ReadyFor(t.hostname) {
@@ -1111,6 +1137,9 @@ func deleteZoneRecords(ctx context.Context, db *sql.DB, zone string, match func(
 		return nil
 	}
 	if _, err := provider.DeleteRecords(ctx, lz, stale); err != nil {
+		if recordsAlreadyGone(err) {
+			return nil
+		}
 		return fmt.Errorf("zone %s: delete %d record(s) %s: %w", zone, len(stale), what, err)
 	}
 	return nil

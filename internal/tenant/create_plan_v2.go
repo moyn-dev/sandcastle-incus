@@ -125,6 +125,13 @@ const PublicHostnamesEnvKey = "PUBLIC_HOSTNAMES"
 // tenant must not depend on meta.
 const publicHostnamesInstanceKeyExpr = "{{ ds.config['user.sandcastle.v2.public-hostnames'] | default('') if ds is defined and ds.config is defined else '' }}"
 
+// publicHostnamesInstanceKeyTailExpr is the same record rendered as ",<record>"
+// — or nothing when the record is absent or empty — for joining behind the
+// derived name without leaving a trailing comma (the live run saw
+// `PUBLIC_HOSTNAMES=m1.dbg…,` on an unstamped instance; harmless after
+// normalization, but the seed should read cleanly).
+const publicHostnamesInstanceKeyTailExpr = "{{ ',' ~ ds.config['user.sandcastle.v2.public-hostnames'] if ds is defined and ds.config is defined and ds.config['user.sandcastle.v2.public-hostnames'] | default('') else '' }}"
+
 // PublicHostnamesEnvLine renders machine.env's PUBLIC_HOSTNAMES= line for a
 // project: the derived <machine>.<projectDomain> (jinja, when the project has
 // a domain) joined with the instance record. caddy-setup normalizes and
@@ -136,7 +143,7 @@ func PublicHostnamesEnvLine(projectDomain string) string {
 	if projectDomain == "" {
 		return PublicHostnamesEnvKey + "=" + publicHostnamesInstanceKeyExpr
 	}
-	return PublicHostnamesEnvKey + "={{ v1.local_hostname }}." + projectDomain + "," + publicHostnamesInstanceKeyExpr
+	return PublicHostnamesEnvKey + "={{ v1.local_hostname }}." + projectDomain + publicHostnamesInstanceKeyTailExpr
 }
 
 // publicHostnamesEnvLinePattern reads a rendered profile's PUBLIC_HOSTNAMES=
@@ -425,7 +432,8 @@ if [ "$need" = 0 ]; then echo "agent-forwarding: OK"; else echo "agent-forwardin
 // updates centrally) before sshd is (re)started. On a fresh stock machine the
 // identity is already unique, so every step is a harmless no-op — correctness
 // lives here in one place rather than at save time.
-const machineGeneralizeScript = `#!/bin/bash
+const machineGeneralizeScript = `#!/bin/sh
+# POSIX sh: the boot shim sources this with /bin/sh (dash on Debian).
 set -u
 # Drop the source machine's host identity + stale leaf (re-fetched by caddy-setup),
 # its public-name certificates and hostnames file (this machine's set is seeded
@@ -474,9 +482,15 @@ systemctl try-restart ssh >/dev/null 2>&1 || true
 // Runs via the /usr/local/sbin/sandcastle-caddy-setup boot shim — the body
 // ships as the platform-payload entry SCPayloadCaddySetupPath (ADR-0022) and
 // serves `sc create`, `--bare`, Freeform Machines, containers and VMs alike.
-const caddyIngressSetupScript = `#!/bin/bash
+// The shim is `#!/bin/sh` and sources the body, so the body executes under
+// dash on Debian: it must stay strictly POSIX sh (no process substitution,
+// `[[`, arrays, `pipefail`, …) — TestPayloadScriptsArePOSIXSh and the sh-run
+// goldens in caddy_setup_test.go enforce that.
+const caddyIngressSetupScript = `#!/bin/sh
 # Sandcastle caddy-setup (ADR-0028): first boot, or --refresh after the Auth
 # App pushed /etc/sandcastle/hostnames or a per-hostname certificate.
+# POSIX sh only: the /usr/local/sbin/sandcastle-caddy-setup boot shim sources
+# this body with /bin/sh (dash on Debian) — no bash syntax anywhere in here.
 set -eu
 . /etc/sandcastle/machine.env
 REFRESH=0
@@ -545,18 +559,20 @@ EOF
 
 # Render: the private block always, then one block per public name whose
 # certificate directory is complete. Validate before installing so a bad
-# render never replaces a working Caddyfile.
+# render never replaces a working Caddyfile. The normalized names hold no
+# whitespace (DNS characters only), so a plain word-split loop over them is
+# exact — and unlike a pipe into "while read", it keeps RENDERED in this shell.
+HOSTS="$(hostnames_normalized < /etc/sandcastle/hostnames)"
 RENDERED=""
 {
   site_block "$FQDN" /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem
-  while IFS= read -r host; do
-    [ -n "$host" ] || continue
+  for host in $HOSTS; do
     if [ -s "/etc/sandcastle/tls/$host/cert.pem" ] && [ -s "/etc/sandcastle/tls/$host/key.pem" ]; then
       printf '\n'
       site_block "$host" "/etc/sandcastle/tls/$host/cert.pem" "/etc/sandcastle/tls/$host/key.pem"
       RENDERED="$RENDERED $host"
     fi
-  done < <(hostnames_normalized < /etc/sandcastle/hostnames)
+  done
 } > /etc/caddy/Caddyfile.new
 caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null
 mv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile

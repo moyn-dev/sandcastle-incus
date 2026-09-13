@@ -5736,3 +5736,44 @@ Decisions the ticket left open while extending `scripts/e2e-pdz.sh` and Phase 12
   on their own, not through the project-delete hook), then the existing web/project/zone teardown; the
   EXIT trap deletes `api` too. No new env vars: the two hostnames derive from `SANDCASTLE_E2E_RUN_ID`
   (`api-<id>.<zone>`, `alt-<id>.<zone>`), documented in `.env.e2e.sample`.
+
+## 2026-09-13 — MPH live run defects: caddy-setup under dash, silent marker gate, 404 on stale delete
+
+The first live e2e run of explicit Machine Public Hostnames (Debian trixie cloud image, real
+Cloudflare + ACME) surfaced three defects that the pure tests could not see. Fixes on the same
+branch; no spec change beyond a §5 note.
+
+- **F6 — the payload body runs under dash, not bash.** `caddyIngressSetupScript` carried a
+  `#!/bin/bash` shebang and, since slice 2, `done < <(hostnames_normalized < …)`. The shebang is
+  irrelevant: the boot shim `/usr/local/sbin/sandcastle-caddy-setup` is `#!/bin/sh` and *sources*
+  the body, so on Debian it executes under dash — which stopped at the process substitution
+  (`Syntax error: redirection unexpected`) after the private leaf was fetched: no Caddyfile with
+  public blocks, no `caddy.ready`, and the reconciler never pushed the issued certificate.
+  *Fix:* the script is strictly POSIX sh. The normalized names are captured into `HOSTS="$(…)"`
+  and iterated with `for host in $HOSTS` (they contain only DNS characters, so word-splitting is
+  exact, and unlike a pipe into `while read` the loop keeps `RENDERED` in the calling shell — a
+  temp file would have worked too but adds a file to clean up). `generalize` was already POSIX
+  apart from its shebang; both shebangs are `#!/bin/sh` now for honesty.
+  *Rule (new):* every script sourced by a `/bin/sh` shim is POSIX sh. The goldens now execute the
+  script with `sh` (falling back to `dash`, then `bash --posix`), and `TestPayloadScriptsArePOSIXSh`
+  statically rejects `<(`, `>(`, `[[`, `pipefail`, `declare`, `local -a/-n`, `+=(`, `read -a`,
+  `function`, `&>`, `|&`, ANSI-C `$'…'` (word-start only — grep's `*$'` anchor is not quoting),
+  any `${…}` beyond `${name}`/`${name:-…}`, and a non-`#!/bin/sh` shebang, and runs `dash -n`
+  where dash exists — a `bash --posix` run alone would still have accepted the original bug.
+  Also seen in the run: `PUBLIC_HOSTNAMES=m1.dbg…,` — the profile rendered `<derived>,<record>`
+  with an empty record. Harmless after normalization, but the jinja tail is now
+  `{{ ',' ~ record if … and record | default('') else '' }}`, so no trailing comma is emitted.
+- **F7 — a missing marker held the certificate back silently.** `markerReady` returned false for
+  `!ok` without a word (only `readMarker`'s generic "no caddy setup marker; A record only" existed,
+  which reads as "private-only machine"). It now logs once per (instance, hostname):
+  `caddy setup marker missing or unreadable (/etc/sandcastle/caddy.ready); certificate for <host>
+  not pushed`, so a broken machine-side setup is visible in the journal instead of looking like a
+  slow boot.
+- **F8 — a zone pass failed on records another path had already deleted.** The project-delete
+  hook and the pass GC race for the same stale A records; the loser got Cloudflare's
+  `HTTP 404: [{Code:81044 Message:Record does not exist.}]` from libdns and failed the whole
+  zone pass. `recordsAlreadyGone(err)` (matches `Record does not exist`, `81044`, `HTTP 404` in
+  the error text — libdns/cloudflare exposes no typed error) turns that into an INFO
+  "already gone" in `reconcileZoneRecords` and a nil result in the zone GC delete; any other
+  delete failure still fails the pass. The fake provider grew a `deleteErr` for the test.
+
