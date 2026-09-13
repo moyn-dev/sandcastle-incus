@@ -1920,11 +1920,12 @@ the CA (no `-k`), 308-redirected HTTP→HTTPS, proxied to `:3000`, vhosted
 `/workspace`. The file routes were later scoped to `/_h`→`$HOME` (+ `/_w`), which
 also dropped the `/`-root bind-mount workaround.
 
-> This phase is the **private-mode** contract (Tenant CA leaf fetched from the
-> sidecar). A machine in a project with a Project Domain runs the same Caddy
-> against a Let's Encrypt certificate the Auth App pushes instead — that is
-> **Phase 12** (ADR-0027), which also re-runs this phase as its private-mode
-> regression check.
+> This phase is the **Machine Private Hostname** contract (Tenant CA leaf
+> fetched from the sidecar) — every machine runs it. A machine with public
+> names (a Project Domain, or `--hostname`) runs the same Caddy with one extra
+> site block per name against a Let's Encrypt certificate the Auth App pushes —
+> that is **Phase 12** (ADR-0027/0028), which also re-runs this phase as its
+> private-name regression check.
 
 ### Phase 8c-bare — `sc create --bare`: HTTPS and hostname, nothing else ✅
 
@@ -2595,15 +2596,19 @@ API-key path — approval is a tenant action on the tenant's tailnet.)
 > what this appendix tests.
 
 
-## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027) ⚠️ not yet run
+## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027/0028) ⚠️ 12a–12f ALL PASS 2026-09-13 (`docs/e2e-runs/`), 12g not yet run
 
 A project claims a **Project Domain** under a Cloudflare zone the admin
-registered; every machine created in it afterwards gets the **Machine Public
-Hostname** `<machine>.<domain>` — public `A` records (pointing at the
-tenant-bridge address, reachable over the tailnet only) and one Let's Encrypt
-certificate per machine, ordered centrally over DNS-01 and pushed into the
-machine's Caddy. Spec: `docs/spec/public-dns-zones.md`; user reference:
-`docs/usage.html#public-dns-zones`.
+registered; every machine created in it afterwards gets the derived **Machine
+Public Hostname** `<machine>.<domain>`, and any machine can carry explicit
+ones (`sc create --hostname`, `sc hostname add`, ADR-0028) — every machine
+keeps its Machine Private Hostname (Tenant CA leaf, CoreDNS) and additionally
+has a *set* of public names. Per public name: public `A` records (pointing at
+the tenant-bridge address, reachable over the tailnet only) and one Let's
+Encrypt certificate, ordered centrally over DNS-01 and pushed into the
+machine's Caddy as its own site block. Spec: `docs/spec/public-dns-zones.md` +
+`docs/spec/machine-hostnames.md`; user reference:
+`docs/usage.html#public-dns-zones`, `#machine-hostnames`.
 
 **Gate: `SANDCASTLE_E2E_CLOUDFLARE_TOKEN` + `SANDCASTLE_E2E_PUBLIC_DNS_ZONE`**
 (a real, *dedicated* test zone the token can edit — `Zone > DNS > Edit` +
@@ -2634,14 +2639,19 @@ references are `<project>:<machine>` (`sc create zp:web`).
 SANDCASTLE_E2E=1 scripts/e2e.sh pdz            # sources .env.sc2, runs TestPublicDNSZonePhase12E2E → scripts/e2e-pdz.sh
 SANDCASTLE_E2E=1 make e2e-safe                 # same, after the unit + gated tiers
 ```
-The script drives 12a → 12b → 12c/12d (create, A records at `1.1.1.1`, CERT
-`ok`, `sc project status`, `openssl s_client`, wildcard vhost) → 12f
-(refusals, delete → records gone, project delete → claim released, zone
-removed) and prints **`ALL PASS — Phase 12 Public DNS Zones e2e`**. It skips
-(exit 0) without the variables, reuses a zone that is already registered (and
-then leaves it), and tears everything down on failure unless
-`SANDCASTLE_E2E_PDZ_KEEP=1`. 12e and the Freeform/Dev-Image checks of 12d are
-manual.
+The script drives 12a → 12b → 12c/12d (create: `DNS:` + `Public name:` lines,
+A records at `1.1.1.1`, CERT `ok`, `sc project status`, `openssl s_client`,
+wildcard vhost) → 12g (`sc create --hostname` with an apex-level name, the
+derived name beside it, the private name still served, `sc hostname
+add|list|remove`, per-name certificates with unchanged serials, the refusals,
+`sc create --hostname` of a taken name) → 12f (`unset-domain --dry-run`
+allowed with machines, zone remove refused, delete `api` then `web` → records
+gone, project delete → claim released, zone removed) and prints **`ALL PASS —
+Phase 12 Public DNS Zones + explicit hostnames e2e`**. It skips (exit 0)
+without the variables, reuses a zone that is already registered (and then
+leaves it), and tears everything down on failure (`api`, `web`, the project,
+the zone) unless `SANDCASTLE_E2E_PDZ_KEEP=1`. 12e, the Freeform/Dev-Image
+checks of 12d and the **(DB)**/other-tenant extras of 12g are manual.
 
 ### 12a — zone registry (admin)
 
@@ -2833,8 +2843,9 @@ sc incus exec web -- sh -c ': > /etc/sandcastle/hostnames; /usr/local/sbin/sandc
 ### 12f — refusals, then cleanup (delete → records gone → claim released → zone removed)
 
 ```bash
-sc project unset-domain zp
-# PASS: refused, lists web, ff, b1, late and devbox (it has a public name too).
+sc project unset-domain zp --dry-run
+# PASS: `[dry-run] would have: …` — allowed with machines present (ADR-0028 slice 3 retired the "has machines
+#       with a public name" refusal; a real unset re-derives web, ff, b1, late and devbox, see 12b).
 sc-adm public-dns-zone remove $ZONE
 # PASS: refused — "public DNS zone $ZONE still has claimed project domains: e2e-$RUN.$ZONE (<tenant>/zp); unset them first".
 sc delete zp:web --yes
@@ -2854,7 +2865,7 @@ sc-adm public-dns-zone remove $ZONE
 #       "pruned orphaned project domain claim e2e-$RUN.$ZONE (<tenant>/zp)", the A records are gone and the
 #       certificate row is dropped with the claim; CLAIMS 0 and the zone is removable.
 # PASS (staging → production switch heals): redeploy the auth-app with the production directory on a throwaway
-#       install — every zone-mode row logs "certificate issued by <staging>, running <production>; re-ordering"
+#       install — every certificate row logs "certificate issued by <staging>, running <production>; re-ordering"
 #       once and is re-issued (spends production budget: only on a dedicated test zone).
 # PASS (private-only regression): Phases 7c, 8, 8c run unchanged in a project without a domain on the same
 #       install — DNS:/HTTPS: lines byte-identical, CERT column `-`, no public-hostname(s) key on the machine,
@@ -2864,87 +2875,129 @@ sc-adm public-dns-zone remove $ZONE
 #       line for it).
 ```
 
-### 12g — explicit Machine Public Hostnames (ADR-0028) ⚠️ placeholder — automated by slice 4 of #172
+### 12g — explicit Machine Public Hostnames (ADR-0028) — automated by `scripts/e2e-pdz.sh` (slice 4 of #172)
 
-Slice 1 (#173) ships the reservations, the API and the CLI; slice 2 (#174) the
-per-name machine contract; slice 3 (#175) the per-(machine, hostname)
-reconciler. `pp` is a project **without** a domain on the same install; `RUN`
-as above.
+Runs after 12c on the same project `zp` (it holds `e2e-$RUN.$ZONE`, so every
+machine also carries the derived `<m>.e2e-$RUN.$ZONE`). The script's names:
+machine `api`, explicit hostnames `api-$RUN.$ZONE` (given at create,
+**apex-level** — directly under the registered zone) and `alt-$RUN.$ZONE`
+(added on the running machine). `<suffix>` is the Tenant DNS Suffix
+(`sc ls --json` → `.tenant.dnsSuffix`); `<api-ip>` the machine's tenant-bridge
+IP (`sc ls zp:api --json` → `.privateIP`). Every check reads `sc` output or
+dials the machine over the tailnet; the **(DB)** and other-tenant extras at the
+end are manual.
 
 ```bash
-sc create zp:web2 --hostname web12-$RUN.$ZONE --fqdn shop-$RUN.$ZONE
-# PASS: the DNS: web2.zp.<suffix> line, then three "Public name:" lines (shop-…, web2.e2e-$RUN.$ZONE, web12-…,
-#       sorted), one IP: line, returns at once;
-#       `sc incus config get web2 user.sandcastle.v2.public-hostnames` = the same three names comma-separated,
-#       and NO user.sandcastle.v2.public-hostname key; `sc ls zp:web2` FQDN reads "shop-$RUN.$ZONE (+2)";
-#       `sc ls --json` carries publicHostnames; (DB) two machine_hostnames rows and three machine_certificates rows.
-sc create zp:dup --hostname web12-$RUN.$ZONE
-# PASS: refused with `machine hostname "web12-$RUN.$ZONE" overlaps "web12-$RUN.$ZONE" held by machine "zp:web2" in this tenant`,
-#       NO instance created (`sc ls zp:dup` empty), no row leaked.
-sc create pp:solo --hostname solo-$RUN.$ZONE
-# PASS: the DNS: line is kept and one "Public name: solo-$RUN.$ZONE" line follows; `sc project set-domain pp x-$RUN.$ZONE --dry-run`
-#       is allowed (explicit names never block a domain change).
-# PASS (machine side, slice 2 — mixed and explicit-only, once cloud-init finished on web2 and solo):
-#   sc incus exec web2 -- grep PUBLIC_HOSTNAMES /etc/sandcastle/machine.env
-#       # → the derived name and, through the datasource read, the sorted stamped set (shop-…,web2.e2e-…,web12-…)
-#   sc incus exec web2 -- cat /etc/sandcastle/hostnames             # → shop-$RUN.$ZONE / web2.e2e-$RUN.$ZONE / web12-$RUN.$ZONE (sorted)
-#   sc incus exec solo -- cat /etc/sandcastle/hostnames             # → solo-$RUN.$ZONE (the private project's seed is the record alone)
-#   sc incus exec solo -- cat /etc/sandcastle/caddy.ready           # → PRIVATE=solo.pp.<suffix> / RENDERED=…; PUBLIC= per name once pushed
-#   sc incus exec web2 -- hostname -f                               # → web2.zp.<suffix>
-#   sc c zp:web2 -- true                                            # known_hosts line: web2.zp.<suffix>,shop-…,web2.e2e-…,web12-… (private first)
-#   (If the datasource read yields nothing on this image, /etc/sandcastle/hostnames on solo is empty at first boot;
-#    the reconciler pushes it whole within 60 s — the log reads "solo: hostnames file pushed (solo-$RUN.$ZONE)" —
-#    record the outcome; the derived name on web2 is seeded either way.)
-# PASS (reconciler, slice 3 — per (machine, hostname); ≤ 60 s for records, ≤ 5 min for certificates):
-#   dig +short web12-$RUN.$ZONE @1.1.1.1; dig +short x.shop-$RUN.$ZONE @1.1.1.1; dig +short solo-$RUN.$ZONE @1.1.1.1
-#       # → each answers its machine's tenant-bridge IPv4 (base + wildcard per name; the apex-level names are
-#       #   written into the Cloudflare zone as `web12-$RUN` / `*.web12-$RUN`); the auth-app log has
-#       #   "zone reconcile: zone $ZONE: set N A record(s)" once per change, then no writes.
-#   sc ls zp:web2                                                   # CERT ok once EVERY name is installed (the column is
-#                                                                   # the worst state across the machine's names)
-#   sc project status zp                                            # three rows for web2 (shop-…, web2.e2e-…, web12-…),
-#                                                                   # each `installed` with NOT AFTER (the machine's earliest)
-#   sc project status pp                                            # Domain: (none) AND the table: solo / solo-$RUN.$ZONE / installed
-#   sc incus config get web2 user.sandcastle.v2.cert-state          # → shop-…=installed,web2.e2e-…=installed,web12-…=installed
-#   sc incus config get web2 user.sandcastle.v2.cert-not-after      # → the earliest NOT AFTER of the three (RFC 3339 UTC)
-#   sc incus exec web2 -- ls /etc/sandcastle/tls                    # → cert.pem key.pem + one directory per name (cert.pem 0644, key.pem 0600)
-#   sc incus exec web2 -- cat /etc/sandcastle/caddy.ready           # → PRIVATE=web2.zp.<suffix> + PUBLIC= per name (three lines)
-#   for n in shop-$RUN.$ZONE web2.e2e-$RUN.$ZONE web12-$RUN.$ZONE; do
-#     openssl s_client -connect <web2-ip>:443 -servername $n </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName -issuer
-#   done                                                            # → per name: DNS:<n>, DNS:*.<n> and the STAGING issuer;
-#                                                                   #   `openssl s_client -servername web2.zp.<suffix>` still shows the tenant-CA leaf
-#   auth-app log: one "certificate <serial> issued" + one "installed on …/web2" line PER name; adding a name never
-#       re-orders the others (the derived name's serial is unchanged across the hostname add/remove below).
-#   (DB) three machine_certificates rows for web2, one for solo; each has pushed_serial = serial.
-sc hostname add zp:web2 api-$RUN.$ZONE; sc hostname list zp:web2; sc hostname remove zp:web2 api-$RUN.$ZONE
-# PASS: add prints "Public name: api-$RUN.$ZONE (certificate pending)" + the PUBLIC NAME/KIND/ZONE table (derived + 3 explicit);
-#       the instance key gains and then loses the name; `sc hostname remove zp:web2 web2.e2e-$RUN.$ZONE` is refused
-#       (`… is not held by machine "zp:web2"`); `sc hostname add zp:web2 $ZONE` is refused as the zone apex;
-#       `sc hostname add zp:web2 x.e2e-$RUN.$ZONE` is refused as inside the project's own domain.
-# PASS (reconciler on add, within seconds — the endpoint kicks a pass): `/etc/sandcastle/hostnames` on web2 lists
-#       four names ("web2: hostnames file pushed (…)" in the log), A records for api-$RUN.$ZONE appear, cert-state gains
-#       `api-…=pending` then `=installed` (≤ 5 min), the marker gains PUBLIC=api-$RUN.$ZONE, `openssl -servername
-#       api-$RUN.$ZONE` serves its own certificate; `sc ls zp:web2` CERT reads `pending` until it lands, then `ok`.
-# PASS (reconciler on remove, within seconds): `dig +short api-$RUN.$ZONE @1.1.1.1` and the wildcard are empty (the
-#       release hook deleted them; they never come back), the hostnames file is pushed with three names and the marker
-#       loses PUBLIC=api-…, cert-state drops the name, `openssl -servername api-$RUN.$ZONE` now answers with the
-#       first block's certificate (no dedicated block); (DB) the api-… machine_certificates row is RETAINED with its
-#       certificate; a second `sc hostname add zp:web2 api-$RUN.$ZONE` reaches `installed` with NO new order
-#       (log: "installed on", no "issued").
-# PASS (other tenant): `sc hostname add p:m x.web12-$RUN.$ZONE` → the flat "overlaps a name already claimed on this install" text.
-# PASS (reverse): `sc project create x --domain web12-$RUN.$ZONE` and `sc route publish … --hostname www.web12-$RUN.$ZONE`
-#       are refused naming the hostname (own tenant) / flat (other tenant).
-sc-adm public-dns-zone remove $ZONE
-# PASS: refused — "still has claimed project domains" (zp) — and, after `sc project delete zp --yes`, "still has machine
-#       hostnames: solo-$RUN.$ZONE (<tenant>/pp:solo); remove them first".
-sc-adm incus delete <remote>:solo --project <prefix>-<tenant>-pp
-# PASS (reconciler, ≤ 60 s): solo-$RUN.$ZONE's A records (base + wildcard) are gone — "zone $ZONE: deleted 2 stale A
-#       record(s)" — while the machine_hostnames row still exists; (DB) its machine_certificates row is retained.
-# PASS (GC, ≤ 5 min): the auth-app log shows "pruned orphaned machine hostname solo-$RUN.$ZONE (<tenant>/pp:solo)";
-#       `sc-adm public-dns-zone remove $ZONE` now succeeds (the retained certificate row is dropped once it expires,
-#       or at once when it never issued).
-# PASS (project delete with several names): `sc project delete zp --yes` earlier releases the domain AND web2's
-#       explicit hostnames; all of web2's records are gone on the next pass and nothing is re-created.
+sc create zp:api --hostname api-$RUN.$ZONE
+# PASS: output has "DNS: api.zp.<suffix> (auto-registers within seconds)" (every machine keeps its Machine
+#       Private Hostname) and one Public name line PER name:
+#       "Public name: api-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)" and
+#       "Public name: api.e2e-$RUN.$ZONE (A record pending, certificate pending — …)"; returns at once.
+sc ls zp:api; sc ls zp:api --json | jq .machines[0].publicHostnames
+# PASS: FQDN column reads "api-$RUN.$ZONE (+1)" (first name + count); --json carries exactly
+#       ["api-$RUN.$ZONE","api.e2e-$RUN.$ZONE"] (sorted). `sc incus config get api user.sandcastle.v2.public-hostnames`
+#       is the same list comma-separated; there is NO user.sandcastle.v2.public-hostname key.
+sc hostname list zp:api
+# PASS: PUBLIC NAME / KIND / ZONE table with `api-$RUN.$ZONE  explicit  $ZONE` and `api.e2e-$RUN.$ZONE  derived  $ZONE`.
+dig +short api-$RUN.$ZONE @1.1.1.1; dig +short x.api-$RUN.$ZONE @1.1.1.1      # and the same for api.e2e-$RUN.$ZONE
+# PASS (≤ 180 s): all four answer <api-ip>; in the Cloudflare zone the apex-level records are `api-$RUN` and
+#       `*.api-$RUN` (relative to the containing Cloudflare zone), DNS-only, TTL 60.
+sc ls zp:api
+# PASS (≤ 10 min): CERT `ok` — the column folds the WORST state across the machine's names, so it reads
+#       `pending` until BOTH certificates are installed; `sc ls --json` .certStates = {"api-…":"installed",
+#       "api.e2e-…":"installed"}; `sc incus config get api user.sandcastle.v2.cert-state` =
+#       `api-$RUN.$ZONE=installed,api.e2e-$RUN.$ZONE=installed`; `sc project status zp` has one row per name for api.
+openssl s_client -connect <api-ip>:443 -servername api-$RUN.$ZONE </dev/null 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName -issuer -serial
+# PASS: SANs `DNS:api-$RUN.$ZONE, DNS:*.api-$RUN.$ZONE`, issuer from the Let's Encrypt STAGING hierarchy;
+#       note the serial — it must not change below.
+openssl s_client -connect <api-ip>:443 -servername api.zp.<suffix> </dev/null 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName -issuer
+# PASS: SAN `DNS:api.zp.<suffix>` and an issuer containing "Sandcastle" (the tenant CA), NOT staging — the
+#       Machine Private Hostname keeps serving the tenant-CA leaf beside the public names.
+
+sc hostname add zp:api alt-$RUN.$ZONE
+# PASS: "Public name: alt-$RUN.$ZONE (certificate pending)" followed by the table with all three names
+#       (alt-… explicit, api-… explicit, api.e2e-… derived); `sc ls zp:api --json` .publicHostnames lists the
+#       three (sorted) within seconds — the endpoint kicks the reconciler, which pushes /etc/sandcastle/hostnames
+#       whole ("api: hostnames file pushed (…)" in the auth-app log).
+dig +short alt-$RUN.$ZONE @1.1.1.1; dig +short x.alt-$RUN.$ZONE @1.1.1.1
+# PASS (≤ 180 s): both answer <api-ip>.
+sc ls zp:api
+# PASS (≤ 10 min): CERT `pending` while alt-… is ordered, then `ok`; .certStates gains "alt-…":"installed";
+#       the marker /etc/sandcastle/caddy.ready on api has three PUBLIC= lines; /etc/sandcastle/tls/alt-$RUN.$ZONE/
+#       holds cert.pem + key.pem.
+openssl s_client -connect <api-ip>:443 -servername alt-$RUN.$ZONE </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName -issuer
+# PASS: its OWN certificate — SANs `DNS:alt-$RUN.$ZONE, DNS:*.alt-$RUN.$ZONE`, staging issuer.
+openssl s_client -connect <api-ip>:443 -servername api-$RUN.$ZONE </dev/null 2>/dev/null | openssl x509 -noout -serial
+# PASS: the SAME serial as before the add — one certificate per hostname, adding a name never reissues the
+#       others (the auth-app log has one "issued" + one "installed" line for alt-… and none for api-…).
+
+# refusals — every one --dry-run, and `sc ls zp:api --json` .publicHostnames is unchanged afterwards
+sc hostname add zp:api sub.e2e-$RUN.$ZONE --dry-run
+# PASS: `machine hostname "sub.e2e-$RUN.$ZONE" overlaps project domain "e2e-$RUN.$ZONE" claimed by project "zp"
+#       in this tenant` (a name inside a Project Domain — even the project's own — is the domain's).
+sc hostname add zp:web api-$RUN.$ZONE --dry-run
+# PASS: `machine hostname "api-$RUN.$ZONE" overlaps "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`.
+sc project create x-$RUN --domain api-$RUN.$ZONE --dry-run
+# PASS: `project domain "api-$RUN.$ZONE" overlaps hostname "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`
+#       (reverse check: a domain may not sit on, above or below a hostname).
+sc hostname add zp:api $ZONE --dry-run
+# PASS: `machine hostname "$ZONE" is a zone apex; use at least one label below $ZONE`.
+sc hostname remove zp:api api.e2e-$RUN.$ZONE --dry-run
+# PASS: `machine hostname "api.e2e-$RUN.$ZONE" is not held by machine "zp:api"` — the derived name goes with the
+#       project's domain, never per machine.
+
+sc hostname remove zp:api alt-$RUN.$ZONE
+# PASS: "Released alt-$RUN.$ZONE from machine zp:api." + the table without alt-…; `sc hostname list zp:api` no
+#       longer shows it; within 60 s `sc ls zp:api --json` .publicHostnames is back to two names and .certStates
+#       has no alt-… entry (`sc incus config get api user.sandcastle.v2.cert-state` lists two names);
+#       `sc project status zp` lists api with api-… and api.e2e-… only.
+dig +short alt-$RUN.$ZONE @1.1.1.1; dig +short x.alt-$RUN.$ZONE @1.1.1.1
+# PASS (≤ 180 s, TTL 60): both empty — the release hook deleted them; they never come back.
+openssl s_client -connect <api-ip>:443 -servername alt-$RUN.$ZONE </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName
+# PASS (≤ 120 s): no certificate carrying DNS:alt-$RUN.$ZONE any more — the handshake fails or Caddy answers with
+#       another block's certificate (the shrunken hostnames file was pushed and --refresh dropped the block);
+#       `-servername api-$RUN.$ZONE` still serves its certificate with the SAME serial as at the start.
+# NOTE: the retained machine_certificates row for alt-… is not visible through `sc` (`sc project status` reads
+#       the instance mirror) — the script prints a note; check it by hand (DB, below).
+sc create zp:api2 --hostname api-$RUN.$ZONE --dry-run
+# PASS: refused — `machine hostname "api-$RUN.$ZONE" overlaps "api-$RUN.$ZONE" held by machine "zp:api" in this
+#       tenant`; `sc ls zp:api2` lists nothing (a refused claim creates no instance).
+# cleanup (the script does this before the 12f teardown of web):
+sc delete zp:api --yes
+# PASS (≤ 180 s): the A records of api-$RUN.$ZONE and api.e2e-$RUN.$ZONE (base + wildcard) are gone; the
+#       reservation api-$RUN.$ZONE is released by `sc delete` → the name is claimable again at once.
+```
+
+Manual extras (not in the script — run when a second tenant, a private project
+or the appliance's `sqlite3` is at hand):
+
+```bash
+# (DB) after `sc hostname remove zp:api alt-$RUN.$ZONE`
+sqlite3 /var/lib/sandcastle/auth/auth.db "SELECT hostname, state, serial FROM machine_certificates WHERE hostname='alt-$RUN.$ZONE'"
+# PASS: the row is RETAINED (state issued/installed, serial kept); `sc hostname add zp:api alt-$RUN.$ZONE` again
+#       reaches `installed` with NO new "issued" line in the auth-app log (the retained certificate is re-pushed).
+# (DB) `SELECT hostname FROM machine_hostnames` — one row per EXPLICIT name (api-…; alt-… while held); the derived
+#       api.e2e-$RUN.$ZONE is never a row (it is implied by the project_domain_claims row).
+sc create pp:solo --hostname solo-$RUN.$ZONE            # pp: a project WITHOUT a domain
+# PASS: the DNS: line and ONE Public name line; /etc/sandcastle/hostnames on solo reads solo-$RUN.$ZONE (seeded from
+#       the instance record, or pushed by the reconciler within 60 s when the datasource read is empty — record which);
+#       `sc project status pp` shows `Domain: (none)` AND the table row solo / solo-$RUN.$ZONE / installed;
+#       `sc project set-domain pp x-$RUN.$ZONE --dry-run` is allowed (explicit names never block a domain change).
+sc hostname add <other-tenant-project>:m x.api-$RUN.$ZONE   # from a second tenant
+# PASS: the flat `machine hostname "x.api-$RUN.$ZONE" overlaps a name already claimed on this install; choose another`.
+sc route publish <machine> --hostname www.api-$RUN.$ZONE
+# PASS: `route hostname "www.api-$RUN.$ZONE" is inside machine hostname "api-$RUN.$ZONE" claimed on this install`.
+sc-adm public-dns-zone remove $ZONE                     # while zp is deleted but pp:solo still holds solo-…
+# PASS: refused — "public DNS zone $ZONE still has machine hostnames: solo-$RUN.$ZONE (<tenant>/pp:solo); remove them first".
+sc-adm incus delete <remote>:solo --project <prefix>-<tenant>-pp     # out-of-band
+# PASS (≤ 60 s): solo-…'s A records are gone ("deleted 2 stale A record(s)"); (≤ 5 min) the auth-app log shows
+#       "pruned orphaned machine hostname solo-$RUN.$ZONE (<tenant>/pp:solo)" and the zone is removable.
+# PASS (machine side, per name): /etc/sandcastle/tls/<name>/{cert,key}.pem (0644/0600) per public name, the private
+#       leaf /etc/sandcastle/tls/{cert,key}.pem untouched; caddy.ready = PRIVATE=api.zp.<suffix> + one PUBLIC=<name>
+#       per rendered block; `sandcastle-caddy-setup --refresh` by hand is idempotent; `sc c zp:api -- true` writes ONE
+#       known_hosts line keyed `api.zp.<suffix>,api-$RUN.$ZONE,api.e2e-$RUN.$ZONE` (private name first).
 ```
 
 **PASS (phase):** `scripts/e2e-pdz.sh` ends with `ALL PASS`, and the manual

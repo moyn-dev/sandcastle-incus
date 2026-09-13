@@ -151,13 +151,23 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
 - **Project Domain** — The public name a project claims under a Public DNS Zone
   (`sc project create zp --domain baum.hase.de`, `set-domain`,
   `unset-domain`; shown by `sc project status`). At least one label below the
-  zone; reserved install-wide, first come, including everything below it. A
-  project without one is a private-mode project.
-- **Machine Public Hostname** — `<machine>.<Project Domain>`: the public DNS
-  name of a machine created in a project that has a Project Domain. Its A
-  records (base + `*.` wildcard, DNS-only) point at the machine's tenant-bridge
-  address, so it is reachable only over the tenant tailnet; distinct from a
-  Public Route, which goes through the edge.
+  zone; reserved install-wide, first come, including everything below it. Its
+  machines carry the derived Machine Public Hostname `<machine>.<domain>`
+  beside their private name; a project without one gives its machines no
+  derived name (they may still carry explicit hostnames).
+- **Machine Public Hostname** — One of a machine's *set* of public DNS names
+  (ADR-0028): the derived `<machine>.<Project Domain>` when its project has a
+  domain, plus any explicit name under a registered Public DNS Zone given with
+  `sc create --hostname <fqdn>` or `sc hostname add|remove|list` (apex-level
+  names like `web12.tc42.uk` allowed; each an install-wide, first-come
+  reservation of itself + its wildcard subtree). Each name gets its own A
+  records (base + `*.` wildcard, DNS-only, pointing at the machine's
+  tenant-bridge address, so reachable only over the tenant tailnet), its own
+  Machine Certificate and its own Caddy site block; the set is stamped as
+  `user.sandcastle.v2.public-hostnames` and shown by `sc ls` (first name
+  `(+N)`), `sc hostname list` and `sc project status`. Every machine keeps its
+  Machine Private Hostname regardless. Distinct from a Public Route, which
+  goes through the edge.
 - **Naming Mode** — *Superseded by ADR-0028.* The former per-machine choice
   between `private` and `zone`, recorded in the legacy
   `user.sandcastle.v2.public-hostname`. Every machine now has its Machine

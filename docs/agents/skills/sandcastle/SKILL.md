@@ -46,15 +46,18 @@ Tenant                          the ownership / identity / DNS / tailnet boundar
   node.
 - A **machine reference** is `[[remote:]project:]machine`. Omitted parts fall
   back to the active install and project.
-- A machine's DNS name is `<machine>.<project>.<suffix>`. Machines in the
-  tenant's **default project only** also answer to `<machine>.<suffix>`.
-  A project with a **Project Domain** (`sc project create zp --domain
-  baum.hase.de`, under a Public DNS Zone the admin registered) additionally
-  names machines created afterwards `<machine>.<domain>`, and any machine can
-  carry **explicit public hostnames** (`sc create --hostname web12.tc42.uk`,
-  `sc hostname add|remove|list`) under a registered zone — see
-  `reference/operations.md`. A machine's public names are a set (ADR-0028);
-  there is no per-machine naming mode.
+- Every machine has exactly one **Machine Private Hostname**
+  `<machine>.<project>.<suffix>` (tenant CoreDNS, Tenant CA leaf — always
+  there, always served) and additionally a **set of Machine Public Hostnames**,
+  possibly empty (ADR-0028): the derived `<machine>.<domain>` when its project
+  holds a **Project Domain** (`sc project create zp --domain baum.hase.de`,
+  under a Public DNS Zone the admin registered), plus any **explicit** name
+  under a registered zone (`sc create zp:web --hostname web12.tc42.uk`,
+  `sc hostname add|remove|list`; apex-level names allowed). Each public name
+  has its own A records, Let's Encrypt certificate and Caddy site block; read
+  the set with `sc hostname list` or `sc ls --json` (`publicHostnames`) — see
+  `reference/operations.md`. Machines in the tenant's **default project only**
+  also answer to the short `<machine>.<suffix>`.
 - The same machine name may exist in several projects. A bare name that matches
   more than one is ambiguous — qualify it as `project:machine`.
 - Machines are **not** tailnet nodes. They sit on the tenant's private bridge and

@@ -36,7 +36,7 @@ A public DNS domain (e.g. `hase.de`) an admin registers with the Sandcastle inst
 _Avoid_: Tenant zone, install zone, DNS provider account
 
 **Project Domain**:
-The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one is a private-mode project. Reserved install-wide, first come, including everything below it.
+The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one gives its Machines no derived public name (they keep their Machine Private Hostname and may still carry explicit Machine Public Hostnames). Reserved install-wide, first come, including everything below it.
 _Avoid_: Project suffix, project zone
 
 **Machine Public Hostname**:

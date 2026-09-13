@@ -5696,3 +5696,43 @@ ticket left to the implementer:
   + legacy-key deletion + a legacy-marker machine, and the API kick. `meta` tests cover the mirror
   format, parsing, worst-state folding and `CertStateOf`; the CLI golden covers per-name rows and
   the private-project table.
+
+## 2026-09-13 — MPH slice 4 (#176): e2e Phase 12g automation + docs sweep
+
+Decisions the ticket left open while extending `scripts/e2e-pdz.sh` and Phase 12 of `docs/e2e-sc2.md`:
+
+- **12c/12f had to change, not only grow.** The script still asserted ADR-0027 behaviour that slices
+  2–3 retired: "no `DNS:` line for a zone-mode machine" and the `unset-domain` "has machines with a
+  public name" refusal. Keeping "every existing step intact" literally would have made the phase fail
+  on the first run, so 12c now asserts the `DNS: <m>.<p>.<suffix>` line *and* the `Public name:` line
+  (and pins `publicHostnames == [<derived>]`), and 12f replaces the refusal with
+  `sc project unset-domain --dry-run` succeeding with machines present — a dry-run, because a real
+  unset would release both machines' derived names and re-order certificates mid-run. The zone-remove
+  refusal ("still has claimed project domains") is unchanged; the hostname variant of that refusal is
+  reachable only once the domain is gone, so it stays a manual extra.
+- **Private FQDN is derived, not read.** `sc ls --json` carries no private-name field (`meta.Machine`
+  has none; the private name is `<name>.<project>.<tenant.dnsSuffix>` by construction), so the script
+  reads `.tenant.dnsSuffix` once in 12c and builds `PRIVATE`/`PRIVATE2` from it rather than adding a
+  JSON field for the harness. The tenant-CA check is `issuer contains "Sandcastle"` (the CA CN is
+  `Sandcastle <suffix> tenant CA`) and `SAN = the private name`, plus "not STAGING".
+- **Per-hostname certificates are proven by serial.** Rather than trusting the log, 12g captures the
+  serial of `api-<id>.<zone>`'s certificate before `sc hostname add alt-…` and asserts it is unchanged
+  after the add *and* after the remove — the observable form of "adding/removing a name never reissues
+  the others".
+- **"alt no longer served" is asserted loosely.** After the remove, Caddy either fails the handshake
+  for SNI `alt-…` or answers with another block's certificate (Caddy's default-site fallback), so the
+  check is "no certificate carrying `DNS:alt-…`", polled up to 120 s (hostnames-file push + `--refresh`
+  come from the reconciler pass the endpoint kicks). The mirror check waits for `certStates` to drop
+  the name the same way.
+- **Retained certificate row: note, not assertion.** `sc project status` renders the instance mirror
+  (one row per name in `public-hostnames`), so a removed hostname's retained `machine_certificates` row
+  is invisible through `sc`; the script asserts the row is *gone from the status table* and prints a
+  note pointing at the (DB) check in the doc instead of skipping silently.
+- **Refusal texts are asserted verbatim** (the same-tenant classes: inside own Project Domain, held by
+  another machine of the tenant, domain over a hostname, apex, derived name not removable) — the
+  cross-tenant flat texts need a second tenant and stay manual. The taken-name `sc create --hostname`
+  probe is `--dry-run` (server-side validation, rolled back) followed by `sc ls <project>:api2` empty.
+- **Cleanup order.** `api` is deleted before `web` (its records — explicit *and* derived — must vanish
+  on their own, not through the project-delete hook), then the existing web/project/zone teardown; the
+  EXIT trap deletes `api` too. No new env vars: the two hostnames derive from `SANDCASTLE_E2E_RUN_ID`
+  (`api-<id>.<zone>`, `alt-<id>.<zone>`), documented in `.env.e2e.sample`.

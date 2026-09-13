@@ -66,17 +66,21 @@ Tenant  (the ownership/identity/infra boundary; handle = GitHub username for
   registers every running machine automatically. The Tenant DNS Suffix is
   tenant-chosen, single-label, and immutable — it defaults to the tenant name but
   is not required to equal it.
-- **A second DNS authority for public names (ADR-0027).** A project may claim a
-  Project Domain under a Cloudflare-hosted Public DNS Zone the admin registered;
-  machines created in it afterwards carry the Machine Public Hostname
-  `<machine>.<domain>` instead of a private one. The same Auth App reconciler
-  runs a zone stage for those machines: it writes the public `A` records (base +
-  wildcard, DNS-only, pointing at the tenant-bridge address — reachable over the
-  tailnet only), orders one Let's Encrypt certificate per machine centrally via
-  DNS-01 with the zone's token, pushes cert + key into the machine's Caddy, renews
-  on the CA's ARI schedule, and mirrors the certificate state into instance
-  config. The sidecar CoreDNS and the Tenant CA are not involved for such
-  machines; private-mode machines are unchanged.
+- **A second DNS authority for public names (ADR-0027/0028).** Every machine
+  keeps its private name above and additionally carries a *set* of Machine
+  Public Hostnames: the derived `<machine>.<domain>` when its project claimed a
+  Project Domain under a Cloudflare-hosted Public DNS Zone the admin registered,
+  plus any explicit hostname under a registered zone (`sc create --hostname`,
+  `sc hostname add` — apex-level names allowed; an install-wide, first-come
+  reservation each). The same Auth App reconciler runs a zone stage per
+  (machine, hostname): it writes the public `A` records (base + wildcard,
+  DNS-only, pointing at the tenant-bridge address — reachable over the tailnet
+  only), orders one Let's Encrypt certificate per name centrally via DNS-01
+  with the zone's token, pushes cert + key into a per-name directory of the
+  machine's Caddy (one site block per name beside the private block), renews on
+  the CA's ARI schedule, and mirrors the per-name certificate state into
+  instance config. The sidecar CoreDNS and the Tenant CA keep serving the
+  private name; a machine without a public name is untouched by the zone stage.
 
 ## Native `incus`, brokered lifecycle
 

@@ -156,8 +156,8 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
 - **Marker says `MODE=…`** (a legacy ADR-0027 marker; the auth-app log reads
   `does not clear the push gate … (legacy)`) — the machine ran an older
   `caddy-setup`. Converge the payload (`sc payload-sync`) and recreate the
-  machine; a zone-mode machine from before ADR-0028 has no private leaf and is
-  not migrated in place.
+  machine; a machine created under the retired ADR-0027 contract has no private
+  leaf and no per-name directories and is not migrated in place.
 - **Marker has `PRIVATE=` but no `PUBLIC=<name>` line** — the name's
   certificate has not been pushed yet (`CERT pending`/`issued`), or
   `/etc/sandcastle/hostnames` does not list it. Check the file; after a push
