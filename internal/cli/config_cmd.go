@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
@@ -57,7 +58,8 @@ func newConfigSetCommand(_ commandConfig) *cobra.Command {
   project       default project name (e.g. default)
   remote        default Sandcastle user remote name (e.g. sc-alice)
   auth.hostname public Auth App hostname (e.g. big.example.dev)
-  admin_remote  Incus remote for sc admin commands in global ~/.config/incus/ (e.g. big)`,
+  admin_remote  Incus remote for sc admin commands in global ~/.config/incus/ (e.g. big)
+  skill-reminder  on|off — the once-a-day interactive hint that the agent skill is not installed or outdated`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
@@ -109,7 +111,8 @@ func newConfigUnsetCommand(_ commandConfig) *cobra.Command {
   project       default project name
   remote        default Sandcastle user remote name
   auth.hostname public Auth App hostname
-  admin_remote  Incus remote for sc admin commands in global ~/.config/incus/`,
+  admin_remote  Incus remote for sc admin commands in global ~/.config/incus/
+  skill-reminder  back to the default (on)`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
@@ -142,8 +145,15 @@ func setConfigValue(cfg *scconfig.SandcastleConfig, key string, value string) er
 		cfg.AdminRemote = value
 	case "auth.hostname", "auth_hostname":
 		cfg.AuthHostname = value
+	case "skill-reminder", "skill_reminder":
+		switch v := strings.ToLower(strings.TrimSpace(value)); v {
+		case "", "on", "off":
+			cfg.SkillReminder = v
+		default:
+			return fmt.Errorf("skill-reminder must be on or off, got %q", value)
+		}
 	default:
-		return fmt.Errorf("unknown config key %q; supported keys: tenant, project, remote, auth.hostname, admin_remote", key)
+		return fmt.Errorf("unknown config key %q; supported keys: tenant, project, remote, auth.hostname, admin_remote, skill-reminder", key)
 	}
 	return nil
 }

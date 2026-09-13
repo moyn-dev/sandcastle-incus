@@ -178,6 +178,11 @@ func newSkillInstallCommand(config commandConfig) *cobra.Command {
 			if len(failed) > 0 {
 				return fmt.Errorf("skill install failed for %s", strings.Join(failed, ", "))
 			}
+			if !dryRun {
+				// A fresh install clears the reminder throttle so a copy that
+				// goes outdated later is reported at once, not after 24h.
+				clearSkillReminderState(skillReminderStatePath(config))
+			}
 			return nil
 		},
 	}

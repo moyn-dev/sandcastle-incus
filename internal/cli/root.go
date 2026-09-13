@@ -213,16 +213,20 @@ func Execute(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "[verbose] incus config: %s\n[verbose] incus remote: %s\n", incusConf, adminConfig.Remote)
 		incusx.SetAPITrace(os.Stderr)
 	}
-	cmd := NewRootCommand(newUserCommandConfig(name, os.Stdin, os.Stdout, os.Stderr, adminConfig))
+	config := newUserCommandConfig(name, os.Stdin, os.Stdout, os.Stderr, adminConfig)
+	cmd := NewRootCommand(config)
 	cmd.SetOut(os.Stdout)
 	cmd.SetErr(os.Stderr)
 	cmd.SetArgs(args)
-	if err := cmd.ExecuteContext(context.Background()); err != nil {
+	executed, err := cmd.ExecuteContextC(context.Background())
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
 		return 1
 	}
 	maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
+	// Success only: the skill hint never rides on an error path.
+	maybePrintSkillReminder(os.Stderr, cmd, executed, config)
 	return 0
 }
 

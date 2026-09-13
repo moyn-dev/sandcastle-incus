@@ -5,6 +5,43 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-13 — `sc skill` reminder: a once-a-day interactive hint
+
+The spec: after a successful interactive `sc` run, print one stderr line when
+the skill is missing/outdated for an agent present on the box, throttled to
+24h, with config + env opt-outs. Decisions it left open:
+
+- **Own state file, own loader — not a field in `update-state.json`.** The
+  update notice's `update.State` is rewritten by the background release check
+  (`Checker.Check` saves the whole struct); folding `noticed_at` for the skill
+  into it would race that goroutine's write within one run. A sibling
+  `skill-reminder-state.json` in the same dir keeps the "next to the update
+  notice" convention with zero coupling. The spec's "skip if it would take a
+  lock the update notice already holds" turned out moot: the update path
+  takes no file lock (only an in-process mutex in `update.Exchange`), so
+  there is nothing to contend with.
+- **"Agent present" = the target's `ConfigDir` exists**, the same test
+  `sc skill install` uses to skip absent agents, so the hint and the install
+  it recommends agree on which agents count. Unmanaged copies stay silent —
+  the hint recommends `sc skill install`, which would refuse them.
+- **Gates read back from cobra, not threaded through `rootOptions`.**
+  `Execute` switches to `ExecuteContextC` to learn the executed leaf
+  (`CommandPath()` → skip the `sc skill` subtree) and reads `--output`/`--json`
+  from the root's persistent flags after the run, so the reminder needs no
+  hook inside `NewRootCommand`. The admin tree is excluded twice: `ExecuteAdmin`
+  never calls it, and `skillReminderLine` also refuses `sc-adm`/`… admin`
+  root names so the unit test can prove it without a process boundary.
+- **Both stdout and stderr must be terminals** (the update notice checks
+  only stderr). A `sc ls | grep` with a terminal stderr is a script in
+  spirit; a hint there is noise.
+- **`sc skill install` deletes the state file** rather than stamping a new
+  time: the throttle only exists to avoid nagging, and a fresh install is
+  the strongest possible "user acted" signal. `--dry-run` leaves it alone.
+- **Env accepts `0`/`false`/`off`/`no`**, not only the `0` the spec named,
+  matching how people write boolean env vars; the config key accepts
+  `on`/`off` only and rejects anything else so a typo cannot silently mean
+  "on".
+
 ## 2026-09-13 — `sc skill`: the agent skill ships in the binary
 
 The spec asked for `sc skill install|status|uninstall|show` for Claude Code and
