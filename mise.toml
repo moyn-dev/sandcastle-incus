@@ -39,6 +39,10 @@ ${ln_cmd} -sf sandcastle "${bindir}/sc"
 echo "Installed ${bindir}/sandcastle and ${bindir}/sc"
 """
 
+[tasks."skill:sync"]
+description = "Copy the tracked agent skill (docs/agents/skills/sandcastle) into the embedded copy the binary ships (internal/agentskill/sandcastle)"
+run = "make skill-sync"
+
 [tasks."build:linux-amd64"]
 description = "Cross-compile the fat sandcastle binary for Linux amd64 (x86-64)"
 env = { GOOS = "linux", GOARCH = "amd64", CGO_ENABLED = "0", BIN_DIR = "bin/linux-amd64" }

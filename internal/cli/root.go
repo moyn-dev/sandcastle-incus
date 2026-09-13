@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/thieso2/sandcastle-incus/internal/agentskill"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/images"
@@ -100,6 +101,10 @@ type commandConfig struct {
 	loginRoutingCheck    func(context.Context, io.Writer, string) error
 	incusRunner          incusRunner
 	gcloudRunner         gcloudRunner
+	// skillEnv overrides where `sc skill` and the `sc update` skill refresh
+	// resolve agent skill directories (tests point it at a temp home so the
+	// real ~/.claude and ~/.codex stay untouched). nil = the real environment.
+	skillEnv func() agentskill.Env
 }
 
 type tenantShareReconciler interface {
@@ -393,6 +398,7 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newIncusInfraCommand(config, opts))
 	root.AddCommand(newLoginCommand(config, opts))
 	root.AddCommand(newConfigCommand(config, opts))
+	root.AddCommand(newSkillCommand(config, opts))
 	root.AddCommand(newTenantCommand(config, opts))
 	root.AddCommand(newCloudIdentityCommand(config, opts))
 	root.AddCommand(newShareCommand(config, opts))

@@ -191,7 +191,22 @@
 <span class="cmd">sc update</span>                    <span class="comment"># show the table, then prompt to apply what's outdated</span>
 <span class="cmd">sc update --yes</span>              <span class="comment"># apply without prompting</span>
 <span class="cmd">sc update --version v0.3.1</span>   <span class="comment"># pin the CLI to a tag (an older tag rolls back)</span></code></pre>
+    <p>Copies of the agent skill that <code>sc skill install</code> wrote appear in the table as <code>skill (claude, user)</code> / <code>skill (codex, user)</code> rows and are refreshed (non-fatally, one line per copy) when outdated.</p>
     <p>The <strong>CLI target</strong> downloads <code>sandcastle-&lt;os&gt;-&lt;arch&gt;.tar.gz</code> from the release, verifies its SHA-256 against <code>checksums.txt</code>, and atomically replaces the binary, keeping the previous one as <code>.bak</code>. Homebrew-managed installs are never self-replaced &mdash; the command prints <code>brew upgrade sandcastle</code> instead; an install from <code>install.sh</code> (or any writable directory) self-replaces in place on both Linux and macOS. The <strong>sidecar target</strong> is delegated to the deployment (auth-app token plane, broker mTLS fallback), which pushes its own running binary into your sidecar and restarts only the TLS leaf signer (sub-second; DNS and connectivity untouched).</p>
+  </div>
+
+  <div class="step">
+    <h3>Agent skill for Claude Code and Codex (<code>sc skill</code>) <span class="badge badge-user">user</span></h3>
+    <p>The Sandcastle agent skill (the <code>SKILL.md</code> + reference files that teach a coding agent how to drive <code>sc</code>/<code>sc-adm</code>, tracked at <code>docs/agents/skills/sandcastle/</code>) ships inside the binary. Install it once per machine; <code>sc update</code> refreshes copies it installed.</p>
+    <pre><code><span class="cmd">sc skill install</span>                          <span class="comment"># Claude Code + Codex, user scope; skips an agent whose config dir is absent</span>
+<span class="cmd">sc skill install --agent codex</span>            <span class="comment"># one agent; an explicitly named agent gets its dir created</span>
+<span class="cmd">sc skill install --scope project</span>          <span class="comment"># into the current git repo: .claude/skills/ and .agents/skills/</span>
+<span class="cmd">sc skill install --dir ./skills</span>           <span class="comment"># explicit directory (lands at ./skills/sandcastle); ignores --agent/--scope</span>
+<span class="cmd">sc skill install --force</span>                  <span class="comment"># replace a hand-placed copy (a directory without the sc marker)</span>
+<span class="cmd">sc skill status [--json]</span>                  <span class="comment"># AGENT SCOPE PATH STATE: missing | up to date | outdated (v… → v…) | unmanaged</span>
+<span class="cmd">sc skill uninstall</span>                        <span class="comment"># removes only copies sc installed; --dry-run on install/uninstall</span>
+<span class="cmd">sc skill show</span>                             <span class="comment"># print the embedded SKILL.md (pipe it wherever)</span></code></pre>
+    <p>Locations: Claude Code reads <code>$CLAUDE_CONFIG_DIR/skills/sandcastle</code> (default <code>~/.claude/skills/sandcastle</code>) and <code>&lt;repo&gt;/.claude/skills/sandcastle</code>; Codex reads <code>$CODEX_HOME/skills/sandcastle</code> (default <code>~/.codex/skills/sandcastle</code>) and the repository skill root <code>&lt;repo&gt;/.agents/skills/sandcastle</code>. Every install is written atomically (staged next to the target, then renamed in) and carries a <code>.sc-skill-version</code> marker with the skill content version and the CLI version that wrote it. Without the marker a directory is <em>unmanaged</em>: <code>install</code> refuses it unless <code>--force</code>, <code>uninstall</code> and <code>sc update</code> leave it alone.</p>
   </div>
 
   <div class="step">

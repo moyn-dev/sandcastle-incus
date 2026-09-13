@@ -63,6 +63,15 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			sidecarKnown := deployment != ""
 			sidecarOutdated := sidecarKnown && (sidecarCurrent == "" || update.IsNewer(deployment, sidecarCurrent))
 
+			// Agent skill copies sc installed (`sc skill install`): compared
+			// against the skill embedded in this binary. Only managed copies
+			// are listed; a missing or hand-placed one is not sc's to touch.
+			skillRows := skillUpdateRows(managedSkillTargets(config))
+			skillsOutdated := false
+			for _, r := range skillRows {
+				skillsOutdated = skillsOutdated || r.outdated
+			}
+
 			// Status table.
 			w := tabwriter.NewWriter(config.stdout, 2, 8, 2, ' ', 0)
 			fmt.Fprintln(w, "TARGET\tCURRENT\tWANTED\tSTATUS")
@@ -70,6 +79,9 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				cliStatus(cliOutdated, brewManaged, update.IsDevBuild(version) && pin == "", releaseErr))
 			if deploymentConfigured || sidecarCurrent != "" {
 				fmt.Fprintf(w, "sidecar\t%s\t%s\t%s\n", orUnknown(sidecarCurrent), orUnknown(deployment), sidecarStatus(sidecarOutdated, sidecarKnown, deploymentReachable))
+			}
+			for _, r := range skillRows {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
 			}
 			w.Flush()
 			if release.HTMLURL != "" && cliOutdated {
@@ -79,7 +91,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if check {
 				return nil
 			}
-			if !cliOutdated && !sidecarOutdated {
+			if !cliOutdated && !sidecarOutdated && !skillsOutdated {
 				fmt.Fprintln(config.stdout, "\nEverything is up to date.")
 				return nil
 			}
@@ -106,6 +118,12 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				if err := updateSidecarViaDeployment(ctx, config); err != nil {
 					return err
 				}
+			}
+			// Skill copies last and non-fatal: refreshed from the skill
+			// embedded in the running binary (a just-replaced CLI brings its
+			// own newer skill; the next `sc update` picks that up).
+			if skillsOutdated {
+				refreshManagedSkills(config.stdout, config.stderr, skillRows, skillHome(config))
 			}
 			return nil
 		},
