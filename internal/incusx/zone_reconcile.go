@@ -70,16 +70,17 @@ func (s ZoneMachineServer) ListZoneMachines(ctx context.Context) ([]authapp.Zone
 					ip = instanceTenantIPv4(instance, cidr)
 				}
 				machines = append(machines, authapp.ZoneMachine{
-					Tenant:         summary.Tenant,
-					Project:        project.Name,
-					IncusProject:   incusProject,
-					Name:           instance.Name,
-					ProjectDomain:  project.Domain,
-					PublicHostname: strings.TrimSpace(instance.Config[meta.KeyV2PublicHostname]),
-					BridgeIPv4:     ip,
-					Running:        instance.IsActive(),
-					CertState:      strings.TrimSpace(instance.Config[meta.KeyV2CertState]),
-					CertNotAfter:   strings.TrimSpace(instance.Config[meta.KeyV2CertNotAfter]),
+					Tenant:          summary.Tenant,
+					Project:         project.Name,
+					IncusProject:    incusProject,
+					Name:            instance.Name,
+					ProjectDomain:   project.Domain,
+					PublicHostname:  strings.TrimSpace(instance.Config[meta.KeyV2PublicHostname]),
+					PublicHostnames: meta.ParsePublicHostnames(instance.Config[meta.KeyV2PublicHostnames]),
+					BridgeIPv4:      ip,
+					Running:         instance.IsActive(),
+					CertState:       strings.TrimSpace(instance.Config[meta.KeyV2CertState]),
+					CertNotAfter:    strings.TrimSpace(instance.Config[meta.KeyV2CertNotAfter]),
 				})
 			}
 		}

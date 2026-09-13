@@ -8,6 +8,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
@@ -108,9 +109,12 @@ func (c TenantCreator) SetProjectDomainV2(_ context.Context, installPrefix strin
 	return nil
 }
 
-// ListZoneModeMachinesV2 names the app project's instances whose Naming Mode
-// is zone (KeyV2PublicHostname set to a Machine Public Hostname). These are
-// what block set-domain/unset-domain: their public name is fixed for life.
+// ListZoneModeMachinesV2 names the app project's instances that carry a
+// DERIVED Machine Public Hostname — a public name under the project's
+// current Project Domain (read from either public-name key, ADR-0028). These
+// are what block set-domain/unset-domain until slice 3 of #172 teaches the
+// reconciler to re-derive names; explicit hostnames in a project without a
+// domain never block, so `set-domain` stays possible for such a project.
 func (c TenantCreator) ListZoneModeMachinesV2(_ context.Context, installPrefix string, tenantName string, project string) ([]string, error) {
 	incusProject, _, err := c.v2AppProject(installPrefix, tenantName, project)
 	if err != nil {
@@ -119,6 +123,17 @@ func (c TenantCreator) ListZoneModeMachinesV2(_ context.Context, installPrefix s
 	server, err := c.resolveV2Server()
 	if err != nil {
 		return nil, err
+	}
+	appProject, _, err := server.GetProject(incusProject)
+	if err != nil {
+		return nil, fmt.Errorf("read project %s: %w", incusProject, err)
+	}
+	domain := ""
+	if appProject != nil {
+		domain = strings.ToLower(strings.TrimSpace(appProject.Config[meta.KeyV2Domain]))
+	}
+	if domain == "" {
+		return nil, nil
 	}
 	scoped := server.UseProject(incusProject)
 	names, err := scoped.GetInstanceNames(api.InstanceTypeAny)
@@ -131,11 +146,45 @@ func (c TenantCreator) ListZoneModeMachinesV2(_ context.Context, installPrefix s
 		if err != nil {
 			return nil, fmt.Errorf("read machine %s in %s: %w", name, incusProject, err)
 		}
-		if instance != nil && meta.PublicHostnameFromConfig(instance.Config) != "" {
-			zoneMode = append(zoneMode, name)
+		if instance == nil {
+			continue
+		}
+		for _, hostname := range meta.PublicHostnamesFromConfig(instance.Config) {
+			if strings.HasSuffix(hostname, "."+domain) {
+				zoneMode = append(zoneMode, name)
+				break
+			}
 		}
 	}
 	return zoneMode, nil
+}
+
+// SetMachinePublicHostnamesV2 rewrites a machine's KeyV2PublicHostnames list
+// (ADR-0028) on its own instance config; an empty set deletes the key. A
+// missing machine wraps authapp.ErrMachineNotFound so the hostnames API can
+// answer 404 and release the reservation again.
+func (c TenantCreator) SetMachinePublicHostnamesV2(_ context.Context, installPrefix string, tenantName string, project string, machine string, hostnames []string) error {
+	if err := naming.ValidateMachineName(machine); err != nil {
+		return err
+	}
+	incusProject, _, err := c.v2AppProject(installPrefix, tenantName, project)
+	if err != nil {
+		return err
+	}
+	server, err := c.resolveV2Server()
+	if err != nil {
+		return err
+	}
+	scoped := server.UseProject(incusProject)
+	if _, _, err := scoped.GetInstance(machine); err != nil {
+		if api.StatusErrorCheck(err, http.StatusNotFound) {
+			return fmt.Errorf("%w: %s/%s:%s", authapp.ErrMachineNotFound, tenantName, project, machine)
+		}
+		return fmt.Errorf("read machine %s in %s: %w", machine, incusProject, err)
+	}
+	value := meta.FormatPublicHostnames(hostnames)
+	c.log("stamp " + meta.KeyV2PublicHostnames + "=" + orNone(value) + " on " + incusProject + "/" + machine)
+	return stampInstanceConfig(scoped, machine, map[string]string{meta.KeyV2PublicHostnames: value})
 }
 
 func orNone(value string) string {

@@ -925,7 +925,7 @@ func machineTypeShort(instanceType string) string {
 // before any certificate exists. An unrecognised state is shown verbatim
 // rather than guessed at.
 func machineCertCell(machine meta.Machine) string {
-	if machine.NamingMode() != meta.NamingModeZone {
+	if !machine.HasPublicHostname() {
 		return "-"
 	}
 	state := strings.TrimSpace(machine.CertState)
@@ -941,11 +941,15 @@ func machineCertCell(machine meta.Machine) string {
 	}
 }
 
-// machineFQDN is the `sc ls` FQDN column: the Machine Public Hostname for a
-// zone-mode machine (ADR-0027), else the canonical Machine Private Hostname.
+// machineFQDN is the `sc ls` FQDN column: the first Machine Public Hostname
+// — with "(+N)" when the machine has more (ADR-0028; `--json` carries the
+// whole list) — else the canonical Machine Private Hostname.
 func machineFQDN(tenant tenant.Summary, machine meta.Machine) string {
-	if machine.NamingMode() == meta.NamingModeZone {
-		return machine.PublicHostname
+	if names := machine.PublicNames(); len(names) > 0 {
+		if extra := len(names) - 1; extra > 0 {
+			return fmt.Sprintf("%s (+%d)", names[0], extra)
+		}
+		return names[0]
 	}
 	suffix := strings.Trim(strings.TrimSpace(tenant.DNSSuffix), ".")
 	if suffix == "" {

@@ -50,7 +50,50 @@ func TestDecodeMachine(t *testing.T) {
 
 func withZone(m Machine, hostname, state, notAfter string) Machine {
 	m.PublicHostname, m.CertState, m.CertNotAfter = hostname, state, notAfter
+	if hostname != "" {
+		m.PublicHostnames = []string{hostname}
+	}
 	return m
+}
+
+// ADR-0028: DecodeMachine reads the list key first and falls back to the
+// legacy single key; PublicHostname stays the first of the sorted list.
+func TestDecodeMachineReadsBothPublicHostnameKeys(t *testing.T) {
+	base := Machine{Name: "web"}
+	for _, tc := range []struct {
+		name   string
+		config map[string]string
+		want   []string
+	}{
+		{"list only", map[string]string{KeyV2PublicHostnames: "web12.tc42.uk, Web.baum.hase.de,"}, []string{"web.baum.hase.de", "web12.tc42.uk"}},
+		{"list wins over single", map[string]string{KeyV2PublicHostnames: "web12.tc42.uk", KeyV2PublicHostname: "web.baum.hase.de"}, []string{"web12.tc42.uk"}},
+		{"single only", map[string]string{KeyV2PublicHostname: "web.baum.hase.de"}, []string{"web.baum.hase.de"}},
+		{"single private, list absent", map[string]string{KeyV2PublicHostname: "private"}, nil},
+		{"single private, list present", map[string]string{KeyV2PublicHostname: "private", KeyV2PublicHostnames: "web12.tc42.uk"}, []string{"web12.tc42.uk"}},
+		{"empty list value", map[string]string{KeyV2PublicHostnames: " , "}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecodeMachine(tc.config, base)
+			if strings.Join(got.PublicHostnames, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("PublicHostnames = %v, want %v", got.PublicHostnames, tc.want)
+			}
+			first := ""
+			if len(tc.want) > 0 {
+				first = tc.want[0]
+			}
+			if got.PublicHostname != first || got.HasPublicHostname() != (len(tc.want) > 0) {
+				t.Fatalf("PublicHostname = %q, has = %v", got.PublicHostname, got.HasPublicHostname())
+			}
+		})
+	}
+	if FormatPublicHostnames([]string{"B.example", "a.example", "", "a.example"}) != "a.example,b.example" || FormatPublicHostnames(nil) != "" {
+		t.Fatalf("FormatPublicHostnames")
+	}
+	// A payload carrying only the legacy single field (an older Auth App's
+	// cache) still counts as a public name.
+	if names := (Machine{PublicHostname: "web.baum.hase.de"}).PublicNames(); strings.Join(names, ",") != "web.baum.hase.de" {
+		t.Fatalf("PublicNames from single field = %v", names)
+	}
 }
 
 // The zone fields are omitempty, so an unstamped machine's JSON is unchanged

@@ -725,6 +725,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 	if err := migrateACME(ctx, db); err != nil {
 		return err
 	}
+	// Machine Public Hostnames (ADR-0028): explicit hostname reservations.
+	if err := migrateMachineHostnames(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1001,6 +1005,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/tenants", app.tenantsAPI)
 	mux.HandleFunc("/api/projects", app.projectsAPI)
 	mux.HandleFunc("/api/projects/", app.projectAPI)
+	mux.HandleFunc("/api/machines/", app.machinesAPI)
 	mux.HandleFunc("/api/resources", app.resourcesAPI)
 	// Tenant Storage Shares are not yet supported on v2 (#70): the registry lives
 	// in a user-writable /workspace file a tenant can forge, so every share

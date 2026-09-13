@@ -85,6 +85,12 @@ func (p ProjectBrokerCreator) ListZoneModeMachines(ctx context.Context, tenant s
 	return p.Creator.ListZoneModeMachinesV2(ctx, p.Prefix, tenant, project)
 }
 
+// SetMachinePublicHostnames implements authapp.TenantProjectDomainManager
+// (ADR-0028): the machine's public-name list on its own instance config.
+func (p ProjectBrokerCreator) SetMachinePublicHostnames(ctx context.Context, tenant string, project string, machine string, hostnames []string) error {
+	return p.Creator.SetMachinePublicHostnamesV2(ctx, p.Prefix, tenant, project, machine, hostnames)
+}
+
 // DeleteTenantProject implements authapp.TenantProjectDomainManager: the app
 // project goes with its machines, volumes and profiles (DeleteProjectV2). The
 // storage pool is read off the tenant's infra project, like every other

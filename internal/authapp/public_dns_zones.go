@@ -55,6 +55,9 @@ type PublicDNSZoneError struct {
 	Other string
 	// Claims is the blocking claim list (claimed).
 	Claims []ProjectDomainClaimRef
+	// Hostnames is the blocking explicit Machine Public Hostname list
+	// (claimed, ADR-0028) — reported when no Project Domain blocks.
+	Hostnames []MachineHostnameRef
 }
 
 func (e *PublicDNSZoneError) Error() string {
@@ -66,6 +69,13 @@ func (e *PublicDNSZoneError) Error() string {
 	case "not-found":
 		return fmt.Sprintf("public DNS zone %s is not registered", e.Zone)
 	case "claimed":
+		if len(e.Claims) == 0 && len(e.Hostnames) > 0 {
+			parts := make([]string, 0, len(e.Hostnames))
+			for _, h := range e.Hostnames {
+				parts = append(parts, fmt.Sprintf("%s (%s/%s:%s)", h.Hostname, h.Tenant, h.Project, h.Machine))
+			}
+			return fmt.Sprintf("public DNS zone %s still has machine hostnames: %s; remove them first", e.Zone, strings.Join(parts, ", "))
+		}
 		parts := make([]string, 0, len(e.Claims))
 		for _, claim := range e.Claims {
 			parts = append(parts, fmt.Sprintf("%s (%s/%s)", claim.Domain, claim.Tenant, claim.Project))
@@ -299,6 +309,17 @@ func checkPublicDNSZoneRemovable(ctx context.Context, claims ProjectDomainClaimS
 	}
 	if len(blocking) > 0 {
 		return &PublicDNSZoneError{Zone: zone, Kind: "claimed", Claims: blocking}
+	}
+	if source, ok := claims.(interface {
+		HostnamesUnderZone(ctx context.Context, zone string) ([]MachineHostnameRef, error)
+	}); ok {
+		hostnames, err := source.HostnamesUnderZone(ctx, zone)
+		if err != nil {
+			return err
+		}
+		if len(hostnames) > 0 {
+			return &PublicDNSZoneError{Zone: zone, Kind: "claimed", Hostnames: hostnames}
+		}
 	}
 	return nil
 }

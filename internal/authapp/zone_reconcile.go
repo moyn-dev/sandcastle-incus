@@ -47,9 +47,14 @@ type ZoneMachine struct {
 	Name         string
 	// ProjectDomain is the project's KeyV2Domain ("" for a private project).
 	ProjectDomain string
-	// PublicHostname is the instance's raw KeyV2PublicHostname: "" when
-	// unstamped, meta.NamingModePrivate, or the Machine Public Hostname.
+	// PublicHostname is the instance's raw legacy KeyV2PublicHostname: ""
+	// when unstamped, meta.NamingModePrivate, or the derived Machine Public
+	// Hostname.
 	PublicHostname string
+	// PublicHostnames is the instance's KeyV2PublicHostnames list (ADR-0028):
+	// derived + explicit names. When present it is the record; the legacy
+	// key is neither read nor stamped for such a machine.
+	PublicHostnames []string
 	// BridgeIPv4 is the tenant-bridge address ("" when stopped / no lease).
 	BridgeIPv4 string
 	Running    bool
@@ -233,8 +238,17 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	}
 
 	// Certificates: rows, ARI, drift, push, mirror; collect due orders.
+	// Explicit Machine Public Hostnames (ADR-0028) count as live for the row
+	// GC below: their pending rows wait for the slice-3 reconciler.
 	var candidates []orderCandidate
 	liveHostnames := map[string]struct{}{}
+	if explicit, err := listMachineHostnames(ctx, r.db); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, h := range explicit {
+			liveHostnames[h.Hostname] = struct{}{}
+		}
+	}
 	for _, t := range targets {
 		liveHostnames[t.hostname] = struct{}{}
 		candidate, err := r.reconcileTargetCertificate(ctx, t, now)
@@ -276,6 +290,21 @@ func (r *zoneReconciler) classify(ctx context.Context, m ZoneMachine, claimByPro
 		claimed = false
 	}
 	stamp := strings.ToLower(strings.TrimSpace(m.PublicHostname))
+	if len(m.PublicHostnames) > 0 {
+		// ADR-0028: the list is the record. This slice-1 reconciler serves
+		// the derived name only (the one under the project's claimed domain);
+		// explicit hostnames get their records and certificates in slice 3
+		// of #172. The legacy key is never stamped on such a machine.
+		stamp = meta.NamingModePrivate
+		if claimed {
+			for _, name := range m.PublicHostnames {
+				if strings.HasSuffix(name, "."+claim.Domain) {
+					stamp = name
+					break
+				}
+			}
+		}
+	}
 	if stamp == "" {
 		switch {
 		case claimed:

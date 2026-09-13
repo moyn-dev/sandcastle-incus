@@ -146,3 +146,23 @@ func NormalizeProjectDomain(value string) (string, error) {
 	}
 	return domain, nil
 }
+
+// NormalizeMachineHostname normalizes an explicit Machine Public Hostname
+// (ADR-0028) exactly like a Project Domain — lowercase, trimmed, one trailing
+// dot stripped, ASCII labels only, no `_`/`*` labels — with its own error
+// wording. Zone coverage, apex and length are the Auth App's checks.
+func NormalizeMachineHostname(value string) (string, error) {
+	hostname := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if hostname == "" {
+		return "", fmt.Errorf("machine hostname is required")
+	}
+	for _, label := range strings.Split(hostname, ".") {
+		if strings.HasPrefix(label, "_") || strings.HasPrefix(label, "*") {
+			return "", fmt.Errorf("invalid machine hostname %q: labels may not start with %q", value, label[:1])
+		}
+	}
+	if err := validateDomainLabels(hostname, value, "machine hostname"); err != nil {
+		return "", err
+	}
+	return hostname, nil
+}

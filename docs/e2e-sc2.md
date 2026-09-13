@@ -2829,6 +2829,42 @@ sc-adm public-dns-zone remove $ZONE
 #       no cert-state key, no log line for it).
 ```
 
+### 12g — explicit Machine Public Hostnames (ADR-0028) ⚠️ placeholder — automated by slice 4 of #172
+
+Slice 1 (#173) ships the reservations, the API and the CLI; slices 2–3 ship the
+machine contract and the per-name reconciler. `pp` is a project **without** a
+domain on the same install; `RUN` as above.
+
+```bash
+sc create zp:web2 --hostname web12-$RUN.$ZONE --fqdn shop-$RUN.$ZONE
+# PASS: three "Public name:" lines (shop-…, web2.e2e-$RUN.$ZONE, web12-…, sorted), one IP: line, returns at once;
+#       `sc incus config get web2 user.sandcastle.v2.public-hostnames` = the same three names comma-separated,
+#       and NO user.sandcastle.v2.public-hostname key; `sc ls zp:web2` FQDN reads "shop-$RUN.$ZONE (+2)";
+#       `sc ls --json` carries publicHostnames; (DB) two machine_hostnames rows and three machine_certificates rows.
+sc create zp:dup --hostname web12-$RUN.$ZONE
+# PASS: refused with `machine hostname "web12-$RUN.$ZONE" overlaps "web12-$RUN.$ZONE" held by machine "zp:web2" in this tenant`,
+#       NO instance created (`sc ls zp:dup` empty), no row leaked.
+sc create pp:solo --hostname solo-$RUN.$ZONE
+# PASS: the DNS: line is kept and one "Public name: solo-$RUN.$ZONE" line follows; `sc project set-domain pp x-$RUN.$ZONE --dry-run`
+#       is allowed (explicit names never block a domain change).
+sc hostname add zp:web2 api-$RUN.$ZONE; sc hostname list zp:web2; sc hostname remove zp:web2 api-$RUN.$ZONE
+# PASS: add prints "Public name: api-$RUN.$ZONE (certificate pending)" + the PUBLIC NAME/KIND/ZONE table (derived + 3 explicit);
+#       the instance key gains and then loses the name; `sc hostname remove zp:web2 web2.e2e-$RUN.$ZONE` is refused
+#       (`… is not held by machine "zp:web2"`); `sc hostname add zp:web2 $ZONE` is refused as the zone apex;
+#       `sc hostname add zp:web2 x.e2e-$RUN.$ZONE` is refused as inside the project's own domain.
+# PASS (other tenant): `sc hostname add p:m x.web12-$RUN.$ZONE` → the flat "overlaps a name already claimed on this install" text.
+# PASS (reverse): `sc project create x --domain web12-$RUN.$ZONE` and `sc route publish … --hostname www.web12-$RUN.$ZONE`
+#       are refused naming the hostname (own tenant) / flat (other tenant).
+sc-adm public-dns-zone remove $ZONE
+# PASS: refused — "still has claimed project domains" (zp) — and, after `sc project delete zp --yes`, "still has machine
+#       hostnames: solo-$RUN.$ZONE (<tenant>/pp:solo); remove them first".
+sc-adm incus delete <remote>:solo --project <prefix>-<tenant>-pp
+# PASS (GC, ≤ 5 min): the auth-app log shows "pruned orphaned machine hostname solo-$RUN.$ZONE (<tenant>/pp:solo)";
+#       `sc-adm public-dns-zone remove $ZONE` now succeeds.
+# Slices 2–3 add: A records for every name, one certificate per name (openssl s_client -servername per name),
+#       Caddy serving every name, known_hosts lines for private + public names, CERT ok for explicit names.
+```
+
 **PASS (phase):** `scripts/e2e-pdz.sh` ends with `ALL PASS`, and the manual
 12d/12e extras above hold. Tenants provisioned before this feature keep working
 unchanged; their `/.sc` payload (the new `caddy-setup`) converges on the next

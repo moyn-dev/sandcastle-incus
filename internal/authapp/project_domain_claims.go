@@ -50,6 +50,7 @@ const (
 	DomainClaimConflictDescendant = "descendant" // the candidate sits inside an existing claim
 	DomainClaimConflictRoute      = "route"      // covers/equals a Public Route hostname
 	DomainClaimConflictInstall    = "install"    // covers/equals the Auth Hostname or route base domain
+	DomainClaimConflictHostname   = "hostname"   // equals, covers or sits inside an explicit Machine Public Hostname (ADR-0028)
 )
 
 // DomainClaimError explains why a claim was refused by a conflict. It mirrors
@@ -57,9 +58,12 @@ const (
 // same-tenant text names the existing claim — cross-tenant refusals never
 // reveal who holds the overlapping domain.
 type DomainClaimError struct {
-	Domain     string
-	Existing   string
-	Project    string
+	Domain   string
+	Existing string
+	Project  string
+	// Machine names the holder of a conflicting Machine Public Hostname
+	// (Class == DomainClaimConflictHostname) for the same-tenant text.
+	Machine    string
 	Class      string
 	SameTenant bool
 }
@@ -68,6 +72,8 @@ func (e *DomainClaimError) Error() string {
 	switch {
 	case e.Class == DomainClaimConflictInstall || e.Class == DomainClaimConflictRoute:
 		return fmt.Sprintf("project domain %q is reserved by this install", e.Domain)
+	case e.SameTenant && e.Class == DomainClaimConflictHostname:
+		return fmt.Sprintf("project domain %q overlaps hostname %q held by machine %q in this tenant", e.Domain, e.Existing, e.Project+":"+e.Machine)
 	case e.SameTenant:
 		return fmt.Sprintf("project domain %q overlaps %q claimed by project %q in this tenant", e.Domain, e.Existing, e.Project)
 	default:
@@ -182,45 +188,6 @@ func ClaimProjectDomain(ctx context.Context, db *sql.DB, req ClaimProjectDomainR
 		return ProjectDomainClaim{}, nil, err
 	}
 
-	// A dedicated connection is the only way database/sql lets us pick the
-	// transaction mode: BEGIN IMMEDIATE takes SQLite's write lock up front, so
-	// two concurrent claimers scan strictly one after the other.
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return ProjectDomainClaim{}, nil, fmt.Errorf("claim project domain: %w", err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return ProjectDomainClaim{}, nil, fmt.Errorf("claim project domain: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
-		}
-	}()
-
-	existing, err := listProjectDomainClaims(ctx, conn)
-	if err != nil {
-		return ProjectDomainClaim{}, nil, err
-	}
-	routeHostnames, err := listRouteHostnames(ctx, conn)
-	if err != nil {
-		return ProjectDomainClaim{}, nil, err
-	}
-	for _, c := range existing {
-		if c.Tenant == tenantName && c.Project == project {
-			prev := c
-			previous = &prev
-			break
-		}
-	}
-	if previous != nil && previous.Domain == norm {
-		return *previous, previous, &ProjectDomainAlreadyClaimedError{Domain: norm}
-	}
-	if err := scanProjectDomainConflicts(norm, tenantName, project, existing, routeHostnames, req.AuthHostname, req.RouteBaseDomain); err != nil {
-		return ProjectDomainClaim{}, nil, err
-	}
 	claim = ProjectDomainClaim{
 		Domain:    norm,
 		Tenant:    tenantName,
@@ -229,29 +196,56 @@ func ClaimProjectDomain(ctx context.Context, db *sql.DB, req ClaimProjectDomainR
 		UserKey:   strings.TrimSpace(req.UserKey),
 		CreatedAt: timeNow().UTC().Format(time.RFC3339),
 	}
-	if req.DryRun {
-		return claim, previous, nil // deferred ROLLBACK
-	}
-	if previous != nil {
-		if _, err := conn.ExecContext(ctx, `DELETE FROM project_domain_claims WHERE tenant = ? AND project = ?`, tenantName, project); err != nil {
-			return ProjectDomainClaim{}, nil, fmt.Errorf("replace project domain claim: %w", err)
+	// The scan + insert run under SQLite's write lock (withReservationLock,
+	// shared with Machine Public Hostname claims) so two concurrent claimers
+	// scan strictly one after the other.
+	err = withReservationLock(ctx, db, "claim project domain", req.DryRun, func(ctx context.Context, conn *sql.Conn) error {
+		reg, err := loadInstallReservations(ctx, conn, req.AuthHostname, req.RouteBaseDomain)
+		if err != nil {
+			return err
 		}
-	}
-	if _, err := conn.ExecContext(ctx, `
+		for _, c := range reg.claims {
+			if c.Tenant == tenantName && c.Project == project {
+				prev := c
+				previous = &prev
+				break
+			}
+		}
+		if previous != nil && previous.Domain == norm {
+			claim = *previous
+			return &ProjectDomainAlreadyClaimedError{Domain: norm}
+		}
+		if err := scanProjectDomainConflicts(norm, tenantName, project, reg); err != nil {
+			return err
+		}
+		if req.DryRun {
+			return nil
+		}
+		if previous != nil {
+			if _, err := conn.ExecContext(ctx, `DELETE FROM project_domain_claims WHERE tenant = ? AND project = ?`, tenantName, project); err != nil {
+				return fmt.Errorf("replace project domain claim: %w", err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, `
 INSERT INTO project_domain_claims (domain, tenant, project, zone, user_key, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
 `, claim.Domain, claim.Tenant, claim.Project, claim.Zone, claim.UserKey, claim.CreatedAt); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "PRIMARY KEY") {
-			// The scan ran under the write lock, so this can only be a claim
-			// that slipped in between two connections — report it flat.
-			return ProjectDomainClaim{}, nil, &DomainClaimError{Domain: norm, Class: DomainClaimConflictExact}
+			if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "PRIMARY KEY") {
+				// The scan ran under the write lock, so this can only be a claim
+				// that slipped in between two connections — report it flat.
+				return &DomainClaimError{Domain: norm, Class: DomainClaimConflictExact}
+			}
+			return fmt.Errorf("insert project domain claim: %w", err)
 		}
-		return ProjectDomainClaim{}, nil, fmt.Errorf("insert project domain claim: %w", err)
+		return nil
+	})
+	if err != nil {
+		var already *ProjectDomainAlreadyClaimedError
+		if errors.As(err, &already) {
+			return claim, previous, err
+		}
+		return ProjectDomainClaim{}, nil, err
 	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return ProjectDomainClaim{}, nil, fmt.Errorf("claim project domain: commit: %w", err)
-	}
-	committed = true
 	return claim, previous, nil
 }
 
@@ -279,12 +273,13 @@ func validateProjectDomain(norm string, zones []string, adminView bool) (string,
 }
 
 // scanProjectDomainConflicts classifies d against the install's claims,
-// Public Route hostnames and reserved names (spec §3.3). The caller's own
-// (tenant, project) row is skipped: replacing one's own claim is set-domain.
-// Install-reserved and route conflicts are checked first because their text
-// never names an owner; among claim conflicts the first hit wins.
-func scanProjectDomainConflicts(d, tenantName, project string, claims []ProjectDomainClaim, routeHostnames []string, authHostname, routeBaseDomain string) error {
-	for _, reserved := range []string{authHostname, routeBaseDomain} {
+// Machine Public Hostnames (ADR-0028), Public Route hostnames and reserved
+// names (spec §3.3). The caller's own (tenant, project) row is skipped:
+// replacing one's own claim is set-domain. Install-reserved and route
+// conflicts are checked first because their text never names an owner; then
+// claims; then hostnames — among each the first hit wins.
+func scanProjectDomainConflicts(d, tenantName, project string, reg installReservations) error {
+	for _, reserved := range []string{reg.authHostname, reg.routeBaseDomain} {
 		reserved = normalizeHostname(reserved)
 		if reserved == "" {
 			continue
@@ -293,7 +288,7 @@ func scanProjectDomainConflicts(d, tenantName, project string, claims []ProjectD
 			return &DomainClaimError{Domain: d, Existing: reserved, Class: DomainClaimConflictInstall}
 		}
 	}
-	for _, hostname := range routeHostnames {
+	for _, hostname := range reg.routes {
 		h := strings.TrimPrefix(normalizeHostname(hostname), "*.")
 		if h == "" {
 			continue
@@ -302,6 +297,13 @@ func scanProjectDomainConflicts(d, tenantName, project string, claims []ProjectD
 			return &DomainClaimError{Domain: d, Existing: h, Class: DomainClaimConflictRoute}
 		}
 	}
+	if err := scanProjectDomainClaimConflicts(d, tenantName, project, reg.claims); err != nil {
+		return err
+	}
+	return scanProjectDomainHostnameConflicts(d, tenantName, reg.hostnames)
+}
+
+func scanProjectDomainClaimConflicts(d, tenantName, project string, claims []ProjectDomainClaim) error {
 	for _, c := range claims {
 		if c.Tenant == tenantName && c.Project == project {
 			continue
@@ -555,6 +557,12 @@ SELECT domain, tenant, project FROM project_domain_claims WHERE zone = ? ORDER B
 		refs = append(refs, ref)
 	}
 	return refs, rows.Err()
+}
+
+// HostnamesUnderZone lists the explicit Machine Public Hostnames reserved
+// under a zone (ADR-0028) — the second thing that blocks a zone removal.
+func (s sqlProjectDomainClaims) HostnamesUnderZone(ctx context.Context, zone string) ([]MachineHostnameRef, error) {
+	return hostnamesUnderZone(ctx, s.db, zone)
 }
 
 // ResolveProjectDomain implements ProjectDomainResolver over the claims table

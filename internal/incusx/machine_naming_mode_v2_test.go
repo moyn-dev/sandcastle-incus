@@ -9,30 +9,37 @@ import (
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
-// The Naming Mode record (ADR-0027 §1.1) rides the instance-create config:
-// the Machine Public Hostname for a zone-mode machine, the literal "private"
-// otherwise — including for a machine whose caller passed no config at all.
-func TestV2InstanceConfigWithNamingMode(t *testing.T) {
-	private := v2InstanceConfigWithNamingMode(nil, "")
-	if got := private[meta.KeyV2PublicHostname]; got != meta.NamingModePrivate {
-		t.Fatalf("private stamp = %q", got)
+// The public-name set (ADR-0028) rides the instance-create config as the
+// sorted KeyV2PublicHostnames list; a machine without public names gets no
+// key at all (never the legacy single key) — including one whose caller
+// passed no config.
+func TestV2InstanceConfigWithPublicHostnames(t *testing.T) {
+	private := v2InstanceConfigWithPublicHostnames(nil, nil)
+	if _, ok := private[meta.KeyV2PublicHostnames]; ok {
+		t.Fatalf("empty set stamped a list key: %v", private)
 	}
-	if meta.PublicHostnameFromConfig(private) != "" {
-		t.Fatalf("private stamp must read back as private mode")
+	if _, ok := private[meta.KeyV2PublicHostname]; ok {
+		t.Fatalf("the legacy single key must never be written: %v", private)
 	}
-	zone := v2InstanceConfigWithNamingMode(api.ConfigMap{"cloud-init.user-data": "x", meta.KeyV2Bare: "true"}, " web.baum.hase.de ")
-	if got := zone[meta.KeyV2PublicHostname]; got != "web.baum.hase.de" {
-		t.Fatalf("zone stamp = %q", got)
+	if meta.PublicHostnamesFromConfig(private) != nil {
+		t.Fatalf("no key must read back as no public names")
 	}
-	if meta.PublicHostnameFromConfig(zone) != "web.baum.hase.de" {
-		t.Fatalf("zone stamp must read back as the public hostname")
+	zone := v2InstanceConfigWithPublicHostnames(api.ConfigMap{"cloud-init.user-data": "x", meta.KeyV2Bare: "true"}, []string{" Web12.tc42.uk ", "web.baum.hase.de", "web12.tc42.uk"})
+	if got := zone[meta.KeyV2PublicHostnames]; got != "web.baum.hase.de,web12.tc42.uk" {
+		t.Fatalf("list stamp = %q", got)
+	}
+	if _, ok := zone[meta.KeyV2PublicHostname]; ok {
+		t.Fatalf("the legacy single key must never be written: %v", zone)
+	}
+	if got := meta.PublicHostnamesFromConfig(zone); strings.Join(got, ",") != "web.baum.hase.de,web12.tc42.uk" {
+		t.Fatalf("list stamp read back = %v", got)
 	}
 	// The stamp is added beside the caller's config, never replacing it.
 	if zone["cloud-init.user-data"] != "x" || zone[meta.KeyV2Bare] != "true" {
 		t.Fatalf("stamp clobbered the instance config: %v", zone)
 	}
-	if namingModeRecord("") != meta.NamingModePrivate || namingModeRecord("a.b") != "a.b" {
-		t.Fatalf("namingModeRecord mapping")
+	if firstPublicHostname(nil) != "" || firstPublicHostname([]string{"a.b", "c.d"}) != "a.b" {
+		t.Fatalf("firstPublicHostname mapping")
 	}
 }
 
@@ -94,13 +101,15 @@ func (r *fakeRefListResources) GetInstances(api.InstanceType) ([]api.Instance, e
 	return r.instances, nil
 }
 
-// ListMachinesV2 carries each machine's Naming Mode record so the host-key
-// purge claims a zone machine's public name like any owned name.
+// ListMachinesV2 carries each machine's public names — from the list key or
+// the legacy single key — so the host-key purge claims them like any owned
+// name.
 func TestListMachinesV2CarriesPublicHostname(t *testing.T) {
 	server := &fakeRefListServer{projects: map[string][]api.Instance{
 		"sc2-acme": nil, // the infra project itself is not an app project
 		"sc2-acme-zp": {
 			{Name: "web", InstancePut: api.InstancePut{Config: map[string]string{meta.KeyV2PublicHostname: "web.baum.hase.de"}}},
+			{Name: "api", InstancePut: api.InstancePut{Config: map[string]string{meta.KeyV2PublicHostnames: "api.baum.hase.de,web12.tc42.uk"}}},
 			{Name: "old"},
 		},
 		"sc2-acme-default": {
@@ -115,9 +124,12 @@ func TestListMachinesV2CarriesPublicHostname(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, ref := range refs {
-		got[ref.Project+":"+ref.Name] = ref.PublicHostname
+		got[ref.Project+":"+ref.Name] = strings.Join(ref.PublicHostnames, ",")
+		if ref.PublicHostname != firstPublicHostname(ref.PublicHostnames) {
+			t.Fatalf("%s: PublicHostname %q is not the first of %v", ref.Name, ref.PublicHostname, ref.PublicHostnames)
+		}
 	}
-	want := map[string]string{"zp:web": "web.baum.hase.de", "zp:old": "", "default:dev": ""}
+	want := map[string]string{"zp:web": "web.baum.hase.de", "zp:api": "api.baum.hase.de,web12.tc42.uk", "zp:old": "", "default:dev": ""}
 	if len(got) != len(want) {
 		t.Fatalf("refs = %v, want %v", got, want)
 	}

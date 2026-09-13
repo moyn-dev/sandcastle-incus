@@ -3,6 +3,7 @@ package meta
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -65,13 +66,21 @@ const (
 	// domain is claimed (`sc project create --domain`, `set-domain`), removed
 	// by `unset-domain`. Absent ⇒ a private-mode project.
 	KeyV2Domain = Prefix + "v2.domain"
-	// KeyV2PublicHostname is the INSTANCE's Naming Mode record (ADR-0027): the
-	// Machine Public Hostname `<machine>.<Project Domain>`, or the literal
-	// NamingModePrivate. Stamped once — by `sc create`, or by the reconciler on
-	// first sight of a Freeform Machine — and never rewritten. Absent covers
-	// every Machine created before the feature, so the fleet is private by
-	// default.
+	// KeyV2PublicHostname is the LEGACY single-name record of ADR-0027: the
+	// derived Machine Public Hostname `<machine>.<Project Domain>`, or the
+	// literal NamingModePrivate. Superseded by KeyV2PublicHostnames (ADR-0028):
+	// readers accept both during the transition (the list wins when present),
+	// writers write only the list. The reconciler still stamps it on first
+	// sight of an unlisted Machine until slice 3 of #172 retires that path.
 	KeyV2PublicHostname = Prefix + "v2.public-hostname"
+	// KeyV2PublicHostnames is the INSTANCE's set of Machine Public Hostnames
+	// (ADR-0028): a comma-separated, sorted, lowercase list — the derived
+	// `<machine>.<Project Domain>` when the project has a domain, plus every
+	// explicit hostname the tenant added (`sc create --hostname`, `sc hostname
+	// add`). Written by `sc create` in the create call and rewritten by the
+	// Auth App whenever a hostname is added or removed. Absent ⇒ no public
+	// names (and, during the transition, fall back to KeyV2PublicHostname).
+	KeyV2PublicHostnames = Prefix + "v2.public-hostnames"
 	// KeyV2CertState mirrors a zone-mode Machine's Machine Certificate state
 	// (pending | issued | installed | renewing | failed:<reason>) into instance
 	// config, so the ADR-0023 cache path and the live Incus path render the
@@ -107,10 +116,11 @@ const (
 
 	TailscaleStateRunningLoggedOut = "running-logged-out"
 
-	// NamingModePrivate / NamingModeZone are the two Naming Modes (ADR-0027).
-	// NamingModePrivate is also the literal KeyV2PublicHostname value that
-	// pins a Machine to private mode; NamingModeZone is never stored — a zone
-	// Machine's record IS its Machine Public Hostname.
+	// NamingModePrivate is the literal value of the legacy KeyV2PublicHostname
+	// key meaning "no derived public name". Naming Mode itself is retired
+	// (ADR-0028): a Machine always has its Machine Private Hostname and
+	// additionally a set of Machine Public Hostnames. NamingModeZone survives
+	// only as the reconciler's log vocabulary until slice 3 of #172.
 	NamingModePrivate = "private"
 	NamingModeZone    = "zone"
 
@@ -200,29 +210,53 @@ type Machine struct {
 	// sshd, no shared storage. It changes how the machine is reached, so a
 	// listing says so rather than leaving `sc connect` to time out.
 	Bare bool `json:"bare,omitempty"`
-	// Zone mode (ADR-0027); all three are empty for a private-mode machine.
-	// PublicHostname is the Machine Public Hostname from KeyV2PublicHostname
-	// (empty when that key is absent or the literal "private"); CertState and
-	// CertNotAfter mirror KeyV2CertState / KeyV2CertNotAfter and are only read
-	// for a zone-mode machine.
-	PublicHostname string `json:"publicHostname,omitempty"`
-	CertState      string `json:"certState,omitempty"`
-	CertNotAfter   string `json:"certNotAfter,omitempty"`
+	// Machine Public Hostnames (ADR-0028). PublicHostnames is the machine's
+	// full set of public names from KeyV2PublicHostnames (sorted; falling back
+	// to the legacy single KeyV2PublicHostname during the transition), empty
+	// for a machine with no public name. PublicHostname is kept for one
+	// release as the FIRST element of that list (empty when the list is);
+	// new code reads PublicHostnames. CertState and CertNotAfter mirror
+	// KeyV2CertState / KeyV2CertNotAfter and are only read when the machine
+	// has at least one public name.
+	PublicHostname  string   `json:"publicHostname,omitempty"`
+	PublicHostnames []string `json:"publicHostnames,omitempty"`
+	CertState       string   `json:"certState,omitempty"`
+	CertNotAfter    string   `json:"certNotAfter,omitempty"`
 }
 
-// NamingMode derives the machine's Naming Mode from its PublicHostname:
-// NamingModeZone when it carries a Machine Public Hostname, else
-// NamingModePrivate (which covers every unstamped machine).
+// PublicNames returns the machine's public-name set, tolerating a payload
+// that carries only the legacy single PublicHostname — the resource cache of
+// an Auth App from before ADR-0028, or a hand-built value.
+func (m Machine) PublicNames() []string {
+	if len(m.PublicHostnames) > 0 {
+		return m.PublicHostnames
+	}
+	if name := strings.TrimSpace(m.PublicHostname); name != "" {
+		return []string{name}
+	}
+	return nil
+}
+
+// HasPublicHostname reports whether the machine carries at least one Machine
+// Public Hostname (derived or explicit).
+func (m Machine) HasPublicHostname() bool {
+	return len(m.PublicNames()) > 0
+}
+
+// NamingMode is the retired ADR-0027 mode, kept for one release as a
+// readability shim: NamingModeZone when the machine has any public name,
+// NamingModePrivate otherwise. Prefer HasPublicHostname.
 func (m Machine) NamingMode() string {
-	if m.PublicHostname != "" {
+	if m.HasPublicHostname() {
 		return NamingModeZone
 	}
 	return NamingModePrivate
 }
 
-// PublicHostnameFromConfig reads the Naming Mode record off an instance's own
-// config: the Machine Public Hostname, or "" when the key is absent or holds
-// the literal NamingModePrivate.
+// PublicHostnameFromConfig reads the legacy single-name record off an
+// instance's own config: the derived Machine Public Hostname, or "" when the
+// key is absent or holds the literal NamingModePrivate. Kept for the
+// transition; new readers use PublicHostnamesFromConfig.
 func PublicHostnameFromConfig(config map[string]string) string {
 	hostname := strings.TrimSpace(config[KeyV2PublicHostname])
 	if hostname == "" || hostname == NamingModePrivate {
@@ -231,21 +265,64 @@ func PublicHostnameFromConfig(config map[string]string) string {
 	return hostname
 }
 
-// DecodeMachine fills the zone-mode fields of machine from an instance's own
-// config (ADR-0027). It is the one place those keys are read, and every
-// instance → Machine conversion — the live per-project sweep and the
+// PublicHostnamesFromConfig reads a machine's set of Machine Public Hostnames
+// (ADR-0028) off its own config: KeyV2PublicHostnames when present (split,
+// normalized, sorted, deduplicated), else the legacy single
+// KeyV2PublicHostname as a one-element list, else nothing.
+func PublicHostnamesFromConfig(config map[string]string) []string {
+	if list := ParsePublicHostnames(config[KeyV2PublicHostnames]); len(list) > 0 {
+		return list
+	}
+	if single := PublicHostnameFromConfig(config); single != "" {
+		return []string{single}
+	}
+	return nil
+}
+
+// ParsePublicHostnames splits the KeyV2PublicHostnames value: comma-separated
+// names, lowercased and trimmed, sorted, without duplicates or blanks.
+func ParsePublicHostnames(value string) []string {
+	var names []string
+	seen := map[string]struct{}{}
+	for _, part := range strings.Split(value, ",") {
+		name := strings.Trim(strings.ToLower(strings.TrimSpace(part)), ".")
+		if name == "" || name == NamingModePrivate {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// FormatPublicHostnames renders a set of names as the KeyV2PublicHostnames
+// value: the ParsePublicHostnames normalization, joined with commas. An empty
+// set renders as "" (the key is then deleted, never written empty).
+func FormatPublicHostnames(names []string) string {
+	return strings.Join(ParsePublicHostnames(strings.Join(names, ",")), ",")
+}
+
+// DecodeMachine fills the public-name fields of machine from an instance's
+// own config (ADR-0027/0028). It is the one place those keys are read, and
+// every instance → Machine conversion — the live per-project sweep and the
 // ADR-0023 resource-cache renderer alike — funnels through it, so the two
-// paths cannot disagree on a machine's public name or certificate state. A
-// private-mode machine comes back untouched: the certificate keys are ignored
-// unless the machine is in zone mode, so a stray cert-state on an unstamped
-// machine can never make it render as anything but private.
+// paths cannot disagree on a machine's public names or certificate state. A
+// machine without public names comes back untouched: the certificate keys
+// are ignored unless the machine has a public name, so a stray cert-state on
+// an unstamped machine can never make it render as anything but private.
 func DecodeMachine(config map[string]string, machine Machine) Machine {
-	machine.PublicHostname = PublicHostnameFromConfig(config)
-	if machine.PublicHostname == "" {
+	machine.PublicHostnames = PublicHostnamesFromConfig(config)
+	machine.PublicHostname = ""
+	if len(machine.PublicHostnames) == 0 {
 		machine.CertState = ""
 		machine.CertNotAfter = ""
 		return machine
 	}
+	machine.PublicHostname = machine.PublicHostnames[0]
 	machine.CertState = strings.TrimSpace(config[KeyV2CertState])
 	machine.CertNotAfter = strings.TrimSpace(config[KeyV2CertNotAfter])
 	return machine

@@ -61,6 +61,30 @@ func (r HTTPRunner) reconcileSuffixClaimsOnce(ctx context.Context, db *sql.DB) (
 // and never auto-claimed. The live set comes from the same tenant listing.
 type projectDomainClaimGC struct {
 	logged map[string]struct{}
+	// droppedHostnames collects the Machine Public Hostnames the last pass
+	// pruned (ADR-0028), for the loop to log.
+	droppedHostnames []MachineHostname
+}
+
+// liveMachines lists every live machine of the install as
+// "<tenant>/<project>/<machine>" for the hostname GC; nil when the runner
+// has no machine store or the listing fails (then only vanished projects
+// are pruned — a listing hiccup must never wipe live reservations).
+func (r HTTPRunner) liveMachines(ctx context.Context, summaries []tenant.Summary) map[string]struct{} {
+	if r.Machines == nil {
+		return nil
+	}
+	live := map[string]struct{}{}
+	for _, summary := range summaries {
+		machines, err := r.Machines.ListMachines(ctx, summary)
+		if err != nil {
+			return nil
+		}
+		for _, m := range machines {
+			live[summary.Tenant+"/"+m.Project+"/"+m.Name] = struct{}{}
+		}
+	}
+	return live
 }
 
 // reconcileProjectDomainClaimsOnce returns the dropped claims and the newly
@@ -82,6 +106,24 @@ func (r HTTPRunner) reconcileProjectDomainClaimsOnce(ctx context.Context, db *sq
 	})
 	if err != nil {
 		return dropped, nil, err
+	}
+	if len(releaseErrs) > 0 {
+		return dropped, nil, errors.Join(releaseErrs...)
+	}
+	// Machine Public Hostnames (ADR-0028): rows whose machine no longer
+	// exists go too. The machine listing is best-effort — without one only
+	// hostnames of vanished projects are pruned.
+	liveMachines := r.liveMachines(ctx, summaries)
+	droppedHostnames, err := ReconcileMachineHostnames(ctx, db, liveProjects, liveMachines, func(ctx context.Context, hostname MachineHostname) {
+		if rerr := onMachineHostnameReleased(ctx, db, hostname); rerr != nil {
+			releaseErrs = append(releaseErrs, fmt.Errorf("release hostname %s: %w", hostname.Hostname, rerr))
+		}
+	})
+	if err != nil {
+		return dropped, nil, err
+	}
+	for _, h := range droppedHostnames {
+		gc.droppedHostnames = append(gc.droppedHostnames, h)
 	}
 	if len(releaseErrs) > 0 {
 		return dropped, nil, errors.Join(releaseErrs...)
@@ -147,6 +189,10 @@ func (r HTTPRunner) runSuffixClaimReconcileLoop(ctx context.Context, db *sql.DB,
 		for _, claim := range dropped {
 			logger.Message(ctx, "INFO", "auth-app pruned orphaned project domain claim %s (%s/%s)", claim.Domain, claim.Tenant, claim.Project)
 		}
+		for _, h := range gc.droppedHostnames {
+			logger.Message(ctx, "INFO", "auth-app pruned orphaned machine hostname %s (%s/%s:%s)", h.Hostname, h.Tenant, h.Project, h.Machine)
+		}
+		gc.droppedHostnames = nil
 		for _, entry := range unclaimed {
 			logger.Message(ctx, "WARN", "auth-app project %s carries user.sandcastle.v2.domain without a claim; ignored (sc project set-domain claims it, unset-domain clears it)", entry)
 		}

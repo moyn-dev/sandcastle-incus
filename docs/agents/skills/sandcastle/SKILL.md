@@ -49,9 +49,12 @@ Tenant                          the ownership / identity / DNS / tailnet boundar
 - A machine's DNS name is `<machine>.<project>.<suffix>`. Machines in the
   tenant's **default project only** also answer to `<machine>.<suffix>`.
   A project with a **Project Domain** (`sc project create zp --domain
-  baum.hase.de`, under a Public DNS Zone the admin registered) instead names
-  machines created afterwards `<machine>.<domain>` — see
-  `reference/operations.md`. Naming Mode is per machine and never changes.
+  baum.hase.de`, under a Public DNS Zone the admin registered) additionally
+  names machines created afterwards `<machine>.<domain>`, and any machine can
+  carry **explicit public hostnames** (`sc create --hostname web12.tc42.uk`,
+  `sc hostname add|remove|list`) under a registered zone — see
+  `reference/operations.md`. A machine's public names are a set (ADR-0028);
+  there is no per-machine naming mode.
 - The same machine name may exist in several projects. A bare name that matches
   more than one is ambiguous — qualify it as `project:machine`.
 - Machines are **not** tailnet nodes. They sit on the tenant's private bridge and
@@ -66,6 +69,8 @@ sc ls -a                    # …across every project (PROJECT MACHINE TYPE FQDN
 sc create dev               # create a container in the active project
 sc create dev --vm          # …a VM instead
 sc create web --image mybase --home-share
+sc create zp:web --hostname web12.tc42.uk   # …with an explicit public hostname (repeatable; --fqdn alias)
+sc hostname add zp:web api.tc42.uk          # claim another public name later; list / remove likewise
 sc c dev                    # interactive shell as the login user
 sc c dev -- uptime          # run one command, non-interactive
 sc c backend:api -- uptime  # …in another project

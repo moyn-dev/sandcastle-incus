@@ -13,22 +13,24 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
-// v2MachineNames lists every name a v2 machine answers at. A zone-mode machine
-// (ADR-0027) answers at exactly its Machine Public Hostname — it has no
-// Machine Private Hostname and no short alias. A private-mode machine
-// (publicHostname empty) answers at its Machine Private Hostname, plus the
-// short alias the default project also serves (ADR-0018).
-func v2MachineNames(summary tenant.Summary, project string, machine string, publicHostname string) []string {
-	if publicHostname = strings.TrimSpace(publicHostname); publicHostname != "" {
-		return []string{publicHostname}
+// v2MachineNames lists every name a v2 machine answers at (ADR-0028): its
+// Machine Private Hostname first (plus the short alias the default project
+// also serves, ADR-0018), then every Machine Public Hostname — derived or
+// explicit. The first name is what HostKeyAlias pins, so it stays the
+// private name whenever the tenant has a DNS suffix; slice 2 of #172
+// finalizes SSH naming. Without a suffix only the public names remain.
+func v2MachineNames(summary tenant.Summary, project string, machine string, publicHostnames []string) []string {
+	var names []string
+	if suffix := strings.TrimSpace(summary.DNSSuffix); suffix != "" {
+		names = append(names, machine+"."+project+"."+suffix)
+		if project == naming.DefaultProjectName {
+			names = append(names, machine+"."+suffix)
+		}
 	}
-	suffix := strings.TrimSpace(summary.DNSSuffix)
-	if suffix == "" {
-		return nil
-	}
-	names := []string{machine + "." + project + "." + suffix}
-	if project == naming.DefaultProjectName {
-		names = append(names, machine+"."+suffix)
+	for _, name := range publicHostnames {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
 	}
 	return names
 }
@@ -203,8 +205,8 @@ func toHostKeys(found []incusx.HostKey) []hostkeys.Key {
 // reclaims the machine's names from stale untagged entries and purges recycled
 // private-IP debris. Returns false when no key could be obtained at all, in
 // which case the caller must fall back to accept-new.
-func ensureV2HostKey(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machineName string, publicHostname string, privateIP string, privateCIDR string) bool {
-	names := v2MachineNames(summary, project, machineName, publicHostname)
+func ensureV2HostKey(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machineName string, publicHostnames []string, privateIP string, privateCIDR string) bool {
+	names := v2MachineNames(summary, project, machineName, publicHostnames)
 	keysConfig := hostKeysConfig(config, summary, privateCIDR)
 	if len(names) == 0 || keysConfig.Path == "" {
 		verboseCLI(config, "host key: no hostname or known_hosts path; leaving host key handling to ssh")

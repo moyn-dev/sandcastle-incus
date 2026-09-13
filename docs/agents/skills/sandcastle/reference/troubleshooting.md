@@ -104,7 +104,7 @@ finishing. Until then `pending` and an inactive Caddy are the designed state.
 ```bash
 sc ls                                                   # FQDN <m>.<domain>, CERT pending|ok|failed
 sc project status <project>                             # per-machine PUBLIC NAME / CERT / NOT AFTER / DETAIL
-sc incus config get <m> user.sandcastle.v2.public-hostname   # the Naming Mode record (never changes)
+sc incus config get <m> user.sandcastle.v2.public-hostnames  # the machine's public-name set (ADR-0028; the single public-hostname key is legacy)
 sc incus config get <m> user.sandcastle.v2.cert-state   # pending | issued | installed | renewing | failed:<reason>
 sc incus config get <m> user.sandcastle.v2.cert-not-after    # expiry of the INSTALLED certificate
 dig +short <m>.<domain> @1.1.1.1                        # the public A record → tenant-bridge IP
@@ -141,7 +141,8 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
   (`sc incus exec <m> -- journalctl -u cloud-final`). The Auth App never pushes
   without a marker naming the expected public hostname.
 - **Marker says `MODE=private`** — the machine was created before the domain
-  was claimed. Naming Mode is fixed at creation; recreate the machine.
+  was claimed; until slice 3 of #172 re-derives names, recreate the machine
+  (or add the name explicitly with `sc hostname add`).
 - **Caddy `inactive` with the marker present** — expected before the push: the
   `sandcastle-zone.conf` drop-in makes the start conditional on the certificate
   files (`systemctl status caddy` shows the `ConditionPathExists` skip, no crash

@@ -396,7 +396,8 @@ type fakeProjectDomains struct {
 	mu       sync.Mutex
 	calls    []string
 	zoneMode map[string][]string // "tenant/project" → machines
-	missing  map[string]bool     // "tenant/project" → not found
+	missing  map[string]bool     // "tenant/project" (or "tenant/project:machine") → not found
+	stamped  map[string][]string // "tenant/project:machine" → last KeyV2PublicHostnames list written
 	fail     error
 }
 
@@ -428,6 +429,21 @@ func (f *fakeProjectDomains) ListZoneModeMachines(_ context.Context, tenant, pro
 		return nil, fmt.Errorf("%w: %s/%s", projectbroker.ErrProjectNotFound, tenant, project)
 	}
 	return f.zoneMode[tenant+"/"+project], nil
+}
+
+func (f *fakeProjectDomains) SetMachinePublicHostnames(_ context.Context, tenant, project, machine string, hostnames []string) error {
+	f.record("stamp " + tenant + "/" + project + ":" + machine + " " + strings.Join(hostnames, ","))
+	if f.missing[tenant+"/"+project] {
+		return fmt.Errorf("%w: %s/%s", projectbroker.ErrProjectNotFound, tenant, project)
+	}
+	if f.missing[tenant+"/"+project+":"+machine] {
+		return fmt.Errorf("%w: %s/%s:%s", ErrMachineNotFound, tenant, project, machine)
+	}
+	if f.stamped == nil {
+		f.stamped = map[string][]string{}
+	}
+	f.stamped[tenant+"/"+project+":"+machine] = append([]string(nil), hostnames...)
+	return f.fail
 }
 
 func (f *fakeProjectDomains) DeleteTenantProject(_ context.Context, tenant, project string) error {

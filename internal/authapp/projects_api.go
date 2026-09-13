@@ -44,6 +44,10 @@ type TenantProjectDomainManager interface {
 	// DeleteTenantProject deletes the app project with its machines, volumes
 	// and profiles.
 	DeleteTenantProject(ctx context.Context, tenant, project string) error
+	// SetMachinePublicHostnames rewrites the machine's KeyV2PublicHostnames
+	// list (ADR-0028); an empty list deletes the key. A missing machine is
+	// reported by wrapping ErrMachineNotFound.
+	SetMachinePublicHostnames(ctx context.Context, tenant, project, machine string, hostnames []string) error
 }
 
 // ProjectCreateRequest is the body of POST /api/projects.
@@ -366,6 +370,18 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		result.Released = claim.Domain
 		if err := onProjectDomainReleased(r.Context(), h.db, claim); err != nil {
 			svclog.Logf(r.Context(), "project domain %s released with cleanup errors: %v", claim.Domain, err)
+		}
+	}
+	// The project's machines go with it: their explicit Machine Public
+	// Hostnames (ADR-0028) are released the same way, before Incus.
+	hostnames, err := ReleaseMachineHostnamesOfProject(r.Context(), h.db, user.UserKey, project)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, hostname := range hostnames {
+		if err := onMachineHostnameReleased(r.Context(), h.db, hostname); err != nil {
+			svclog.Logf(r.Context(), "machine hostname %s released with cleanup errors: %v", hostname.Hostname, err)
 		}
 	}
 	err = svclog.Span(r.Context(), "project.delete", func() error {

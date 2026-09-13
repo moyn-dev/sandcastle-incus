@@ -68,9 +68,11 @@ sc project unset-domain zp                   # release it; new machines are priv
 sc project status zp                         # Domain: baum.hase.de   (zone hase.de) + MACHINE/PUBLIC NAME/CERT table
 ```
 
-- Every machine created in the project **after** the claim gets the Machine
-  Public Hostname `<machine>.<domain>`; machines created before keep their
-  private name. Naming Mode is per machine and never changes.
+- Every machine created in the project **after** the claim gets the derived
+  Machine Public Hostname `<machine>.<domain>` beside its private name;
+  machines created before keep only their private name until the follow-on
+  slices of #172 re-derive names. See "Explicit machine hostnames" below for
+  the rest of a machine's public-name set.
 - Claims are install-wide and first-come. Refusals are verbatim: a cross-tenant
   overlap never names the owner (`… overlaps a domain already claimed on this
   install; choose another`); a same-tenant overlap does (`… overlaps "<d>"
@@ -112,8 +114,41 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   retains its certificate row until expiry, so recreating it with the same
   name reuses the certificate without a new order. Diagnosis:
   `reference/troubleshooting.md`.
-- `sc connect` dials the bridge IP but keys `known_hosts` by the public name
-  (`HostKeyAlias=<m>.<d>`); a zone machine has no private name or short alias.
+- `sc connect` dials the bridge IP; `known_hosts` records the private names
+  and every public name, and `HostKeyAlias` stays the Machine Private Hostname
+  (ADR-0028; slice 2 of #172 finalizes SSH naming).
+
+### Explicit machine hostnames (ADR-0028)
+
+```bash
+sc create zp:web --hostname web12.tc42.uk --fqdn shop.tc42.uk   # claimed BEFORE the instance exists; a refusal creates nothing
+sc hostname add zp:web api.tc42.uk [--dry-run]                  # claim + certificate row + instance key rewritten
+sc hostname list zp:web                                         # PUBLIC NAME / KIND (derived|explicit) / ZONE
+sc hostname remove zp:web api.tc42.uk [--dry-run]               # release (alias rm); the derived name is not removable per machine
+sc ls                                                           # FQDN = first public name + "(+N)"; --json carries publicHostnames
+sc incus config get web user.sandcastle.v2.public-hostnames     # the sorted list the Auth App maintains
+```
+
+- A machine's public names are a **set**: the derived `<m>.<domain>` (when
+  the project has a domain) plus explicit names under any registered Public
+  DNS Zone — apex-level names (`web12.tc42.uk`) included, in a project with or
+  without a domain. Each is an install-wide, first-come reservation of itself
+  plus its wildcard subtree, with its own certificate (`name` + `*.name`).
+- Refusals are verbatim and mirror Project Domains: cross-tenant `machine
+  hostname "<h>" overlaps a name already claimed on this install; choose
+  another`; same tenant `… overlaps "<x>" held by machine "<p>:<m>" in this
+  tenant` / `… overlaps project domain "<d>" claimed by project "<p>" in this
+  tenant`; routes and install names `… is reserved by this install`; the zone
+  apex `… is a zone apex; use at least one label below <zone>`; no zone `no
+  Public DNS Zone covers <h> — ask your admin`. The reverse checks refuse a
+  Project Domain or a custom Public Route that overlaps a hostname.
+- Needs `sc login`: `--hostname is not available on this install (log in to
+  an Auth App with sc login)` otherwise. `sc project delete` releases the
+  project's hostnames; a machine deleted out-of-band is pruned by the 5-minute
+  loop; `sc-adm public-dns-zone remove` is refused while hostnames are held.
+- Slice 1 of #172 records names and certificate rows only; A records, per-name
+  certificates and Caddy site blocks follow (explicit names read `CERT
+  pending` until then).
 
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote

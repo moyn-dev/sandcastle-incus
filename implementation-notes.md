@@ -5469,3 +5469,78 @@ removed them. Two causes in `zoneReconciler.Reconcile`, both fixed:
   probe registers a *sibling* of the zone (`bad-<id>.<parent>`), because a
   name under the zone is refused by the nesting check before the token is
   ever tried.
+
+## 2026-09-13 — Machine Public Hostnames slice 1 (#173): ADR-0028, reservations, API, `sc create --hostname` / `sc hostname`
+
+Decisions of #172 are the ADR's; what the slice ticket left to the implementer:
+
+- **The reservation transaction is shared, not duplicated.** `ClaimProjectDomain`'s
+  hand-rolled `BEGIN IMMEDIATE` block became `withReservationLock` +
+  `loadInstallReservations` (claims, hostnames, route hostnames read on the locked
+  connection); `ClaimMachineHostname` and `ClaimProjectDomain` both run their scan +
+  INSERT inside it. `scanProjectDomainConflicts` now takes the snapshot struct and
+  gained the hostname half; the domain-vs-domain part is `scanProjectDomainClaimConflicts`.
+  `DomainClaimError` grew `Machine` and the class `hostname`; the cross-tenant text is
+  unchanged (flat), the same-tenant text names `"<p>:<m>"`.
+- **The derived name is not a `machine_hostnames` row.** It is implied by the project's
+  domain claim (whole subtree), so the table holds explicit names only; every reader
+  that needs the full set (`PublicHostnamesOfMachine`, the GET view) renders derived +
+  explicit. Alternative — a row per derived name, kept in sync by the reconciler — was
+  rejected: two rows reserving one name would need a special case in every scan.
+- **A hostname inside the caller's own Project Domain is refused.** The issue said
+  "any Project Domain it is inside or that is inside it"; no own-project exemption was
+  asked for and `api.baum.hase.de` is the future machine `api`'s derived name, so the
+  scan treats the own domain like any other (same-tenant text names the project).
+- **The zone apex itself is refused; apex-level is allowed.** Decision 2 allows
+  `web12.tc42.uk`; `tc42.uk` would reserve the whole zone, which is what registering
+  the zone is for. Text mirrors the Project Domain apex rule ("use at least one label
+  below <zone>").
+- **Routes: symmetric one-level semantics.** A hostname conflicts with a route equal
+  to or inside it (wildcard stripped); a route is refused equal to or inside a
+  hostname; a route *above* a hostname (`*.y` vs `deep.x.y`) is allowed in both
+  directions, exactly as with Project Domains (slice 3 of ADR-0027 chose this; a
+  one-level wildcard does not cover a deeper name).
+- **`beforeCreate` on POST instead of swallowing 404.** `sc create --hostname` claims
+  before the instance exists, so the Auth App cannot stamp the key; rather than
+  ignoring "machine not found" (which would let a typo in `sc hostname add` hold a
+  name), the create flow says so explicitly and the create call stamps the set. A
+  `sc hostname add` on a missing machine is 404 and the reservation is released again
+  (compensation like `CreateTenantProjectWithDomain`). `authapp.ErrMachineNotFound` is
+  wrapped by the Incus seam for that.
+- **The Incus seam is `TenantProjectDomainManager` widened by one method**
+  (`SetMachinePublicHostnames`), not a new interface: it is the same wiring
+  (`ProjectBrokerCreator`) and the one test fake grows one method. It writes via the
+  existing `stampInstanceConfig` (an empty list deletes the key).
+- **Writers write only the list; the reconciler is touched minimally.** `sc create`
+  stamps `KeyV2PublicHostnames` and never the single key (an empty set stamps nothing —
+  the `private` pin has no purpose without Naming Mode). The zone reconciler reads the
+  list when present (derived target = the name under the claim; explicit names ignored
+  until slice 3) and never stamps the legacy key on such a machine; the legacy
+  first-sight stamp survives only for machines with neither key. Explicit hostnames are
+  added to the reconciler's `liveHostnames` so their pending `machine_certificates` rows
+  are not GC'd 30 s after `sc hostname add`.
+- **`ListZoneModeMachines` now means "machines with a derived name under the current
+  domain"** (reads both keys, filters by suffix; a project without a domain returns
+  none). This keeps the transitional `set-domain`/`unset-domain` refusal honest while
+  letting a private project with explicit hostnames claim a domain later — the issue
+  says explicit names in a private project are allowed, and blocking `set-domain` on
+  them would contradict that. The refusal itself goes with slice 3.
+- **Output policy until slice 2.** A project with a domain prints only `Public name:`
+  lines (as ADR-0027 did — its machine contract still serves only the derived name);
+  a project without a domain keeps its `DNS:` line and adds the `Public name:` lines
+  (its private name *is* served). `formatCreateMachineV2` takes a per-name outcome map;
+  the golden test summary now carries `Projects[].Domain` because the formatter reads
+  the derived name off the summary rather than off a single field.
+- **`meta.Machine.PublicNames()`** tolerates a payload with only the legacy single
+  field (an older Auth App's resource cache still serves `publicHostname`), so `sc ls`
+  against a not-yet-updated appliance keeps rendering. `NamingMode()` stays one release
+  as a shim over `HasPublicHostname()`.
+- **`--hostname`/`--fqdn` are one `appendStringFlag`.** Two `StringArrayVar`s on one
+  slice do not merge: pflag's array value replaces the slice on each flag's first `Set`,
+  so `--hostname a --fqdn b` would have kept only `b`.
+- **`sc hostname list` needs no seam and answers without the Incus seam**; mutations are
+  501 without it (`machine hostnames are not available on this deployment`).
+- **GC listing.** The slow loop's hostname GC uses `HTTPRunner.Machines` (the
+  `machine.Store` the handler already has) for the live machine set; a listing error
+  degrades to project-level pruning only, never to "no machines".
+- **e2e 12g is a placeholder**, written for what slice 1 can show; slice 4 automates it.

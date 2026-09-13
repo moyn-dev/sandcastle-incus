@@ -109,10 +109,11 @@ func (c TenantCreator) MachineSubnetV2(ctx context.Context, incusProject string,
 type V2MachineRef struct {
 	Project string // short project name, e.g. "default"
 	Name    string
-	// PublicHostname is the machine's Naming Mode record (ADR-0027) read off
-	// its own instance config: the Machine Public Hostname, or "" for a
-	// private-mode (or unstamped) machine.
-	PublicHostname string
+	// PublicHostnames is the machine's set of Machine Public Hostnames
+	// (ADR-0028) read off its own instance config; empty for a machine with
+	// no public name. PublicHostname is the first of them, kept one release.
+	PublicHostname  string
+	PublicHostnames []string
 }
 
 // ListMachinesV2 returns every live machine across all of a tenant's app
@@ -142,10 +143,12 @@ func (c TenantCreator) ListMachinesV2(ctx context.Context, infraProject string) 
 			return nil, fmt.Errorf("list machines in project %s: %w", incusProject, err)
 		}
 		for _, instance := range instances {
+			publicHostnames := meta.PublicHostnamesFromConfig(instance.Config)
 			machines = append(machines, V2MachineRef{
-				Project:        short,
-				Name:           instance.Name,
-				PublicHostname: meta.PublicHostnameFromConfig(instance.Config),
+				Project:         short,
+				Name:            instance.Name,
+				PublicHostname:  firstPublicHostname(publicHostnames),
+				PublicHostnames: publicHostnames,
 			})
 		}
 	}
