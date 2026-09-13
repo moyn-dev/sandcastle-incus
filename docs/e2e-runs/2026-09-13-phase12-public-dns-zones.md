@@ -240,3 +240,76 @@ incus exec big:sc-edge --project infrastructure -- sh -c 'cp /etc/caddy/Caddyfil
 ## Appendix — logs
 
 On the devbox: `/tmp/pdz-e2e/logs/01-install.log`, `02-client-build.log`, `03-edge-vhost.log`, `04-client-tailnet.log`, `07-rollout-587928b.log`, `08-rollout-e5cb0da.log`. In the client container: `/root/05-login.log`, `/root/05-login-2.log`, `/root/06-phase12*.log` (runs 1–4).
+
+---
+
+# Part 2 — explicit Machine Public Hostnames (ADR-0028), same day
+
+| | |
+|---|---|
+| Branch / binary | `feat/machine-hostnames` @ `ce03163` (slices 1–4 of #172), `make build` → `0.0.0-dev` |
+| Install | the same `tc` install; appliance binary replaced (`c484ffe` build) + `sandcastle-auth-app` restarted (`auth database migrated in 5ms`); client binary replaced; `sc payload-sync` reported the default project `current` at the new payload hash |
+| Script | `scripts/e2e-pdz.sh` with 12g (explicit hostnames) between 12c and 12f |
+
+## Run mph1 (12:5x UTC, run id `e2e-mph1`)
+
+**FAIL at 12c (12:58:59 UTC)** — `sc create` printed no `DNS:` line. Cause: **operator error, not product** — the client still ran the previous binary (sha `240203c8…` vs build `3158f543…`); the in-place `incus file push` over the running binary had not taken. Re-pushed via `sandcastle.new` + `mv`, hash verified equal, `sc create --help` shows `--hostname`. Cleanup trap left nothing behind (no `zp-mph1`, no zone).
+
+## Run mph2 (13:0x UTC, run id `e2e-mph2`)
+
+12a, 12b PASS; 12c: `DNS: web.zp-mph2.tcpdz` **and** `Public name: web.e2e-mph2.e2e.sc.tc42.uk` printed (PASS), bridge IP, both A records public (PASS) — then **FAIL: timed out after 600 s waiting for CERT installed**. Appliance journal: certificate issued 13:00:31, never `installed`, no error, no gate log line.
+
+Reproduction (`dbg` project, machine `m1`, 13:17 UTC), inspected inside the machine after 75 s: `sc ls` → `certState: issued`; `/etc/sandcastle/hostnames` seeded correctly; private leaf at `/etc/sandcastle/tls/`; Caddy active (private block only); **no `/etc/sandcastle/caddy.ready`**; `/var/log/cloud-init-output.log`:
+
+```
+/usr/local/sbin/sandcastle-caddy-setup: 83: /.sc/platform/sbin/caddy-setup: Syntax error: redirection unexpected
+```
+
+Finding **F6 — the payload's caddy-setup is executed by the boot shim with `sh` (dash), and slice 2 introduced bash-only syntax** (`done < <(…)`). The script aborts after the leaf fetch: no public site blocks, no marker → the reconciler's push gate (`markerReady`) sees no marker and returns false **silently** (**F7**), so the issued certificate is never installed. The bash-executed golden tests could not catch it. Also seen at the failed run's cleanup: **F8** — the zone pass errored with `delete 2 stale A record(s): HTTP 404 Record does not exist` when records had already been removed by the project-delete hook. Side note: profile renders `PUBLIC_HOSTNAMES=<name>,` with a trailing comma (harmless, normalized away).
+
+Fixes on the branch before run mph3 (commit noted below): POSIX-sh payload scripts + goldens executed with `sh`, marker-missing log line, 404-tolerant stale-record delete. Reproduction torn down (`dbg` deleted, zone removed).
+
+Fix: commit `b9e903f` — POSIX-sh payload scripts (goldens now run under `sh`/dash + a static bashism check), marker-missing log line, 404-tolerant stale-record delete. Rollout 13:24:35 UTC (hashes verified on appliance + client; `sc payload-sync`: `synced sc-payload-4f4a44c8… -> sc-payload-0c546be7…`).
+
+## Run mph3 (13:24:39 UTC, run id `e2e-mph3`)
+
+12a, 12b PASS. **12c PASS in full under the new contract**: `DNS:` + `Public name:` lines, A records, `cert-state installed`, `sc ls` CERT ok, NOT AFTER `2026-12-12T12:26:52Z`, `openssl` SANs `*.web…` + `web…` from `(STAGING) Artificial Amaranth YE1`, wildcard vhost — i.e. F6/F7 are fixed (the marker now gates the push correctly and the certificate landed within ~2 min of create).
+
+**FAIL at 12g**: `sc create zp-mph3:api --hostname api-mph3.e2e.sc.tc42.uk` → `machine hostname "api-mph3.e2e.sc.tc42.uk" is reserved by this install` (API 409).
+
+Finding **F9 — inconsistent install-reservation rule.** `scanMachineHostnameConflicts` refuses a hostname that is *inside* the Auth Hostname / route base subtree (`HasSuffix(h, "."+reserved)`), whereas `scanProjectDomainConflicts` refuses only the reserved name itself or an ancestor of it. The test zone `e2e.sc.tc42.uk` lives under the Auth Hostname `sc.tc42.uk`, so 12b's domain claim passed and 12g's hostname claim failed on the same shape. Rule aligned to the project-domain one (exact / ancestor only): a name below the Auth Hostname is only a problem if it collides with an actual Public Route, which the route reservation checks already cover. Cleanup trap left nothing behind.
+
+Fix: `d15a4f0` (+ test follow-up `83f04a6`) — hostnames below the Auth Hostname / route base are claimable; equal/ancestor still refused. Rolled out with hash checks (13:3x UTC).
+
+## Run mph4 (run id `e2e-mph4`)
+
+**ALL PASS** (13:28:15 → 13:31:42 UTC, 3 min 27 s wall clock; 4 staging certificates).
+
+| Step | Result |
+|---|---|
+| 12a zone registry, 12b project domain | PASS |
+| 12c machine `web` (derived name): `DNS:` + `Public name:`, A records, cert installed, `sc ls` CERT ok, both SANs from the staging issuer, wildcard vhost | PASS |
+| 12g `sc create zp-mph4:api --hostname api-mph4.e2e.sc.tc42.uk` (apex-level): `DNS:` line + one `Public name:` per name (explicit + derived); `sc ls` `api-mph4… (+1)`; `sc hostname list` shows explicit + derived | PASS |
+| 12g A records for both names; `cert-state installed` for both; `openssl` SNI `api-mph4…` → its SANs from staging; SNI `api.zp-mph4.tcpdz` → **tenant-CA leaf still served** | PASS |
+| 12g `sc hostname add zp-mph4:api alt-mph4…` on the running machine: three names listed; A records; cert installed; SNI `alt-…` → **its own** staging cert; SNI `api-mph4…` → **unchanged serial** (one certificate per hostname) | PASS |
+| 12g refusals (inside a Project Domain; hostname held by a machine, both directions; project domain over a hostname; zone apex; removing the derived name) and "dry-runs changed nothing" | PASS ×6 |
+| 12g `sc hostname remove … alt-…`: list/ls/status drop it, A records gone, SNI no longer served, `api-mph4…` serial unchanged; taken-name `sc create --hostname --dry-run` refused | PASS |
+| 12f: `unset-domain --dry-run` allowed with machines (ADR-0028), zone remove refused while claimed | PASS |
+| cleanup: `api` records gone (4 stale deleted), `web` records gone (2), claim released, zone removed | PASS |
+
+Timeline: web cert 13:28:26 requested → 13:29:06 installed (**40 s**); api derived 13:29:14 → 13:29:46 installed; api explicit 13:29:54 issued → 13:30:03 installed; alt (added at 13:30:08 on a running machine) → 13:30:48 installed (**40 s from `sc hostname add` to served**); remove 13:30:51 → records GC'd 13:31:11/13:31:27.
+
+One journal ERROR at 13:28:24, transient and self-healed on the next pass (**F10**, minor): `"auth-app zone reconcile: mirror certificate state on tc-thieso2-zp-mph4/web: wait for instance web config update: Failed to create instance update operation: Instance is busy running a 'start' operation"`
+
+End state (13:33 UTC): 0 records under `e2e.sc.tc42.uk`, no zone registered, projects `tc-infra tc-broker tc-thieso2 tc-thieso2-default`.
+
+## Findings, Part 2
+
+| # | Kind | Summary | Fix |
+|---|---|---|---|
+| F6 | product (blocker) | Payload `caddy-setup` is run by dash; slice 2 used a bash-only construct → no public site blocks, no marker, certificate never installed. | `b9e903f` — POSIX-sh payload scripts; goldens run under `sh`; static bashism check + `dash -n`. |
+| F7 | product | Missing marker skipped the push silently. | `b9e903f` — logged once per machine/hostname. |
+| F8 | product | Zone pass failed on a 404 deleting records another path had already removed. | `b9e903f` — 404/"does not exist" tolerated. |
+| F9 | product | Hostnames refused any name *below* the Auth Hostname / route base; Project Domains did not. | `d15a4f0` — same equal/ancestor rule for both. |
+| F10 | product (minor) | Transient "wait for instance config update" error mirroring cert-state right after create; self-heals next pass. | open — consider treating as retryable without logging at ERROR. |
+| — | operator | A stale client binary produced the mph1 false start; verify hashes after every push (`.new` + `mv`). | protocol practice. |
