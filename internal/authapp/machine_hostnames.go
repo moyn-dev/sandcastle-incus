@@ -299,7 +299,10 @@ func scanMachineHostnameConflicts(h, tenantName string, reg installReservations)
 		if reserved == "" {
 			continue
 		}
-		if reserved == h || strings.HasSuffix(reserved, "."+h) || strings.HasSuffix(h, "."+reserved) {
+		// Equal or an ancestor of an install name conflicts; a name BELOW the
+		// Auth Hostname / route base does not (same rule as Project Domains —
+		// a real Public Route collision is caught by the route scan below).
+		if reserved == h || strings.HasSuffix(reserved, "."+h) {
 			return &HostnameClaimError{Hostname: h, Existing: reserved, Class: HostnameClaimConflictInstall}
 		}
 	}

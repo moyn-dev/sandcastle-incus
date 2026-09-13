@@ -5777,3 +5777,7 @@ branch; no spec change beyond a §5 note.
   "already gone" in `reconcileZoneRecords` and a nil result in the zone GC delete; any other
   delete failure still fails the pass. The fake provider grew a `deleteErr` for the test.
 
+
+## 2026-09-13 — F9 (live run mph3): hostnames below the Auth Hostname are not install-reserved
+
+`scanMachineHostnameConflicts` refused any hostname *inside* the Auth Hostname / route base subtree, while `scanProjectDomainConflicts` refused only the reserved name itself or an ancestor. With the e2e zone `e2e.sc.tc42.uk` registered under the Auth Hostname `sc.tc42.uk`, a Project Domain claim passed and an explicit hostname of the same shape was refused ("reserved by this install"). Aligned the hostname rule to the domain rule: equal/ancestor conflicts, descendants do not — a real collision with a Public Route (`<label>.<tenant>.<route base>`) is caught by the route reservation scan in both directions. Alternative rejected: making Project Domains refuse the subtree too, which would forbid registering any zone under the Auth Hostname, a layout an admin may well choose.

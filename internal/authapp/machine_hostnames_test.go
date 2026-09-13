@@ -98,10 +98,9 @@ func TestClaimMachineHostname_ConflictClasses(t *testing.T) {
 		// hostname vs Public Route (equal after wildcard strip, or covering)
 		{"route wildcard stripped, equal", "shop.tc42.uk", "evil", "x", "m", reserved("shop.tc42.uk"), HostnameClaimConflictRoute, false},
 		{"route inside candidate", "blog.tc42.uk", "acme", "zp", "web", reserved("blog.tc42.uk"), HostnameClaimConflictRoute, false},
-		// hostname vs install names (equal, above, below)
+		// hostname vs install names (equal, above — below is allowed, see after the loop)
 		{"auth hostname equal", "login.sc.hase.de", "acme", "zp", "web", reserved("login.sc.hase.de"), HostnameClaimConflictInstall, false},
 		{"auth hostname ancestor", "sc.hase.de", "acme", "zp", "web", reserved("sc.hase.de"), HostnameClaimConflictInstall, false},
-		{"under the route base", "x.routes.hase.de", "acme", "zp", "web", reserved("x.routes.hase.de"), HostnameClaimConflictInstall, false},
 	}
 	for _, tc := range cases {
 		req := install
@@ -116,6 +115,16 @@ func TestClaimMachineHostname_ConflictClasses(t *testing.T) {
 		}
 		if claimErr.Class != tc.class || claimErr.SameTenant != tc.sameTenant {
 			t.Fatalf("%s: class/sameTenant = %s/%v, want %s/%v", tc.name, claimErr.Class, claimErr.SameTenant, tc.class, tc.sameTenant)
+		}
+	}
+	// Below the Auth Hostname / route base is NOT reserved (ADR-0028; live-run
+	// finding F9): only the name itself or an ancestor is. A real Public Route
+	// collision is caught by the route scan.
+	{
+		req := install
+		req.Hostname, req.Tenant, req.Project, req.Machine = "x.routes.hase.de", "acme", "zp", "web"
+		if _, err := ClaimMachineHostname(ctx, db, req); err != nil {
+			t.Fatalf("a hostname below the route base must be claimable: %v", err)
 		}
 	}
 	// Siblings never conflict; a same-machine identical re-claim is a no-op.
