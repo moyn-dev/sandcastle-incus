@@ -68,9 +68,11 @@ func (c TenantCreator) v2AppProject(installPrefix string, tenantName string, pro
 
 // SetProjectDomainV2 writes (domain != "") or removes (domain == "")
 // KeyV2Domain on the app project, then re-renders its default profile so
-// Machines created from now on boot in the project's Naming Mode (§5.1).
-// Existing Machines never re-run cloud-init, so they keep their machine.env —
-// consistent with Naming Mode being fixed at creation.
+// Machines created from now on seed the derived <machine>.<domain> into their
+// public-name set (ADR-0028; machine.env's PUBLIC_HOSTNAMES line). Existing
+// Machines never re-run cloud-init, so they keep their machine.env; the
+// reconciler pushes their hostnames file when it re-derives names (slice 3
+// of #172).
 func (c TenantCreator) SetProjectDomainV2(_ context.Context, installPrefix string, tenantName string, project string, domain string) error {
 	domain = strings.TrimSpace(domain)
 	incusProject, cfg, err := c.v2AppProject(installPrefix, tenantName, project)

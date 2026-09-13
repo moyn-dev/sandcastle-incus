@@ -12,6 +12,7 @@ import (
 
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
+	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 // fakeDomainServer implements the slice of TenantCreateServer the Project
@@ -120,8 +121,10 @@ func TestSetProjectDomainV2WritesKeyAndRerendersProfile(t *testing.T) {
 	}
 	profile := server.resources["sc2-acme-zp"].profiles["default"]
 	userData := profile.Config["cloud-init.user-data"]
-	if !strings.Contains(userData, "fqdn: {{ v1.local_hostname }}.baum.hase.de\n") || !strings.Contains(userData, "      MODE=zone\n") || !strings.Contains(userData, "SIGNER=http://10.249.7.3:9443") {
-		t.Fatalf("zone profile not rendered:\n%s", userData)
+	// The identity stays the private name; the domain lands in the
+	// public-name seed line (ADR-0028).
+	if !strings.Contains(userData, "fqdn: {{ v1.local_hostname }}.zp.acme\n") || tenant.PublicHostnamesEnvLineOf(userData) != tenant.PublicHostnamesEnvLine("baum.hase.de") || !strings.Contains(userData, "SIGNER=http://10.249.7.3:9443") || strings.Contains(userData, "MODE=") {
+		t.Fatalf("domain profile not rendered:\n%s", userData)
 	}
 	if _, ok := server.resources["sc2-acme-zp"].profiles["homeshare"]; !ok {
 		t.Fatal("homeshare profile not (re-)rendered alongside default")
@@ -135,7 +138,7 @@ func TestSetProjectDomainV2WritesKeyAndRerendersProfile(t *testing.T) {
 		t.Fatal("KeyV2Domain survived unset")
 	}
 	userData = server.resources["sc2-acme-zp"].profiles["default"].Config["cloud-init.user-data"]
-	if !strings.Contains(userData, "fqdn: {{ v1.local_hostname }}.zp.acme\n") || strings.Contains(userData, "MODE=") {
+	if !strings.Contains(userData, "fqdn: {{ v1.local_hostname }}.zp.acme\n") || tenant.PublicHostnamesEnvLineOf(userData) != tenant.PublicHostnamesEnvLine("") {
 		t.Fatalf("private profile not restored:\n%s", userData)
 	}
 

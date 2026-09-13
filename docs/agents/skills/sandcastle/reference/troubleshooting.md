@@ -99,7 +99,8 @@ gets its certificate **pushed by the Auth App's zone reconciler**, not fetched
 at boot. The reconciler runs every 30 s and on instance events; a fresh machine
 normally goes `pending` → (order, 1–3 min with DNS-01 propagation) → `issued` →
 `installed` (`sc ls` CERT `ok`) within about five minutes of cloud-init
-finishing. Until then `pending` and an inactive Caddy are the designed state.
+finishing. Until then `pending` is the designed state; Caddy is running the
+whole time, serving the Machine Private Hostname with the Tenant CA leaf.
 
 ```bash
 sc ls                                                   # FQDN <m>.<domain>, CERT pending|ok|failed
@@ -108,10 +109,11 @@ sc incus config get <m> user.sandcastle.v2.public-hostnames  # the machine's pub
 sc incus config get <m> user.sandcastle.v2.cert-state   # pending | issued | installed | renewing | failed:<reason>
 sc incus config get <m> user.sandcastle.v2.cert-not-after    # expiry of the INSTALLED certificate
 dig +short <m>.<domain> @1.1.1.1                        # the public A record → tenant-bridge IP
-sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: MODE=zone / FQDN=<m>.<domain>
-sc incus exec <m> -- systemctl is-enabled caddy         # enabled
-sc incus exec <m> -- systemctl is-active caddy          # inactive until the first push, then active
-sc incus exec <m> -- ls /etc/sandcastle/tls             # empty until the push; cert.pem + key.pem after
+sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: PRIVATE=<m>.<p>.<suffix> / PUBLIC=<name> per served name / RENDERED=<ts>
+sc incus exec <m> -- cat /etc/sandcastle/hostnames      # the machine's public-name set, one per line
+sc incus exec <m> -- systemctl is-active caddy          # active (always — the private name has a certificate from the first boot)
+sc incus exec <m> -- ls -R /etc/sandcastle/tls          # cert.pem + key.pem (private leaf) + <name>/cert.pem,key.pem per pushed name
+sc incus exec <m> -- /usr/local/sbin/sandcastle-caddy-setup --refresh   # re-render + reload by hand (idempotent)
 openssl s_client -connect <bridge-ip>:443 -servername <m>.<domain> </dev/null 2>/dev/null \
   | openssl x509 -noout -ext subjectAltName -issuer     # both SANs + the Let's Encrypt issuer
 sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
@@ -138,15 +140,24 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
 - **Marker missing** (`cat` fails) — cloud-init has not finished
   (`sc incus exec <m> -- cloud-init status --wait`), the machine is a Dev Image
   machine (no Caddy, no certificate — by design), or `caddy-setup` failed
-  (`sc incus exec <m> -- journalctl -u cloud-final`). The Auth App never pushes
-  without a marker naming the expected public hostname.
-- **Marker says `MODE=private`** — the machine was created before the domain
-  was claimed; until slice 3 of #172 re-derives names, recreate the machine
-  (or add the name explicitly with `sc hostname add`).
-- **Caddy `inactive` with the marker present** — expected before the push: the
-  `sandcastle-zone.conf` drop-in makes the start conditional on the certificate
-  files (`systemctl status caddy` shows the `ConditionPathExists` skip, no crash
-  loop). `sc restart <m>` is safe and leaves it inactive again.
+  (`sc incus exec <m> -- journalctl -u cloud-final`; a failed `caddy validate`
+  leaves no marker). The Auth App never pushes without a per-name marker.
+- **Marker says `MODE=…`** (a legacy ADR-0027 marker; the auth-app log reads
+  `does not clear the push gate … (legacy)`) — the machine ran an older
+  `caddy-setup`. Converge the payload (`sc payload-sync`) and recreate the
+  machine; a zone-mode machine from before ADR-0028 has no private leaf and is
+  not migrated in place.
+- **Marker has `PRIVATE=` but no `PUBLIC=<name>` line** — the name's
+  certificate has not been pushed yet (`CERT pending`/`issued`), or
+  `/etc/sandcastle/hostnames` does not list it. Check the file; after a push
+  the block appears on the next `--refresh` (the reconciler runs it; running it
+  by hand is safe).
+- **Name listed, certificate directory complete, still not served** — run
+  `sandcastle-caddy-setup --refresh` and read its output: a `caddy validate`
+  failure names the offending block; the previous Caddyfile keeps serving.
+- **Caddy `inactive`** — not expected any more (the private block always has
+  a certificate). `journalctl -u caddy` for the reason; `--refresh` starts it
+  when the render validates.
 - **`CERT failed`** — `sc project status <project>` DETAIL carries the reason
   token only; the reconciler retries with backoff (see the table above). The
   raw error is in the auth-app log line `zone reconcile: <m>.<domain>: order
@@ -159,6 +170,8 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
   `caddy-setup` (provisioned by an older binary). Converge it once:
   `sc payload-sync` (tenant, after `sc update`) or `sc-adm tenant payload-sync
   <tenant>`; then recreate the affected machines (their setup already ran).
+  The per-name `caddy-setup` of ADR-0028 is a new payload version too — the
+  same convergence applies before machines get explicit hostnames.
 - **`issued` that never becomes `installed`** — the machine is stopped (start
   it; `instance-started` pushes within seconds) or the push failed: the log
   shows `push certificate to … : command exited with status …`; run the
@@ -173,9 +186,10 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
 - **Certificate serves but `openssl` shows an old serial** — the drift check
   re-pushes within a pass once the machine is running; if the on-disk
   `cert.pem` was edited by hand it is overwritten.
-- **Private-mode siblings unreachable over HTTPS from the zone machine** — they
-  should not be: `caddy-setup` still installs the Tenant CA in zone mode. Check
-  `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists.
+- **Siblings unreachable over HTTPS from a machine with public names** — they
+  should not be: every machine trusts the Tenant CA and serves its private
+  name. Check `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists
+  and `openssl s_client -servername <m>.<p>.<suffix>` returns the tenant leaf.
 
 ## A published route is `awaiting-dns` or serves no certificate
 

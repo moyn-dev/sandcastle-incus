@@ -4,20 +4,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
-// The Caddyfile caddy-setup writes must be, byte for byte, the one machines
-// ran before zone mode existed (ADR-0027 §5.2: "handlers byte-identical").
-// This is the heredoc from the pre-slice-4 script, verbatim.
-const goldenCaddyfileHeredoc = `cat > /etc/caddy/Caddyfile <<EOF
-$FQDN, *.$FQDN {
-    tls /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem
+// goldenSiteBlock is one Caddy site block as caddy-setup renders it, with
+// the name, certificate paths and $HOME substituted. The handlers are the
+// ones machines ran before public names existed (ADR-0027 §5.2 "handlers
+// byte-identical") and are the same for every name (ADR-0028).
+const goldenSiteBlock = `{NAME}, *.{NAME} {
+    tls {CERT} {KEY}
     redir /_h /_h/
     redir /_w /_w/
     handle_path /_h/* {
-        root * $HOME
+        root * {HOME}
         file_server browse
     }
     handle_path /_w/* {
@@ -28,46 +30,51 @@ $FQDN, *.$FQDN {
         reverse_proxy localhost:3000
     }
 }
-EOF
 `
 
-func TestCaddySetupScriptCaddyfileUnchanged(t *testing.T) {
-	if !strings.HasSuffix(caddyfileHeredoc, goldenCaddyfileHeredoc) {
-		t.Fatalf("Caddyfile heredoc drifted from the golden:\n%s", caddyfileHeredoc)
-	}
-	if !strings.Contains(caddyIngressSetupScript, goldenCaddyfileHeredoc) {
-		t.Fatalf("caddy-setup no longer writes the golden Caddyfile:\n%s", caddyIngressSetupScript)
-	}
-	if strings.Count(caddyIngressSetupScript, "cat > /etc/caddy/Caddyfile") != 1 {
-		t.Fatalf("caddy-setup must write exactly one Caddyfile, for both modes")
-	}
+func renderSiteBlock(name, cert, key, home string) string {
+	r := strings.NewReplacer("{NAME}", name, "{CERT}", cert, "{KEY}", key, "{HOME}", home)
+	return r.Replace(goldenSiteBlock)
 }
 
-// Text-level contract of the mode-aware script (spec §5.2–§5.4): the private
-// branch is today's leaf fetch, the zone branch skips it, both trust the
-// Tenant CA, the drop-in and the marker are exactly the spec's.
-func TestCaddySetupScriptModeContract(t *testing.T) {
+// goldenCaddyfile is the whole Caddyfile: the private block first, then one
+// block per rendered public name (in hostnames-file order: sorted), blank
+// line separated.
+func goldenCaddyfile(privateFQDN, home string, publicNames ...string) string {
+	out := renderSiteBlock(privateFQDN, MachineTLSCertPath, MachineTLSKeyPath, home)
+	for _, name := range publicNames {
+		out += "\n" + renderSiteBlock(name, MachineTLSHostCertPath(name), MachineTLSHostKeyPath(name), home)
+	}
+	return out
+}
+
+// Text-level contract of the script: the private leaf is always fetched,
+// Caddy is always enabled and restarted at first boot (no MODE, no
+// conditional start, no zone drop-in), --refresh skips install/trust/leaf,
+// the render is validated before it replaces the Caddyfile, and the marker
+// is written last with the PRIVATE/PUBLIC/RENDERED lines.
+func TestCaddySetupScriptContract(t *testing.T) {
 	script := caddyIngressSetupScript
+	for _, gone := range []string{"MODE", "ConditionPathExists", "sandcastle-zone.conf", "systemctl start caddy || true"} {
+		if strings.Contains(script, gone) {
+			t.Fatalf("caddy-setup still carries %q:\n%s", gone, script)
+		}
+	}
 	for _, want := range []string{
-		"MODE=\"${MODE:-private}\"\n",
+		"if [ \"${1:-}\" = --refresh ]; then REFRESH=1; fi\n",
 		"curl -fsS \"$SIGNER/tls/ca\" -o /usr/local/share/ca-certificates/sandcastle-tenant.crt && update-ca-certificates || true\n",
-		"if [ \"$MODE\" = private ]; then\n",
-		"  curl -fsS \"$SIGNER/tls/leaf?fqdn=$FQDN\" | python3 -c 'import json,sys;d=json.load(sys.stdin);open(\"/etc/sandcastle/tls/cert.pem\",\"w\").write(d[\"cert\"]);open(\"/etc/sandcastle/tls/key.pem\",\"w\").write(d[\"key\"])'\n  chmod 600 /etc/sandcastle/tls/key.pem\nfi\n",
+		"  curl -fsS \"$SIGNER/tls/leaf?fqdn=$FQDN\" | python3 -c 'import json,sys;d=json.load(sys.stdin);open(\"/etc/sandcastle/tls/cert.pem\",\"w\").write(d[\"cert\"]);open(\"/etc/sandcastle/tls/key.pem\",\"w\").write(d[\"key\"])'\n  chmod 600 /etc/sandcastle/tls/key.pem\n",
+		"if [ ! -e " + MachineHostnamesPath + " ]; then\n  printf '%s\\n' \"${" + PublicHostnamesEnvKey + ":-}\" | hostnames_normalized > " + MachineHostnamesPath + "\nfi\n",
+		"caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null\nmv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile\n",
 		"printf '%s\\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' > /etc/systemd/system/caddy.service.d/override.conf\n",
-		"if [ \"$MODE\" = zone ]; then\n",
-		"  printf '%s\\n' '[Unit]' 'ConditionPathExists=/etc/sandcastle/tls/cert.pem' 'ConditionPathExists=/etc/sandcastle/tls/key.pem' > " + CaddyZoneDropInPath + "\n",
-		"systemctl daemon-reload\nsystemctl enable caddy\n",
-		"printf 'MODE=%s\\nFQDN=%s\\n' \"$MODE\" \"$FQDN\" > " + CaddySetupMarkerPath + "\n",
-		"  systemctl start caddy || true",
-		"else\n  systemctl restart caddy\nfi\n",
+		"  printf 'PRIVATE=%s\\n' \"$FQDN\"\n  for host in $RENDERED; do printf 'PUBLIC=%s\\n' \"$host\"; done\n  printf 'RENDERED=%s\\n' \"$(date +%s)\"\n} > " + CaddySetupMarkerPath + "\n",
+		"if [ \"$REFRESH\" = 0 ]; then\n  systemctl restart caddy\nelif systemctl is-active --quiet caddy; then\n  systemctl reload caddy || systemctl restart caddy\nelse\n  systemctl start caddy\nfi\n",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("caddy-setup missing %q:\n%s", want, script)
 		}
 	}
-	// Order: Caddyfile, override, (zone drop-in), daemon-reload, enable,
-	// marker, start/restart — the marker asserts everything before it.
-	order := []string{"cat > /etc/caddy/Caddyfile", "override.conf", "sandcastle-zone.conf", "systemctl daemon-reload", "systemctl enable caddy", "> " + CaddySetupMarkerPath, "systemctl start caddy", "systemctl restart caddy"}
+	order := []string{"tls/leaf", "site_block()", "> /etc/caddy/Caddyfile.new", "caddy validate", "override.conf", "systemctl daemon-reload", "systemctl enable caddy", "> " + CaddySetupMarkerPath, "systemctl restart caddy"}
 	last := -1
 	for _, step := range order {
 		idx := strings.Index(script, step)
@@ -76,22 +83,28 @@ func TestCaddySetupScriptModeContract(t *testing.T) {
 		}
 		last = idx
 	}
+	if strings.Count(script, "cat <<EOF") != 1 {
+		t.Fatalf("caddy-setup must render every site through the one site_block heredoc")
+	}
 }
 
-// caddySetupRun executes the real caddy-setup script under bash against a
+// caddySetupRoot executes the real caddy-setup script under bash against a
 // throwaway root, with the tools it calls stubbed on PATH. The absolute
 // paths the script writes are rebased under root by textual substitution, so
 // what lands on disk is what a machine would get — same Caddyfile, same
-// marker, same drop-in — and the systemctl calls are recorded.
-type caddySetupRun struct {
-	root string
-	log  string
+// marker, same hostnames file — and the systemctl/curl calls are recorded.
+// The same root can be run again (with --refresh) to exercise the reconciler's
+// path.
+type caddySetupRoot struct {
+	t      *testing.T
+	root   string
+	script string
+	log    string
 }
 
-func runCaddySetup(t *testing.T, machineEnv string) caddySetupRun {
+func newCaddySetupRoot(t *testing.T, machineEnv string) *caddySetupRoot {
 	t.Helper()
-	bash, err := exec.LookPath("bash")
-	if err != nil {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -102,15 +115,16 @@ func runCaddySetup(t *testing.T, machineEnv string) caddySetupRun {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(root, "calls.log")
 	stub := func(name, body string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho \""+name+" $*\" >> \"$SC_TEST_LOG\"\n"+body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	stub("caddy", "exit 0\n") // "already installed": skips the apt block
-	stub("systemctl", "exit 0\n")
+	// "already installed": skips the apt block. validate insists the
+	// rendered file is there and non-empty, like the real one would.
+	stub("caddy", "if [ \"$1\" = validate ]; then [ -s \"$3\" ] || { echo \"validate: missing $3\" >&2; exit 1; }; fi\nexit 0\n")
+	stub("systemctl", "if [ \"$1\" = is-active ]; then [ -e \"$SC_TEST_ACTIVE\" ]; exit $?; fi\nexit 0\n")
 	stub("update-ca-certificates", "exit 0\n")
 	stub("apt-get", "echo 'apt-get must not run when caddy is installed' >&2; exit 1\n")
 	stub("curl", `case "$*" in
@@ -131,179 +145,440 @@ esac
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bash, scriptPath)
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "SC_TEST_LOG="+logPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("caddy-setup failed: %v\n%s", err, out)
-	}
-	calls, _ := os.ReadFile(logPath)
-	return caddySetupRun{root: root, log: string(calls)}
+	return &caddySetupRoot{t: t, root: root, script: scriptPath}
 }
 
-func (r caddySetupRun) read(t *testing.T, path string) string {
-	t.Helper()
+// run executes the script with args and returns the calls it made (the log
+// is reset per run). active makes the systemctl stub report Caddy active.
+func (r *caddySetupRoot) run(active bool, args ...string) string {
+	r.t.Helper()
+	logPath := filepath.Join(r.root, "calls.log")
+	os.Remove(logPath)
+	activePath := filepath.Join(r.root, "caddy.active")
+	os.Remove(activePath)
+	if active {
+		if err := os.WriteFile(activePath, nil, 0o644); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", append([]string{r.script}, args...)...)
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(r.root, "bin")+":"+os.Getenv("PATH"), "SC_TEST_LOG="+logPath, "SC_TEST_ACTIVE="+activePath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		r.t.Fatalf("caddy-setup %v failed: %v\n%s", args, err, out)
+	}
+	calls, _ := os.ReadFile(logPath)
+	r.log = string(calls)
+	return r.log
+}
+
+func (r *caddySetupRoot) read(path string) string {
+	r.t.Helper()
 	data, err := os.ReadFile(filepath.Join(r.root, path))
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		r.t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
 }
 
+func (r *caddySetupRoot) write(path, content string) {
+	r.t.Helper()
+	full := filepath.Join(r.root, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *caddySetupRoot) absent(path string) {
+	r.t.Helper()
+	if _, err := os.Stat(filepath.Join(r.root, path)); err == nil {
+		r.t.Fatalf("%s exists, want absent", path)
+	}
+}
+
 // rebased is content as the rebased script writes it: every absolute /etc
 // path inside a written file carries the throwaway root too.
-func (r caddySetupRun) rebased(content string) string {
+func (r *caddySetupRoot) rebased(content string) string {
 	return strings.ReplaceAll(content, "/etc/", r.root+"/etc/")
 }
 
-func (r caddySetupRun) absent(t *testing.T, path string) {
-	t.Helper()
-	if _, err := os.Stat(filepath.Join(r.root, path)); err == nil {
-		t.Fatalf("%s exists, want absent", path)
+// certDir drops a complete (or partial) certificate directory for a name.
+func (r *caddySetupRoot) certDir(name string, cert, key string) {
+	r.t.Helper()
+	if cert != "" {
+		r.write("etc/sandcastle/tls/"+name+"/cert.pem", cert)
+	}
+	if key != "" {
+		r.write("etc/sandcastle/tls/"+name+"/key.pem", key)
 	}
 }
 
-// What a private-mode machine gets: today's behaviour. No MODE in machine.env
-// (pre-feature machines), the leaf fetched from the signer, the golden
-// Caddyfile, no zone drop-in, a private marker, and Caddy restarted.
-func TestCaddySetupPrivateMode(t *testing.T) {
-	run := runCaddySetup(t, "FQDN=web.zp.acme\nSIGNER=http://10.0.0.3:9443\nHOME=/home/dev\n")
-	if got := run.read(t, "etc/caddy/Caddyfile"); got != run.rebased(renderGoldenCaddyfile("web.zp.acme", "/home/dev")) {
-		t.Fatalf("private Caddyfile:\n%s", got)
+// expectCaddyfile compares the rendered Caddyfile with the golden.
+func (r *caddySetupRoot) expectCaddyfile(privateFQDN, home string, publicNames ...string) {
+	r.t.Helper()
+	if got, want := r.read("etc/caddy/Caddyfile"), r.rebased(goldenCaddyfile(privateFQDN, home, publicNames...)); got != want {
+		r.t.Fatalf("Caddyfile:\n%s\nwant:\n%s", got, want)
 	}
-	if got := run.read(t, "etc/sandcastle/tls/cert.pem"); got != "LEAF-CERT" {
+	r.absent("etc/caddy/Caddyfile.new")
+}
+
+var renderedLine = regexp.MustCompile(`(?m)^RENDERED=(\d+)\n`)
+
+// expectMarker checks the marker's PRIVATE/PUBLIC lines, that RENDERED is a
+// recent unix timestamp, and that the parser agrees.
+func (r *caddySetupRoot) expectMarker(privateFQDN string, publicNames ...string) CaddySetupMarker {
+	r.t.Helper()
+	content := r.read("etc/sandcastle/caddy.ready")
+	want := "PRIVATE=" + privateFQDN + "\n"
+	for _, name := range publicNames {
+		want += "PUBLIC=" + name + "\n"
+	}
+	match := renderedLine.FindStringSubmatch(content)
+	if match == nil {
+		r.t.Fatalf("marker has no RENDERED line:\n%s", content)
+	}
+	if got := renderedLine.ReplaceAllString(content, ""); got != want {
+		r.t.Fatalf("marker:\n%s\nwant:\n%s", got, want)
+	}
+	marker, err := ParseCaddySetupMarker(content)
+	if err != nil {
+		r.t.Fatalf("parse marker %q: %v", content, err)
+	}
+	if marker.Private != privateFQDN || strings.Join(marker.Public, ",") != strings.Join(publicNames, ",") {
+		r.t.Fatalf("parsed marker = %+v", marker)
+	}
+	if age := time.Since(marker.Rendered); age < 0 || age > time.Hour {
+		r.t.Fatalf("RENDERED %s is not recent", marker.Rendered)
+	}
+	return marker
+}
+
+const (
+	testSigner   = "http://10.0.0.3:9443"
+	testHome     = "/home/dev"
+	privateEnv   = "FQDN=web.zp.acme\nPUBLIC_HOSTNAMES=\nSIGNER=" + testSigner + "\nHOME=" + testHome + "\n"
+	derivedEnv   = "FQDN=web.zp.acme\nPUBLIC_HOSTNAMES=web.baum.hase.de,\nSIGNER=" + testSigner + "\nHOME=" + testHome + "\n"
+	explicitEnv  = "FQDN=web.zp.acme\nPUBLIC_HOSTNAMES=web12.tc42.uk\nSIGNER=" + testSigner + "\nHOME=" + testHome + "\n"
+	mixedEnv     = "FQDN=web.zp.acme\nPUBLIC_HOSTNAMES=web.baum.hase.de,Web12.TC42.uk.,shop.tc42.uk,web.baum.hase.de\nSIGNER=" + testSigner + "\nHOME=" + testHome + "\n"
+	firstBootLog = "curl -fsS " + testSigner + "/tls/ca -o {ROOT}/usr/local/share/ca-certificates/sandcastle-tenant.crt\nupdate-ca-certificates \ncurl -fsS " + testSigner + "/tls/leaf?fqdn=web.zp.acme\ncaddy validate --config {ROOT}/etc/caddy/Caddyfile.new --adapter caddyfile\nsystemctl daemon-reload\nsystemctl enable caddy\nsystemctl restart caddy\n"
+)
+
+func (r *caddySetupRoot) expectFirstBootCalls() {
+	r.t.Helper()
+	if want := strings.ReplaceAll(firstBootLog, "{ROOT}", r.root); r.log != want {
+		r.t.Fatalf("calls:\n%s\nwant:\n%s", r.log, want)
+	}
+}
+
+// Private-only: a machine with no public name gets exactly what every
+// machine got before public names existed — the sidecar leaf, the private
+// site block, Caddy enabled + restarted — plus an empty hostnames file and a
+// marker naming only the private FQDN. No drop-in, no MODE anywhere.
+func TestCaddySetupPrivateOnly(t *testing.T) {
+	r := newCaddySetupRoot(t, privateEnv)
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome)
+	if got := r.read("etc/sandcastle/tls/cert.pem"); got != "LEAF-CERT" {
 		t.Fatalf("leaf cert = %q", got)
 	}
-	if got := run.read(t, "etc/sandcastle/tls/key.pem"); got != "LEAF-KEY" {
+	if got := r.read("etc/sandcastle/tls/key.pem"); got != "LEAF-KEY" {
 		t.Fatalf("leaf key = %q", got)
 	}
-	if got := run.read(t, "usr/local/share/ca-certificates/sandcastle-tenant.crt"); got != "TENANT-CA\n" {
+	if got := r.read("usr/local/share/ca-certificates/sandcastle-tenant.crt"); got != "TENANT-CA\n" {
 		t.Fatalf("tenant CA = %q", got)
 	}
-	if got := run.read(t, "etc/systemd/system/caddy.service.d/override.conf"); got != "[Service]\nUser=root\nGroup=root\nAmbientCapabilities=\n" {
+	if got := r.read("etc/systemd/system/caddy.service.d/override.conf"); got != "[Service]\nUser=root\nGroup=root\nAmbientCapabilities=\n" {
 		t.Fatalf("override.conf = %q", got)
 	}
-	run.absent(t, "etc/systemd/system/caddy.service.d/sandcastle-zone.conf")
-	if got := run.read(t, "etc/sandcastle/caddy.ready"); got != "MODE=private\nFQDN=web.zp.acme\n" {
-		t.Fatalf("marker = %q", got)
+	r.absent("etc/systemd/system/caddy.service.d/sandcastle-zone.conf")
+	if got := r.read("etc/sandcastle/hostnames"); got != "" {
+		t.Fatalf("hostnames = %q, want empty", got)
 	}
-	wantCalls := "curl -fsS http://10.0.0.3:9443/tls/ca -o " + run.root + "/usr/local/share/ca-certificates/sandcastle-tenant.crt\nupdate-ca-certificates \ncurl -fsS http://10.0.0.3:9443/tls/leaf?fqdn=web.zp.acme\nsystemctl daemon-reload\nsystemctl enable caddy\nsystemctl restart caddy\n"
-	if run.log != wantCalls {
-		t.Fatalf("calls:\n%s\nwant:\n%s", run.log, wantCalls)
+	marker := r.expectMarker("web.zp.acme")
+	if !marker.ReadyFor("anything.tc42.uk") || !marker.Serves("web.zp.acme") || marker.Serves("web.baum.hase.de") {
+		t.Fatalf("marker gate: %+v", marker)
+	}
+	r.expectFirstBootCalls()
+}
+
+// A machine.env without a PUBLIC_HOSTNAMES line at all (a profile rendered
+// by an older binary) is private-only too — the script must not trip on the
+// unset variable.
+func TestCaddySetupLegacyEnvWithoutPublicHostnames(t *testing.T) {
+	r := newCaddySetupRoot(t, "FQDN=web.zp.acme\nSIGNER="+testSigner+"\nHOME="+testHome+"\n")
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome)
+	if got := r.read("etc/sandcastle/hostnames"); got != "" {
+		t.Fatalf("hostnames = %q, want empty", got)
+	}
+	r.expectMarker("web.zp.acme")
+}
+
+// Derived-only: a project with a Project Domain seeds the derived name. At
+// first boot its certificate has not landed, so the Caddyfile carries only
+// the private block and the marker lists no PUBLIC line — Caddy still
+// starts (the private block has a certificate). The seed's trailing comma
+// (an empty instance record) is harmless.
+func TestCaddySetupDerivedOnlyBeforeCert(t *testing.T) {
+	r := newCaddySetupRoot(t, derivedEnv)
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome)
+	if got := r.read("etc/sandcastle/hostnames"); got != "web.baum.hase.de\n" {
+		t.Fatalf("hostnames = %q", got)
+	}
+	marker := r.expectMarker("web.zp.acme")
+	if !marker.ReadyFor("web.baum.hase.de") || marker.Serves("web.baum.hase.de") {
+		t.Fatalf("marker gate before the push: %+v", marker)
+	}
+	r.expectFirstBootCalls()
+}
+
+// Derived-only with the certificate already there (a recreate: the Auth App
+// pushed while cloud-init ran, or a retained certificate landed first): the
+// public block renders at first boot and the marker lists it.
+func TestCaddySetupDerivedOnlyWithCert(t *testing.T) {
+	r := newCaddySetupRoot(t, derivedEnv)
+	r.certDir("web.baum.hase.de", "LE-CERT", "LE-KEY")
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome, "web.baum.hase.de")
+	marker := r.expectMarker("web.zp.acme", "web.baum.hase.de")
+	if !marker.Serves("web.baum.hase.de") {
+		t.Fatalf("marker: %+v", marker)
+	}
+	r.expectFirstBootCalls()
+}
+
+// Explicit-only: a machine in a project WITHOUT a domain carrying one
+// explicit hostname. The private block is unchanged; the explicit name is
+// seeded and served once its certificate is complete — a directory with
+// only one of the two files is not rendered.
+func TestCaddySetupExplicitOnly(t *testing.T) {
+	r := newCaddySetupRoot(t, explicitEnv)
+	r.certDir("web12.tc42.uk", "LE-CERT", "") // key missing: not rendered
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome)
+	if got := r.read("etc/sandcastle/hostnames"); got != "web12.tc42.uk\n" {
+		t.Fatalf("hostnames = %q", got)
+	}
+	r.expectMarker("web.zp.acme")
+
+	r.certDir("web12.tc42.uk", "", "LE-KEY")
+	r.run(true, "--refresh")
+	r.expectCaddyfile("web.zp.acme", testHome, "web12.tc42.uk")
+	r.expectMarker("web.zp.acme", "web12.tc42.uk")
+}
+
+// Mixed: derived + explicit names, seeded with duplicates, mixed case and a
+// trailing dot. The hostnames file is normalized and sorted; blocks render
+// in that order for every name whose certificate is complete.
+func TestCaddySetupMixed(t *testing.T) {
+	r := newCaddySetupRoot(t, mixedEnv)
+	r.certDir("web.baum.hase.de", "LE-CERT-1", "LE-KEY-1")
+	r.certDir("web12.tc42.uk", "LE-CERT-2", "LE-KEY-2")
+	r.run(false)
+	if got := r.read("etc/sandcastle/hostnames"); got != "shop.tc42.uk\nweb.baum.hase.de\nweb12.tc42.uk\n" {
+		t.Fatalf("hostnames = %q", got)
+	}
+	r.expectCaddyfile("web.zp.acme", testHome, "web.baum.hase.de", "web12.tc42.uk")
+	marker := r.expectMarker("web.zp.acme", "web.baum.hase.de", "web12.tc42.uk")
+	if marker.Serves("shop.tc42.uk") || !marker.ReadyFor("shop.tc42.uk") {
+		t.Fatalf("marker: %+v", marker)
+	}
+	r.expectFirstBootCalls()
+}
+
+// --refresh after a new hostname appears: the reconciler pushes a hostnames
+// file with an extra name (and its certificate), then execs --refresh. No
+// install, no trust, no leaf fetch; the Caddyfile is validated and
+// replaced, the marker rewritten, Caddy reloaded.
+func TestCaddySetupRefreshAfterNewHostname(t *testing.T) {
+	r := newCaddySetupRoot(t, derivedEnv)
+	r.certDir("web.baum.hase.de", "LE-CERT-1", "LE-KEY-1")
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome, "web.baum.hase.de")
+
+	r.write("etc/sandcastle/hostnames", "web.baum.hase.de\napi.tc42.uk\n")
+	r.certDir("api.tc42.uk", "LE-CERT-2", "LE-KEY-2")
+	log := r.run(true, "--refresh")
+	r.expectCaddyfile("web.zp.acme", testHome, "api.tc42.uk", "web.baum.hase.de")
+	r.expectMarker("web.zp.acme", "api.tc42.uk", "web.baum.hase.de")
+	if want := "caddy validate --config " + r.root + "/etc/caddy/Caddyfile.new --adapter caddyfile\nsystemctl is-active --quiet caddy\nsystemctl reload caddy\n"; log != want {
+		t.Fatalf("refresh calls:\n%s\nwant:\n%s", log, want)
+	}
+	// The hostnames file pushed by the Auth App is left as pushed — the
+	// script reads it, never rewrites it.
+	if got := r.read("etc/sandcastle/hostnames"); got != "web.baum.hase.de\napi.tc42.uk\n" {
+		t.Fatalf("hostnames rewritten: %q", got)
+	}
+	// The private leaf and the CA are untouched by a refresh.
+	if got := r.read("etc/sandcastle/tls/cert.pem"); got != "LEAF-CERT" {
+		t.Fatalf("leaf cert after refresh = %q", got)
 	}
 }
 
-// What a zone-mode machine gets (spec §5.2–§5.4): the Tenant CA is still
-// trusted, the leaf is NOT fetched, the same Caddyfile names the public
-// hostname, the drop-in conditions Caddy's start on the pushed files, the
-// marker names the mode and FQDN, and Caddy is enabled and started (a no-op
-// start until the condition is met) rather than restarted.
-func TestCaddySetupZoneMode(t *testing.T) {
-	run := runCaddySetup(t, "FQDN=web.baum.hase.de\nMODE=zone\nSIGNER=http://10.0.0.3:9443\nHOME=/home/dev\n")
-	if got := run.read(t, "etc/caddy/Caddyfile"); got != run.rebased(renderGoldenCaddyfile("web.baum.hase.de", "/home/dev")) {
-		t.Fatalf("zone Caddyfile:\n%s", got)
+// --refresh after a certificate lands for a name that was already listed:
+// the block appears; a name removed from the file disappears even though
+// its directory is still there.
+func TestCaddySetupRefreshAfterCertLands(t *testing.T) {
+	r := newCaddySetupRoot(t, mixedEnv)
+	r.run(false)
+	r.expectCaddyfile("web.zp.acme", testHome)
+	r.expectMarker("web.zp.acme")
+
+	r.certDir("shop.tc42.uk", "LE-CERT", "LE-KEY")
+	r.run(true, "--refresh")
+	r.expectCaddyfile("web.zp.acme", testHome, "shop.tc42.uk")
+	r.expectMarker("web.zp.acme", "shop.tc42.uk")
+
+	// The name is removed from the set (sc hostname remove): its block goes
+	// with the next refresh, whatever is left in its directory.
+	r.write("etc/sandcastle/hostnames", "web.baum.hase.de\nweb12.tc42.uk\n")
+	r.run(true, "--refresh")
+	r.expectCaddyfile("web.zp.acme", testHome)
+	r.expectMarker("web.zp.acme")
+}
+
+// --refresh is idempotent: with nothing changed it re-renders the identical
+// Caddyfile, rewrites the marker and reloads; run any number of times. When
+// Caddy is inactive it is started instead of reloaded.
+func TestCaddySetupRefreshIdempotent(t *testing.T) {
+	r := newCaddySetupRoot(t, derivedEnv)
+	r.certDir("web.baum.hase.de", "LE-CERT", "LE-KEY")
+	r.run(false)
+	first := r.read("etc/caddy/Caddyfile")
+	for i := 0; i < 3; i++ {
+		log := r.run(true, "--refresh")
+		if got := r.read("etc/caddy/Caddyfile"); got != first {
+			t.Fatalf("refresh %d changed the Caddyfile:\n%s", i, got)
+		}
+		r.expectMarker("web.zp.acme", "web.baum.hase.de")
+		if !strings.HasSuffix(log, "systemctl reload caddy\n") || strings.Contains(log, "tls/leaf") || strings.Contains(log, "daemon-reload") {
+			t.Fatalf("refresh %d calls:\n%s", i, log)
+		}
 	}
-	run.absent(t, "etc/sandcastle/tls/cert.pem")
-	run.absent(t, "etc/sandcastle/tls/key.pem")
-	if got := run.read(t, "usr/local/share/ca-certificates/sandcastle-tenant.crt"); got != "TENANT-CA\n" {
-		t.Fatalf("tenant CA = %q", got)
-	}
-	if got := run.read(t, "etc/systemd/system/caddy.service.d/sandcastle-zone.conf"); got != run.rebased("[Unit]\nConditionPathExists=/etc/sandcastle/tls/cert.pem\nConditionPathExists=/etc/sandcastle/tls/key.pem\n") {
-		t.Fatalf("zone drop-in = %q", got)
-	}
-	marker := run.read(t, "etc/sandcastle/caddy.ready")
-	if marker != "MODE=zone\nFQDN=web.baum.hase.de\n" {
-		t.Fatalf("marker = %q", marker)
-	}
-	parsed, err := ParseCaddySetupMarker(marker)
-	if err != nil || !parsed.ReadyFor("web.baum.hase.de") {
-		t.Fatalf("marker does not clear the push gate: %+v, %v", parsed, err)
-	}
-	if strings.Contains(run.log, "/tls/leaf") {
-		t.Fatalf("zone mode fetched a leaf from the signer:\n%s", run.log)
-	}
-	wantCalls := "curl -fsS http://10.0.0.3:9443/tls/ca -o " + run.root + "/usr/local/share/ca-certificates/sandcastle-tenant.crt\nupdate-ca-certificates \nsystemctl daemon-reload\nsystemctl enable caddy\nsystemctl start caddy\n"
-	if run.log != wantCalls {
-		t.Fatalf("calls:\n%s\nwant:\n%s", run.log, wantCalls)
+	log := r.run(false, "--refresh")
+	if !strings.HasSuffix(log, "systemctl is-active --quiet caddy\nsystemctl start caddy\n") {
+		t.Fatalf("inactive refresh must start caddy:\n%s", log)
 	}
 }
 
-// renderGoldenCaddyfile is the Caddyfile a machine ends up with, with the two
-// shell variables substituted — what curl/browsers actually hit.
-func renderGoldenCaddyfile(fqdn, home string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(goldenCaddyfileRendered, "{FQDN}", fqdn), "{HOME}", home)
+// A refresh that fails validation leaves the running Caddyfile and the old
+// marker untouched (the .new render is what fails).
+func TestCaddySetupRefreshKeepsCaddyfileOnValidateFailure(t *testing.T) {
+	r := newCaddySetupRoot(t, privateEnv)
+	r.run(false)
+	before := r.read("etc/caddy/Caddyfile")
+	marker := r.read("etc/sandcastle/caddy.ready")
+	if err := os.WriteFile(filepath.Join(r.root, "bin", "caddy"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", r.script, "--refresh")
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(r.root, "bin")+":"+os.Getenv("PATH"), "SC_TEST_LOG="+filepath.Join(r.root, "calls.log"), "SC_TEST_ACTIVE=/nonexistent")
+	if err := cmd.Run(); err == nil {
+		t.Fatal("refresh with a failing validate must exit nonzero")
+	}
+	if r.read("etc/caddy/Caddyfile") != before || r.read("etc/sandcastle/caddy.ready") != marker {
+		t.Fatal("failed validate replaced the Caddyfile or the marker")
+	}
 }
-
-const goldenCaddyfileRendered = `{FQDN}, *.{FQDN} {
-    tls /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem
-    redir /_h /_h/
-    redir /_w /_w/
-    handle_path /_h/* {
-        root * {HOME}
-        file_server browse
-    }
-    handle_path /_w/* {
-        root * /workspace
-        file_server browse
-    }
-    handle {
-        reverse_proxy localhost:3000
-    }
-}
-`
 
 func TestParseCaddySetupMarker(t *testing.T) {
-	marker, err := ParseCaddySetupMarker("MODE=zone\nFQDN=web.baum.hase.de\n")
-	if err != nil || marker != (CaddySetupMarker{Mode: "zone", FQDN: "web.baum.hase.de"}) {
-		t.Fatalf("parse = %+v, %v", marker, err)
+	marker, err := ParseCaddySetupMarker("PRIVATE=web.zp.acme\nPUBLIC=web12.tc42.uk\nPUBLIC=Web.baum.hase.de.\nRENDERED=1757760000\n")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !marker.ReadyFor("web.baum.hase.de") || !marker.ReadyFor("WEB.baum.hase.de.") {
-		t.Fatalf("zone marker must clear the gate for its own FQDN")
+	if marker.Private != "web.zp.acme" || strings.Join(marker.Public, ",") != "web.baum.hase.de,web12.tc42.uk" || !marker.Rendered.Equal(time.Unix(1757760000, 0)) || marker.Legacy() {
+		t.Fatalf("parse = %+v", marker)
 	}
-	if marker.ReadyFor("other.baum.hase.de") || marker.ReadyFor("") {
-		t.Fatalf("zone marker must not clear the gate for another name")
+	if !marker.ReadyFor("web.baum.hase.de") || !marker.ReadyFor("api.tc42.uk") || marker.ReadyFor("") || marker.ReadyFor(" . ") {
+		t.Fatalf("per-name marker must clear the gate for any named host")
 	}
-	private, err := ParseCaddySetupMarker("# written by caddy-setup\n\nMODE=private\nFQDN=web.zp.acme\n")
-	if err != nil || private.Mode != "private" || private.FQDN != "web.zp.acme" {
+	if !marker.Serves("WEB.baum.hase.de.") || !marker.Serves("web.zp.acme") || marker.Serves("api.tc42.uk") {
+		t.Fatalf("Serves")
+	}
+	if marker.String() != "PRIVATE=web.zp.acme PUBLIC=web.baum.hase.de,web12.tc42.uk" {
+		t.Fatalf("String = %q", marker.String())
+	}
+
+	private, err := ParseCaddySetupMarker("# written by caddy-setup\n\nPRIVATE=web.zp.acme\nRENDERED=0\n")
+	if err != nil || private.Private != "web.zp.acme" || len(private.Public) != 0 || !private.Rendered.IsZero() {
 		t.Fatalf("private parse = %+v, %v", private, err)
 	}
-	if private.ReadyFor("web.zp.acme") {
-		t.Fatalf("a private marker is 'no marker' for the push gate")
+	if !private.ReadyFor("web.baum.hase.de") || private.Serves("web.baum.hase.de") || private.String() != "PRIVATE=web.zp.acme PUBLIC=-" {
+		t.Fatalf("private-only marker: %+v", private)
 	}
-	for _, bad := range []string{"", "FQDN=web.baum.hase.de\n", "MODE zone\n", "garbage\nMODE=zone\n"} {
+
+	// Legacy ADR-0027 markers parse (so the log can say what they are) but
+	// never clear the gate: that machine has no per-name contract.
+	for _, legacy := range []string{"MODE=zone\nFQDN=web.baum.hase.de\n", "MODE=private\nFQDN=web.zp.acme\n"} {
+		m, err := ParseCaddySetupMarker(legacy)
+		if err != nil || !m.Legacy() || m.LegacyFQDN == "" {
+			t.Fatalf("legacy parse %q = %+v, %v", legacy, m, err)
+		}
+		if m.ReadyFor(m.LegacyFQDN) || m.ReadyFor("x") {
+			t.Fatalf("legacy marker cleared the gate: %+v", m)
+		}
+		if !strings.HasSuffix(m.String(), "(legacy)") {
+			t.Fatalf("legacy String = %q", m.String())
+		}
+	}
+	for _, bad := range []string{"", "PUBLIC=web.baum.hase.de\n", "RENDERED=1\n", "PRIVATE web.zp.acme\n", "garbage\nPRIVATE=web.zp.acme\n"} {
 		if _, err := ParseCaddySetupMarker(bad); err == nil {
 			t.Fatalf("ParseCaddySetupMarker(%q) accepted", bad)
 		}
 	}
 }
 
-// The bare document tracks the profile's Naming Mode (spec §5.1): private
-// stays byte-identical to what --bare always rendered; zone adds MODE=zone in
-// the same place the profile puts it.
-func TestV2BareUserDataForMode(t *testing.T) {
-	legacy := V2BareUserData("zp.acme", "http://10.0.0.3:9443")
-	for _, mode := range []string{"", "private"} {
-		if got := V2BareUserDataForMode("zp.acme", "http://10.0.0.3:9443", mode); got != legacy {
-			t.Fatalf("mode %q drifted from the legacy bare document:\n%s", mode, got)
-		}
+func TestMachineTLSHostPaths(t *testing.T) {
+	if got := MachineTLSHostCertPath(" Web12.TC42.uk. "); got != "/etc/sandcastle/tls/web12.tc42.uk/cert.pem" {
+		t.Fatalf("cert path = %q", got)
 	}
-	if strings.Contains(legacy, "MODE=") {
-		t.Fatalf("private bare document carries a MODE line:\n%s", legacy)
+	if got := MachineTLSHostKeyPath("web12.tc42.uk"); got != "/etc/sandcastle/tls/web12.tc42.uk/key.pem" {
+		t.Fatalf("key path = %q", got)
 	}
-	zone := V2BareUserDataForMode("baum.hase.de", "http://10.0.0.3:9443", "zone")
-	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.baum.hase.de\n      MODE=zone\n      SIGNER=http://10.0.0.3:9443\n      HOME=" + BareMachineHome + "\n"
-	if !strings.Contains(zone, wantEnv) {
-		t.Fatalf("zone bare machine.env:\n%s", zone)
+	if got := FormatMachineHostnamesFile([]string{"Web12.TC42.uk.", "", "api.tc42.uk", "web12.tc42.uk"}); got != "api.tc42.uk\nweb12.tc42.uk\n" {
+		t.Fatalf("hostnames file = %q", got)
 	}
-	if !strings.Contains(zone, "fqdn: {{ v1.local_hostname }}.baum.hase.de\n") {
-		t.Fatalf("zone bare fqdn:\n%s", zone)
-	}
-	normalized := strings.ReplaceAll(strings.ReplaceAll(zone, ".baum.hase.de", ".zp.acme"), "      MODE=zone\n", "")
-	if normalized != legacy {
-		t.Fatalf("zone bare document differs beyond identity + MODE:\n%s\n---\n%s", normalized, legacy)
+	if got := FormatMachineHostnamesFile(nil); got != "" {
+		t.Fatalf("empty hostnames file = %q", got)
 	}
 }
 
-// The payload ships the mode-aware script under the path the shims source.
+// The bare document tracks the profile's seed line (spec machine-hostnames
+// §6): the PUBLIC_HOSTNAMES line is copied verbatim off the profile, and
+// everything else is the bare document as before.
+func TestV2BareUserDataWithPublicHostnames(t *testing.T) {
+	plain := V2BareUserData("zp.acme", "http://10.0.0.3:9443")
+	if got := V2BareUserDataWithPublicHostnames("zp.acme", "http://10.0.0.3:9443", ""); got != plain {
+		t.Fatalf("empty seed drifted from the default bare document:\n%s", got)
+	}
+	wantEnv := "  - path: /etc/sandcastle/machine.env\n    permissions: '0644'\n    content: |\n      FQDN={{ v1.local_hostname }}.zp.acme\n      " + PublicHostnamesEnvLine("") + "\n      SIGNER=http://10.0.0.3:9443\n      HOME=" + BareMachineHome + "\n"
+	if !strings.Contains(plain, wantEnv) {
+		t.Fatalf("bare machine.env:\n%s", plain)
+	}
+	if strings.Contains(plain, "MODE=") {
+		t.Fatalf("bare document carries a MODE line:\n%s", plain)
+	}
+	profile := V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", "baum.hase.de", "http://10.0.0.3:9443")
+	seed := PublicHostnamesEnvLineOf(profile)
+	if seed != PublicHostnamesEnvLine("baum.hase.de") {
+		t.Fatalf("seed read off the profile = %q", seed)
+	}
+	domain := V2BareUserDataWithPublicHostnames("zp.acme", "http://10.0.0.3:9443", seed)
+	if !strings.Contains(domain, "      FQDN={{ v1.local_hostname }}.zp.acme\n      "+seed+"\n      SIGNER=") {
+		t.Fatalf("domain bare machine.env:\n%s", domain)
+	}
+	if !strings.Contains(domain, "fqdn: {{ v1.local_hostname }}.zp.acme\n") {
+		t.Fatalf("bare fqdn must stay the private name:\n%s", domain)
+	}
+	if strings.ReplaceAll(domain, seed, PublicHostnamesEnvLine("")) != plain {
+		t.Fatalf("domain bare document differs beyond the seed line:\n%s\n---\n%s", domain, plain)
+	}
+}
+
+// The payload ships the per-name script under the path the shims source.
 func TestPlatformPayloadShipsCaddySetup(t *testing.T) {
 	files, _ := PlatformPayload()
 	for _, f := range files {
@@ -315,4 +590,15 @@ func TestPlatformPayloadShipsCaddySetup(t *testing.T) {
 		}
 	}
 	t.Fatalf("payload lacks %s", SCPayloadCaddySetupPath)
+}
+
+// The generalize step drops a cloned image's public-name material too: the
+// hostnames file and every per-hostname certificate directory, but not the
+// tls directory itself.
+func TestGeneralizeDropsPublicNameMaterial(t *testing.T) {
+	for _, want := range []string{"/etc/sandcastle/hostnames", "find /etc/sandcastle/tls -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +"} {
+		if !strings.Contains(machineGeneralizeScript, want) {
+			t.Fatalf("generalize lacks %q:\n%s", want, machineGeneralizeScript)
+		}
+	}
 }

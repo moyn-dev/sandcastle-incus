@@ -32,7 +32,8 @@ type CreateMachineV2Request struct {
 	HomeShare bool
 	// Bare overrides the profile's cloud-init user-data at the INSTANCE level
 	// with tenant.V2BareUserData: correct hostname and a Caddy serving the
-	// tenant-CA leaf, but no login user, no SSH key and no sshd. The profile
+	// tenant-CA leaf (and the public names once their certificates land), but
+	// no login user, no SSH key and no sshd. The profile
 	// still applies, so the machine keeps its NIC, root disk, /workspace and
 	// /.sc — only the cloud-init half is replaced.
 	Bare bool
@@ -294,10 +295,6 @@ var v2ProfileUserPattern = regexp.MustCompile(`(?m)^\s*-\s*name:\s*(\S+)`)
 var (
 	v2ProfileFQDNPattern   = regexp.MustCompile(`(?m)^fqdn:\s*\{\{\s*v1\.local_hostname\s*\}\}\.(\S+?)\s*$`)
 	v2ProfileSignerPattern = regexp.MustCompile(`(?m)^\s*SIGNER=(\S+)\s*$`)
-	// v2ProfileModePattern reads the Naming Mode the profile hands caddy-setup
-	// (the MODE= line of machine.env, ADR-0027 §5.1); absent on a private
-	// project's profile, which every consumer reads as private.
-	v2ProfileModePattern = regexp.MustCompile(`(?m)^\s*MODE=(\S+)\s*$`)
 )
 
 // v2BareInstanceConfig builds the instance-level config of a `--bare` machine:
@@ -321,12 +318,12 @@ func v2BareInstanceConfig(project TenantResourceServer, incusProject string) (ap
 			"so the machine would boot with no certificate and no way in — re-provision the project (sc project create %s) to re-render it",
 			incusProject, shortProjectName(incusProject))
 	}
-	// The Naming Mode of the bare document follows the profile too (its
-	// MODE=zone line), so a bare machine's machine.env is exactly what the
-	// profile would have given a non-bare sibling: same FQDN, same mode.
-	mode := firstSubmatch(v2ProfileModePattern, userData)
+	// The public-name seed of the bare document follows the profile too (its
+	// PUBLIC_HOSTNAMES= line, ADR-0028), so a bare machine's machine.env is
+	// exactly what the profile would have given a non-bare sibling: same
+	// private FQDN, same seed.
 	return api.ConfigMap{
-		"cloud-init.user-data": tenant.V2BareUserDataForMode(domain, signer, mode),
+		"cloud-init.user-data": tenant.V2BareUserDataWithPublicHostnames(domain, signer, tenant.PublicHostnamesEnvLineOf(userData)),
 		// The durable "this machine has no way in" marker. `sc connect` reads it
 		// to exec a shell over the Incus API instead of waiting out an sshd that
 		// is never coming.

@@ -435,6 +435,10 @@ Machine, `--bare`). A dev-image Machine never writes the marker and never gets a
 
 ### 4.4 Push protocol
 
+> Amended by machine-hostnames §5.3/§5.5: the push targets `/etc/sandcastle/tls/<hostname>/`, the
+> gate is "a per-name marker exists", and the exec ends in `sandcastle-caddy-setup --refresh`
+> instead of a reload (no first-push `systemctl start`).
+
 Trigger: row `issued` (pushed_serial ≠ serial) and the Machine is running and the marker gate passes.
 
 1. `GetInstanceFile("/etc/sandcastle/caddy.ready")` → must parse as `MODE=zone` and
@@ -492,7 +496,16 @@ written only when absent (§1.1), never updated.
 
 ## 5. Machine contract
 
-### 5.1 Profile and `machine.env`
+> **Superseded (2026-09-13, ADR-0028 / `docs/spec/machine-hostnames.md` §5).** Naming Mode is
+> retired: there is no `MODE=`, no zone-mode `fqdn:`, no `ConditionPathExists` drop-in and no
+> enabled-inactive Caddy. Every machine keeps its Machine Private Hostname (private leaf at the
+> fixed `/etc/sandcastle/tls` paths, Caddy always started) and additionally serves one site block
+> per Machine Public Hostname from `/etc/sandcastle/tls/<hostname>/`, listed in
+> `/etc/sandcastle/hostnames` (seeded from `PUBLIC_HOSTNAMES=` in `machine.env`); the marker is
+> `PRIVATE=`/`PUBLIC=`/`RENDERED=` and `sandcastle-caddy-setup --refresh` re-renders on a running
+> machine. §5.1–§5.4 below are kept as the historical record of what ADR-0027 shipped; §5.5 stands.
+
+### 5.1 Profile and `machine.env` (superseded)
 
 The project default profile's cloud-init (`V2DefaultProfileUserData`, `create_plan_v2.go`) is rendered
 per project from the project's domain. For a domain project:
@@ -510,7 +523,7 @@ working). `set-domain`/`unset-domain` re-render the profile; existing Machines n
 so they keep their `machine.env` — consistent with Naming Mode being fixed at creation. The `--bare`
 user-data template is rendered the same way.
 
-### 5.2 Mode-aware `caddy-setup` (platform payload `sbin/caddy-setup`, ADR-0022)
+### 5.2 Mode-aware `caddy-setup` (platform payload `sbin/caddy-setup`, ADR-0022) (superseded)
 
 ```bash
 #!/bin/bash
@@ -551,7 +564,7 @@ fi
 The Caddyfile is the same template in both modes — only the site names and where the cert came from
 differ. The same script serves `sc create`, `--bare`, Freeform Machines, containers and VMs.
 
-### 5.3 Caddy Setup Marker
+### 5.3 Caddy Setup Marker (superseded — see machine-hostnames §5.5)
 
 Path `/etc/sandcastle/caddy.ready`, mode 0644, shell-sourceable `KEY=value` lines:
 
@@ -564,7 +577,7 @@ Written once by `caddy-setup` after the Caddyfile and unit drop-ins exist. The r
 parse failure, a missing `MODE`, `MODE=private`, or an `FQDN` that differs from the expected Machine
 Public Hostname as "no marker".
 
-### 5.4 systemd drop-in
+### 5.4 systemd drop-in (superseded — removed)
 
 `/etc/systemd/system/caddy.service.d/sandcastle-zone.conf` with `ConditionPathExists=` for both
 `cert.pem` and `key.pem`. With the condition unmet, `systemctl start` exits 0 and logs a skipped

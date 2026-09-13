@@ -16,9 +16,11 @@ import (
 // v2MachineNames lists every name a v2 machine answers at (ADR-0028): its
 // Machine Private Hostname first (plus the short alias the default project
 // also serves, ADR-0018), then every Machine Public Hostname — derived or
-// explicit. The first name is what HostKeyAlias pins, so it stays the
-// private name whenever the tenant has a DNS suffix; slice 2 of #172
-// finalizes SSH naming. Without a suffix only the public names remain.
+// explicit, in the stamped (sorted) order. The first name is what
+// HostKeyAlias pins and what `sc connect` checks the key against: the
+// private name, which every machine has. The public names ride along as
+// extra known_hosts aliases so `ssh web12.tc42.uk` is pre-trusted too.
+// Without a suffix (no private name) only the public names remain.
 func v2MachineNames(summary tenant.Summary, project string, machine string, publicHostnames []string) []string {
 	var names []string
 	if suffix := strings.TrimSpace(summary.DNSSuffix); suffix != "" {

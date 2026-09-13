@@ -188,12 +188,12 @@ normalizes and refuses the obviously malformed locally; server refusals print ve
 
 ## 4. What slices 2–3 owe
 
-- **Slice 2 — machine contract.** `machine.env` carries the set (`FQDNS=…` beside the existing
-  `FQDN`), `caddy-setup` renders one site block per name against a per-hostname certificate directory
-  (`/etc/sandcastle/tls/<hostname>/{cert,key}.pem`), the Caddy Setup Marker lists every name it
-  configured, `--bare` and Dev Image variants follow, `sc create` prints the private `DNS:` line for
-  every machine again, and `HostKeyAlias`/`known_hosts` are finalized. Existing machines converge on
-  the next `sc fix` / payload sync.
+- **Slice 2 — machine contract.** Delivered (§5 below): `machine.env` carries the seed
+  (`PUBLIC_HOSTNAMES=…` beside the private `FQDN`), `caddy-setup` renders one site block per name
+  against a per-hostname certificate directory (`/etc/sandcastle/tls/<hostname>/{cert,key}.pem`), the
+  Caddy Setup Marker lists every name it configured, `--bare` and Dev Image variants follow, `sc
+  create` prints the private `DNS:` line for every machine again, and `HostKeyAlias`/`known_hosts`
+  are finalized. Existing machines converge on the next payload sync + recreate.
 - **Slice 3 — reconciler.** Per-hostname A records and orders (the derived name and every explicit
   name, each its own `machine_certificates` row), per-hostname push to its directory with a
   per-hostname marker gate, the derived name re-derived when a Project's domain changes (retiring the
@@ -202,7 +202,109 @@ normalizes and refuses the obviously malformed locally; server refusals print ve
   rows no longer exempt from the row GC by fiat.
 - **Slice 4 — e2e Phase 12g** automates the outline below.
 
-## 5. e2e Phase 12g (outline; placeholder in `docs/e2e-sc2.md`)
+## 5. Machine contract (slice 2, final) — supersedes public-dns-zones §5
+
+Every machine runs the same contract, whatever its public-name set; there is no mode. The
+platform payload's `sbin/caddy-setup` (ADR-0022; `tenant.caddyIngressSetupScript`) is the one
+script for `sc create`, `--bare`, Freeform Machines, containers and VMs. Dev Image machines run
+no `caddy-setup` (no Caddy, no marker, no certificate — they carry public names as records only).
+
+### 5.1 `machine.env` (cloud-init, per machine)
+
+```
+FQDN={{ v1.local_hostname }}.<project>.<suffix>           # the Machine Private Hostname — always
+PUBLIC_HOSTNAMES=<seed>                                    # comma list, see below
+SIGNER=http://<sidecar>:9443
+HOME=/home/<user>                                          # /srv for --bare
+```
+
+The cloud-init `fqdn:` is the private name for every project. `PUBLIC_HOSTNAMES` is rendered by the
+project's default profile (`tenant.PublicHostnamesEnvLine`) as the derived `{{ v1.local_hostname
+}}.<Project Domain>` (only when the project has one) joined with a jinja read of the instance's
+`user.sandcastle.v2.public-hostnames` record through cloud-init's datasource
+(`ds.config[...]`, guarded so a datasource without it renders `''`). `set-domain`/`unset-domain`
+re-render the profile; `--bare` copies the profile's line verbatim (`PublicHostnamesEnvLineOf` →
+`V2BareUserDataWithPublicHostnames`); a profile rendered by an older binary has no line, which the
+script treats as an empty seed. The line is a **seed**, read once (§5.2); the record of truth is the
+instance key and, on the machine, `/etc/sandcastle/hostnames`.
+
+### 5.2 `/etc/sandcastle/hostnames`
+
+One Machine Public Hostname per line. Created by `caddy-setup` from `PUBLIC_HOSTNAMES` only when the
+file does not exist (normalized: lower case, no trailing dot, DNS characters only, never the private
+name, sorted, deduplicated — `tenant.FormatMachineHostnamesFile` is the Go twin). Afterwards the file
+belongs to the Auth App: the reconciler pushes it whole whenever the set changes
+(`ZoneMachineServer.PushMachineHostnames`, wired in slice 3) and a certificate push appends the name
+if it is missing. An existing empty file means "no public name"; the script never rewrites it.
+
+### 5.3 Certificates
+
+- Private: `/etc/sandcastle/tls/cert.pem` + `key.pem`, the Tenant CA leaf fetched from the sidecar
+  signer at first boot, exactly as before public names existed (`tenant.MachineTLSCertPath`).
+- Per public name: `/etc/sandcastle/tls/<hostname>/cert.pem` + `key.pem`
+  (`tenant.MachineTLSHostCertPath/KeyPath`, directory `MachineTLSHostDir`), pushed by the Auth App
+  (`PushMachineCertificate(ctx, project, machine, hostname, cert, key)`: directory created, `.new`
+  files 0644/0600 root, one exec `mv && mv && <list name> && sandcastle-caddy-setup --refresh`).
+  The private leaf is never overwritten by a push; drift is checked per name against the name's
+  `cert.pem`.
+
+### 5.4 `caddy-setup` (first boot) and `caddy-setup --refresh`
+
+```
+first boot:  install caddy · trust Tenant CA · fetch private leaf · seed hostnames (if absent)
+             · render → validate → install Caddyfile · override.conf · daemon-reload · enable
+             · marker · systemctl restart caddy
+--refresh:   seed hostnames (if absent) · render → validate → install Caddyfile · marker
+             · reload (restart on reload failure) — or start when Caddy is inactive
+```
+
+The render is the private block always, then one block per name in the hostnames file whose
+directory holds a non-empty `cert.pem` **and** `key.pem`, in file order (sorted). Every block is the
+same `site_block NAME CERT KEY` heredoc: `NAME, *.NAME { tls CERT KEY; redir /_h /_h/; redir /_w
+/_w/; handle_path /_h/* { root * $HOME; file_server browse }; handle_path /_w/* { root * /workspace;
+file_server browse }; handle { reverse_proxy localhost:3000 } }`. It is written to
+`/etc/caddy/Caddyfile.new`, `caddy validate`d and moved into place — a failing render leaves the
+running Caddyfile and the previous marker untouched and exits nonzero. Caddy is always enabled and
+started (the private block always has a certificate): no `ConditionPathExists` drop-in, no
+"enabled-inactive" state. `--refresh` is idempotent — the reconciler execs it after every push, and
+an operator may run it by hand at any time.
+
+### 5.5 Caddy Setup Marker
+
+`/etc/sandcastle/caddy.ready`, 0644, `KEY=value` lines, written last by both entry points:
+
+```
+PRIVATE=web.zp.acme
+PUBLIC=shop.tc42.uk           # one line per public block actually rendered (sorted)
+PUBLIC=web.baum.hase.de
+RENDERED=1757760000           # unix time of this render
+```
+
+`tenant.ParseCaddySetupMarker` → `CaddySetupMarker{Private, Public, Rendered, LegacyMode,
+LegacyFQDN}`. `ReadyFor(host)` — the reconciler's push gate — is true for **any** non-empty host when
+the marker is a per-name marker (`PRIVATE=` present): the name need not be rendered yet, since its
+block cannot appear before its push, and the push's `--refresh` renders it. `Serves(host)` answers
+"is this name rendered right now" (private name or a `PUBLIC=` line) for diagnostics and the slice-3
+per-name verification. An ADR-0027 marker (`MODE=`/`FQDN=`) parses as legacy and never clears the
+gate — that machine has no per-name directories and no `--refresh`; it converges after a payload
+sync + recreate. Parse failure, a marker with neither `PRIVATE=` nor `MODE=`, or an absent file are
+"no marker".
+
+### 5.6 Generalize, SSH naming, output
+
+- `machine-generalize` (image clones) also removes `/etc/sandcastle/hostnames` and every
+  `/etc/sandcastle/tls/<name>/` directory, so a machine launched from an `sc image save` image never
+  inherits the source's public names or certificates.
+- `known_hosts`: one line per machine carrying the private name(s) — `<m>.<p>.<suffix>` and, in the
+  default project, `<m>.<suffix>` — then every public name in stamped order; `HostKeyAlias` is the
+  Machine Private Hostname (`v2MachineNames`).
+- `sc create` prints the `DNS:` line for every machine, then one `Public name: <h> (A record pending,
+  <certificate detail>)` line per name (Dev Image: `(A record pending; no Caddy — no certificate)`);
+  `--bare` adds `HTTPS: https://<private>   (Caddy with the tenant-CA leaf, …)` and, with public
+  names, `HTTPS (public): https://<h>[, https://<h>…]   (Let's Encrypt; served once the certificate
+  lands)`.
+
+## 6. e2e Phase 12g (outline; placeholder in `docs/e2e-sc2.md`)
 
 Gate as Phase 12. `ZONE` is the test zone; `zp` holds `e2e-$RUN.$ZONE`; `pp` is a project without a
 domain.
@@ -222,5 +324,8 @@ domain.
 5. `sc-adm public-dns-zone remove $ZONE` refused while hostnames are held; `sc delete zp:web`
    (out-of-band `incus delete` variant) — within 5 min the GC prunes the rows; `sc project delete pp
    --yes` releases `solo-$RUN.$ZONE`.
-6. Slices 2–3 add: A records and certificates per name, Caddy serving every name, `openssl
-   s_client -servername` per name, `known_hosts` lines for every name.
+6. Slice 2 (machine side, checkable now): `machine.env` carries `PUBLIC_HOSTNAMES=` with the names,
+   `/etc/sandcastle/hostnames` lists them, `caddy.ready` reads `PRIVATE=<m>.<p>.<suffix>` (+ `PUBLIC=`
+   per rendered name), the private name serves the Tenant CA leaf from the first boot, and
+   `sandcastle-caddy-setup --refresh` is idempotent. Slice 3 adds A records and certificates per
+   name, Caddy serving every name (`openssl s_client -servername` per name).

@@ -48,7 +48,7 @@ Superseded by ADR-0028 (2026-09-13). ADR-0027's per-Machine `private`/`zone` cho
 _Avoid_: Zone-mode project, private-mode project, TLS mode, zone mode, private mode
 
 **Caddy Setup Marker**:
-The file a Machine's Caddy setup leaves behind stating which public hostname(s) it configured. The Auth App delivers a certificate to a Machine only when the marker is present and names the expected Machine Public Hostname.
+The file a Machine's Caddy setup leaves behind (`/etc/sandcastle/caddy.ready`) stating which names it configured: the Machine Private Hostname (`PRIVATE=`) and every Machine Public Hostname whose certificate it rendered a site block for (`PUBLIC=`), plus when (`RENDERED=`). The Auth App delivers a certificate to a Machine only when the marker is present in this per-name form; the machine then re-renders with `sandcastle-caddy-setup --refresh`.
 _Avoid_: Setup flag, ready file
 
 **Freeform Machine**:

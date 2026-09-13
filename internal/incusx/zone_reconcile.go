@@ -151,24 +151,41 @@ type machineCertificatePushServer interface {
 	ExecInstance(instanceName string, exec api.InstanceExecPost, args *incus.InstanceExecArgs) (incus.Operation, error)
 }
 
-// PushMachineCertificate installs a Machine Certificate (spec §4.4): the
-// chain and key land as `.new` files (key 0600, both root-owned), then ONE
-// exec swaps both into place back to back and reloads Caddy — restart when
-// the reload fails because Caddy is still enabled-inactive before the first
-// push (the drop-in's ConditionPathExists is satisfied now). start appends an
-// explicit `systemctl start caddy` for that first push.
-func (s ZoneMachineServer) PushMachineCertificate(ctx context.Context, incusProject, name, certPEM, keyPEM string, start bool) error {
-	return pushMachineCertificate(s.Server.UseProject(incusProject), name, certPEM, keyPEM, start)
+// PushMachineCertificate installs a Machine Certificate for one hostname
+// (spec §4.4, per name since ADR-0028): the chain and key land as `.new`
+// files in the hostname's directory /etc/sandcastle/tls/<hostname>/ (key
+// 0600, both root-owned; Incus creates the directory), then ONE exec swaps
+// both into place back to back, makes sure the name is listed in
+// /etc/sandcastle/hostnames, and runs `sandcastle-caddy-setup --refresh`,
+// which re-renders the Caddyfile with the new block and reloads Caddy
+// (starting it when inactive). The private leaf at the fixed
+// /etc/sandcastle/tls/{cert,key}.pem is never touched.
+func (s ZoneMachineServer) PushMachineCertificate(ctx context.Context, incusProject, name, hostname, certPEM, keyPEM string) error {
+	return pushMachineCertificate(s.Server.UseProject(incusProject), name, hostname, certPEM, keyPEM)
 }
 
-func pushMachineCertificate(server machineCertificatePushServer, name, certPEM, keyPEM string, start bool) error {
+func pushMachineCertificate(server machineCertificatePushServer, name, hostname, certPEM, keyPEM string) error {
+	hostname = tenant.NormalizePublicHostname(hostname)
+	if hostname == "" {
+		return fmt.Errorf("push certificate: empty hostname")
+	}
+	// The file API does not create parents: the hostname's directory is
+	// created first (a directory push is idempotent).
+	if err := server.CreateInstanceFile(name, tenant.MachineTLSHostDir(hostname), incus.InstanceFileArgs{
+		Type: "directory",
+		Mode: 0o755,
+		UID:  0,
+		GID:  0,
+	}); err != nil {
+		return fmt.Errorf("create %s: %w", tenant.MachineTLSHostDir(hostname), err)
+	}
 	files := []struct {
 		path    string
 		content string
 		mode    int
 	}{
-		{tenant.MachineTLSCertPath + ".new", certPEM, 0o644},
-		{tenant.MachineTLSKeyPath + ".new", keyPEM, 0o600},
+		{tenant.MachineTLSHostCertPath(hostname) + ".new", certPEM, 0o644},
+		{tenant.MachineTLSHostKeyPath(hostname) + ".new", keyPEM, 0o600},
 	}
 	for _, file := range files {
 		if err := server.CreateInstanceFile(name, file.path, incus.InstanceFileArgs{
@@ -182,10 +199,16 @@ func pushMachineCertificate(server machineCertificatePushServer, name, certPEM, 
 			return fmt.Errorf("write %s: %w", file.path, err)
 		}
 	}
+	return execInstanceScript(server, name, machineCertificateInstallScript(hostname), "install certificate")
+}
+
+// execInstanceScript runs one /bin/sh -c script in the instance and reports
+// a nonzero exit (with stderr) as an error prefixed with what.
+func execInstanceScript(server machineCertificatePushServer, name, script, what string) error {
 	var stderr strings.Builder
 	dataDone := make(chan bool)
 	op, err := server.ExecInstance(name, api.InstanceExecPost{
-		Command:   []string{"/bin/sh", "-c", machineCertificateInstallScript(start)},
+		Command:   []string{"/bin/sh", "-c", script},
 		WaitForWS: true,
 	}, &incus.InstanceExecArgs{
 		Stdin:    strings.NewReader(""),
@@ -194,24 +217,48 @@ func pushMachineCertificate(server machineCertificatePushServer, name, certPEM, 
 		DataDone: dataDone,
 	})
 	if err != nil {
-		return fmt.Errorf("install certificate: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("install certificate: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("%s: %w (stderr: %s)", what, err, strings.TrimSpace(stderr.String()))
 	}
 	<-dataDone
 	if err := execExitError(op, stderr.String()); err != nil {
-		return fmt.Errorf("install certificate: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	return nil
 }
 
-// machineCertificateInstallScript is the one-exec swap + reload of spec §4.4.
-func machineCertificateInstallScript(start bool) string {
-	script := fmt.Sprintf("mv -f %[1]s.new %[1]s && mv -f %[2]s.new %[2]s && (systemctl reload caddy 2>/dev/null || systemctl restart caddy)",
-		tenant.MachineTLSCertPath, tenant.MachineTLSKeyPath)
-	if start {
-		script += " && systemctl start caddy"
+// machineCertificateInstallScript is the one-exec swap + refresh of spec
+// §4.4: both files into place, the hostname listed (appended if the file
+// does not name it yet — the reconciler owns the file and will push it whole
+// when the set changes, but a certificate for a name is proof enough that
+// the name is the machine's), then caddy-setup --refresh renders and reloads.
+func machineCertificateInstallScript(hostname string) string {
+	return fmt.Sprintf("mv -f %[1]s.new %[1]s && mv -f %[2]s.new %[2]s && (grep -qxF %[3]s %[4]s 2>/dev/null || echo %[3]s >> %[4]s) && %[5]s %[6]s",
+		tenant.MachineTLSHostCertPath(hostname), tenant.MachineTLSHostKeyPath(hostname), hostname, tenant.MachineHostnamesPath, tenant.CaddySetupCommand, tenant.CaddySetupRefreshFlag)
+}
+
+// PushMachineHostnames writes the machine's whole public-name set to
+// /etc/sandcastle/hostnames (0644, root) and runs caddy-setup --refresh so
+// a removed name's site block disappears and a listed name whose
+// certificate is already there appears. The reconciler calls it when the
+// set changes (slice 3 of #172); the seam exists now so the machine
+// contract and its caller do not change again.
+func (s ZoneMachineServer) PushMachineHostnames(ctx context.Context, incusProject, name string, hostnames []string) error {
+	return pushMachineHostnames(s.Server.UseProject(incusProject), name, hostnames)
+}
+
+func pushMachineHostnames(server machineCertificatePushServer, name string, hostnames []string) error {
+	if err := server.CreateInstanceFile(name, tenant.MachineHostnamesPath, incus.InstanceFileArgs{
+		Content:   strings.NewReader(tenant.FormatMachineHostnamesFile(hostnames)),
+		Type:      "file",
+		Mode:      0o644,
+		UID:       0,
+		GID:       0,
+		WriteMode: "overwrite",
+	}); err != nil {
+		return fmt.Errorf("write %s: %w", tenant.MachineHostnamesPath, err)
 	}
-	return script
+	return execInstanceScript(server, name, tenant.CaddySetupCommand+" "+tenant.CaddySetupRefreshFlag, "refresh caddy")
 }

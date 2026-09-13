@@ -43,31 +43,37 @@ func TestV2InstanceConfigWithPublicHostnames(t *testing.T) {
 	}
 }
 
-// A --bare machine's machine.env follows the profile's Naming Mode: a zone
-// project's profile carries MODE=zone, so the bare document does too — same
-// FQDN domain, same mode, so caddy-setup on it waits for the pushed
-// certificate instead of asking the signer. A private profile yields the
-// unchanged bare document.
-func TestBareInstanceConfigFollowsProfileNamingMode(t *testing.T) {
-	zoneProfile := tenant.V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", "baum.hase.de", "http://10.249.7.3:9443")
-	if got := firstSubmatch(v2ProfileModePattern, zoneProfile); got != "zone" {
-		t.Fatalf("mode read off the zone profile = %q", got)
+// A --bare machine's machine.env follows the profile's public-name seed
+// (ADR-0028): a project with a domain renders the derived name into its
+// PUBLIC_HOSTNAMES line, and the bare document copies that line verbatim —
+// same private FQDN, same seed. A private profile yields the default bare
+// document.
+func TestBareInstanceConfigFollowsProfilePublicHostnames(t *testing.T) {
+	domainProfile := tenant.V2ProfileUserData("dev", "ssh-ed25519 AAAA", "zp", "acme", "baum.hase.de", "http://10.249.7.3:9443")
+	if got := firstSubmatch(v2ProfileFQDNPattern, domainProfile); got != "zp.acme" {
+		t.Fatalf("fqdn domain read off the profile = %q, want the private zp.acme", got)
 	}
-	bare := tenant.V2BareUserDataForMode(
-		firstSubmatch(v2ProfileFQDNPattern, zoneProfile),
-		firstSubmatch(v2ProfileSignerPattern, zoneProfile),
-		firstSubmatch(v2ProfileModePattern, zoneProfile),
-	)
-	if !strings.Contains(bare, "      FQDN={{ v1.local_hostname }}.baum.hase.de\n      MODE=zone\n      SIGNER=http://10.249.7.3:9443\n") {
-		t.Fatalf("bare zone machine.env:\n%s", bare)
+	seed := tenant.PublicHostnamesEnvLineOf(domainProfile)
+	if seed != tenant.PublicHostnamesEnvLine("baum.hase.de") {
+		t.Fatalf("seed read off the profile = %q", seed)
+	}
+	server := newFakeDomainServer()
+	server.resources["sc2-acme-zp"] = &fakeDomainResources{profiles: map[string]api.ProfilePut{"default": {Config: map[string]string{"cloud-init.user-data": domainProfile}}}, instances: map[string]*api.Instance{}}
+	config, err := v2BareInstanceConfig(server.UseProject("sc2-acme-zp"), "sc2-acme-zp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := config["cloud-init.user-data"]
+	if !strings.Contains(bare, "      FQDN={{ v1.local_hostname }}.zp.acme\n      "+seed+"\n      SIGNER=http://10.249.7.3:9443\n") {
+		t.Fatalf("bare machine.env:\n%s", bare)
+	}
+	if strings.Contains(bare, "MODE=") || config[meta.KeyV2Bare] != "true" {
+		t.Fatalf("bare config: %v", config)
 	}
 
 	privateProfile := tenant.V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "backend", "acme.example", "http://10.249.7.3:9443")
-	if got := firstSubmatch(v2ProfileModePattern, privateProfile); got != "" {
-		t.Fatalf("mode read off a private profile = %q, want none", got)
-	}
-	legacy := tenant.V2BareUserData(firstSubmatch(v2ProfileFQDNPattern, privateProfile), firstSubmatch(v2ProfileSignerPattern, privateProfile))
-	if got := tenant.V2BareUserDataForMode(firstSubmatch(v2ProfileFQDNPattern, privateProfile), firstSubmatch(v2ProfileSignerPattern, privateProfile), ""); got != legacy {
+	plain := tenant.V2BareUserData(firstSubmatch(v2ProfileFQDNPattern, privateProfile), firstSubmatch(v2ProfileSignerPattern, privateProfile))
+	if got := tenant.V2BareUserDataWithPublicHostnames(firstSubmatch(v2ProfileFQDNPattern, privateProfile), firstSubmatch(v2ProfileSignerPattern, privateProfile), tenant.PublicHostnamesEnvLineOf(privateProfile)); got != plain {
 		t.Fatalf("private bare document drifted:\n%s", got)
 	}
 }

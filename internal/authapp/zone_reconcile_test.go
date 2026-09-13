@@ -44,9 +44,9 @@ type fakeZoneFleet struct {
 
 type fakePush struct {
 	Instance string
+	Hostname string
 	CertPEM  string
 	KeyPEM   string
-	Start    bool
 }
 
 type fakeStamp struct {
@@ -112,15 +112,15 @@ func (f *fakeZoneFleet) ReadInstanceFile(_ context.Context, incusProject, name, 
 	return content, nil
 }
 
-func (f *fakeZoneFleet) PushMachineCertificate(_ context.Context, incusProject, name, certPEM, keyPEM string, start bool) error {
+func (f *fakeZoneFleet) PushMachineCertificate(_ context.Context, incusProject, name, hostname, certPEM, keyPEM string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.pushErr != nil {
 		return f.pushErr
 	}
-	f.pushes = append(f.pushes, fakePush{Instance: f.key(incusProject, name), CertPEM: certPEM, KeyPEM: keyPEM, Start: start})
-	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSCertPath] = certPEM
-	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSKeyPath] = keyPEM
+	f.pushes = append(f.pushes, fakePush{Instance: f.key(incusProject, name), Hostname: hostname, CertPEM: certPEM, KeyPEM: keyPEM})
+	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSHostCertPath(hostname)] = certPEM
+	f.files[f.key(incusProject, name)+":"+tenant.MachineTLSHostKeyPath(hostname)] = keyPEM
 	return nil
 }
 
@@ -330,7 +330,13 @@ func zoneMachine(name, ip string, running bool) ZoneMachine {
 		ProjectDomain: "baum.hase.de", PublicHostname: name + ".baum.hase.de", BridgeIPv4: ip, Running: running}
 }
 
-func markerFor(hostname string) string { return "MODE=zone\nFQDN=" + hostname + "\n" }
+// markerFor is a per-name Caddy Setup Marker (ADR-0028) of a machine whose
+// private name is web.zp.acme; the public hostname is what the test expects
+// to be pushed, but the gate clears for any name (the block renders after
+// the push).
+func markerFor(hostname string) string {
+	return "PRIVATE=web.zp.acme\nPUBLIC=" + hostname + "\nRENDERED=1757760000\n"
+}
 
 func recordNames(rrs []libdns.RR, typ string) []string {
 	var out []string
@@ -493,8 +499,8 @@ func TestZoneReconcile_FreeformStampAndRow(t *testing.T) {
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if h.fleet.pushCount() != 1 || !h.fleet.pushes[0].Start {
-		t.Fatalf("pushes = %+v, want one first push with start", h.fleet.pushes)
+	if h.fleet.pushCount() != 1 || h.fleet.pushes[0].Hostname != "ff.baum.hase.de" {
+		t.Fatalf("pushes = %+v, want one push for ff.baum.hase.de", h.fleet.pushes)
 	}
 	m := h.fleet.machine("sc2-acme-zp", "ff")
 	row := h.row("ff.baum.hase.de")
@@ -517,8 +523,9 @@ func TestZoneReconcile_PushGateNoMarkerNoPush(t *testing.T) {
 	if len(h.issuer.calls) != 1 {
 		t.Fatalf("issuer calls = %d, want 1", len(h.issuer.calls))
 	}
-	// … but nothing is pushed until the marker names the hostname.
-	for _, marker := range []string{"", "MODE=private\nFQDN=web.zp.acme\n", "MODE=zone\nFQDN=other.baum.hase.de\n", "garbage"} {
+	// … but nothing is pushed until a per-name marker is there: absent,
+	// legacy (ADR-0027 MODE= markers, whatever they name) or garbage.
+	for _, marker := range []string{"", "MODE=private\nFQDN=web.zp.acme\n", "MODE=zone\nFQDN=web.baum.hase.de\n", "garbage"} {
 		if marker != "" {
 			h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, marker)
 		}
@@ -535,19 +542,24 @@ func TestZoneReconcile_PushGateNoMarkerNoPush(t *testing.T) {
 	if n := h.logged("A record only"); n != 4 {
 		t.Fatalf("gate logged %d times, want once per distinct marker (4)", n)
 	}
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, markerFor("WEB.baum.hase.de."))
+	// A per-name marker that does not list the hostname yet (its block
+	// cannot render before the push) clears the gate.
+	h.fleet.setFile("sc2-acme-zp", "web", tenant.CaddySetupMarkerPath, "PRIVATE=web.zp.acme\nRENDERED=1757760000\n")
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
 	if h.fleet.pushCount() != 1 {
-		t.Fatal("marker naming the hostname did not push")
+		t.Fatal("per-name marker did not push")
 	}
 	push := h.fleet.pushes[0]
+	if push.Hostname != "web.baum.hase.de" {
+		t.Fatalf("push hostname = %q", push.Hostname)
+	}
 	if !strings.Contains(push.KeyPEM, "PRIVATE KEY") || !strings.Contains(push.CertPEM, "CERTIFICATE") {
 		t.Fatalf("push carried cert=%q key=%q", push.CertPEM[:20], push.KeyPEM[:20])
 	}
 	// A stopped machine is never pushed to, and stays issued.
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.MachineTLSCertPath, "tampered")
+	h.fleet.setFile("sc2-acme-zp", "web", tenant.MachineTLSHostCertPath("web.baum.hase.de"), "tampered")
 	h.fleet.mu.Lock()
 	h.fleet.machines[0].Running = false
 	h.fleet.mu.Unlock()
@@ -858,12 +870,12 @@ func TestZoneReconcile_DriftRePush(t *testing.T) {
 		t.Fatal("re-pushed without drift")
 	}
 	// Manual edit: re-pushed within one pass, no new order.
-	h.fleet.setFile("sc2-acme-zp", "web", tenant.MachineTLSCertPath, h.fleet.pushes[0].CertPEM+"x\n")
+	h.fleet.setFile("sc2-acme-zp", "web", tenant.MachineTLSHostCertPath("web.baum.hase.de"), h.fleet.pushes[0].CertPEM+"x\n")
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if h.fleet.pushCount() != 2 || h.fleet.pushes[1].Start {
-		t.Fatalf("drift re-push: pushes=%d start=%v", h.fleet.pushCount(), h.fleet.pushes[len(h.fleet.pushes)-1].Start)
+	if h.fleet.pushCount() != 2 || h.fleet.pushes[1].Hostname != "web.baum.hase.de" {
+		t.Fatalf("drift re-push: pushes=%d hostname=%q", h.fleet.pushCount(), h.fleet.pushes[len(h.fleet.pushes)-1].Hostname)
 	}
 	if len(h.issuer.calls) != 1 {
 		t.Fatal("drift caused a new order")
@@ -873,7 +885,7 @@ func TestZoneReconcile_DriftRePush(t *testing.T) {
 	}
 	// Rebuilt machine (file gone) counts as drift too.
 	h.fleet.mu.Lock()
-	delete(h.fleet.files, "sc2-acme-zp/web:"+tenant.MachineTLSCertPath)
+	delete(h.fleet.files, "sc2-acme-zp/web:"+tenant.MachineTLSHostCertPath("web.baum.hase.de"))
 	h.fleet.mu.Unlock()
 	if err := h.pass(); err != nil {
 		t.Fatalf("pass: %v", err)

@@ -271,10 +271,10 @@ func newProjectSetDomainCommand(config commandConfig, opts *rootOptions) *cobra.
 	command := &cobra.Command{
 		Use:   "set-domain name domain",
 		Short: "Claim (or replace) the Project Domain of a project",
-		Long: `Claim a Project Domain for an existing project (ADR-0027). Refused while the
-project has machines with a public name — a machine's Naming Mode is fixed at
-creation. Private machines are untouched; machines created afterwards get the
-public name <machine>.<domain>.`,
+		Long: `Claim a Project Domain for an existing project (ADR-0027/0028). Refused while
+the project has machines carrying the derived public name (a transitional guard
+until the reconciler re-derives names). Machines created afterwards get the
+public name <machine>.<domain> beside their Machine Private Hostname.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project := strings.TrimSpace(args[0])

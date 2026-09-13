@@ -2670,8 +2670,9 @@ sc project create zp --domain e2e-$RUN.$ZONE
 sc project status zp
 # PASS: `Domain: e2e-$RUN.$ZONE   (zone $ZONE)` and no machine table (the project is empty);
 #       `sc incus project get <prefix>-<tenant>-zp user.sandcastle.v2.domain` = e2e-$RUN.$ZONE;
-#       the project's default profile cloud-init carries `fqdn: {{ v1.local_hostname }}.e2e-$RUN.$ZONE`
-#       and `MODE=zone` in machine.env; `sc-adm public-dns-zone list` shows CLAIMS 1.
+#       the project's default profile cloud-init keeps `fqdn: {{ v1.local_hostname }}.zp.<suffix>` (the private
+#       identity, ADR-0028) and its machine.env gains `PUBLIC_HOSTNAMES={{ v1.local_hostname }}.e2e-$RUN.$ZONE,{{ ds.config[…] … }}`
+#       — no MODE line anywhere; `sc-adm public-dns-zone list` shows CLAIMS 1.
 # PASS (refusals — all `--dry-run` so nothing is created):
 #   a second tenant's `sc project create x --domain e2e-$RUN.$ZONE` and `--domain a.e2e-$RUN.$ZONE`
 #     → the flat "overlaps a domain already claimed on this install; choose another" (no owner named);
@@ -2689,39 +2690,51 @@ sc route publish <any-private-machine> --hostname x.e2e-$RUN.$ZONE
 sc create zp:old; sc project unset-domain zp
 # PASS: REFUSED — "project zp has machines with a public name: old; delete them before changing the project domain".
 sc delete zp:old --yes; sc project unset-domain zp
-# PASS: allowed now; `sc project status zp` reads `Domain: (none)`; the Incus key is gone and the profile is
-#       back to `fqdn: {{ v1.local_hostname }}.zp.<suffix>` with no MODE line.
+# PASS: allowed now; `sc project status zp` reads `Domain: (none)`; the Incus key is gone and the profile's
+#       PUBLIC_HOSTNAMES line is back to the instance-record read alone (no derived name).
 sc project set-domain zp e2e-$RUN.$ZONE            # re-claim for the rest of the phase
 ```
 
-### 12c — zone-mode machine: the machine contract
+### 12c — machine with a derived public name: the machine contract (ADR-0028, slice 2 of #172)
 
 ```bash
 sc create zp:web
-# PASS: output has "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
-#       in place of the DNS: line (the IP: line stands alone above it) and returns without waiting;
-#       `sc create zp:web2 --dry-run` prints the same Public name line and makes no Auth App request;
+# PASS: output has "DNS: web.zp.<suffix> (auto-registers within seconds)" and, under it,
+#       "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
+#       (the IP: line stands alone above both) and returns without waiting;
+#       `sc create zp:web2 --dry-run` prints the same DNS: + Public name lines and makes no Auth App request;
 #       with the Auth App stopped the parenthesis reads
 #       "certificate pending: Auth App unreachable — retried by the reconciler" and the machine is still created.
-# PASS (stamp): `sc incus config get web user.sandcastle.v2.public-hostname` = web.e2e-$RUN.$ZONE, set by the
-#       create call itself; a machine created in a private project reads `private`;
-#       `sc ls zp:web` shows FQDN web.e2e-$RUN.$ZONE and CERT `pending`.
+# PASS (stamp): `sc incus config get web user.sandcastle.v2.public-hostnames` = web.e2e-$RUN.$ZONE, set by the
+#       create call itself (no user.sandcastle.v2.public-hostname key); a machine created in a private project
+#       carries neither key; `sc ls zp:web` shows FQDN web.e2e-$RUN.$ZONE and CERT `pending`.
 # PASS (machine side, once `sc incus exec web -- cloud-init status --wait` returns):
-#   sc incus exec web -- cat /etc/sandcastle/caddy.ready          # → MODE=zone / FQDN=web.e2e-$RUN.$ZONE (0644)
-#   sc incus exec web -- cat /etc/systemd/system/caddy.service.d/sandcastle-zone.conf
-#       # → [Unit] + ConditionPathExists=/etc/sandcastle/tls/cert.pem + ConditionPathExists=/etc/sandcastle/tls/key.pem
+#   sc incus exec web -- hostname -f                               # → web.zp.<suffix> (the private identity)
+#   sc incus exec web -- grep PUBLIC_HOSTNAMES /etc/sandcastle/machine.env
+#       # → PUBLIC_HOSTNAMES=web.e2e-$RUN.$ZONE,web.e2e-$RUN.$ZONE   (derived name from the profile + the
+#       #   instance record read through cloud-init's datasource; a datasource without ds.config yields a
+#       #   trailing comma instead — record which one this image gives)
+#   sc incus exec web -- cat /etc/sandcastle/hostnames             # → web.e2e-$RUN.$ZONE (one line, deduplicated)
+#   sc incus exec web -- cat /etc/sandcastle/caddy.ready           # → PRIVATE=web.zp.<suffix> / RENDERED=<unix ts> (0644);
+#       #   no PUBLIC= line yet (no certificate pushed), no MODE= line
+#   sc incus exec web -- test -e /etc/systemd/system/caddy.service.d/sandcastle-zone.conf   # → absent (no drop-in)
 #   sc incus exec web -- systemctl is-enabled caddy                # → enabled
-#   sc incus exec web -- systemctl is-active caddy                 # → inactive (condition unmet; no crash loop)
-#   sc incus exec web -- ls /etc/sandcastle/tls                    # → empty: no leaf was fetched from the sidecar
-#   sc incus exec web -- test -s /usr/local/share/ca-certificates/sandcastle-tenant.crt   # → tenant CA still trusted
-#   sc incus exec web -- head -1 /etc/caddy/Caddyfile              # → "web.e2e-$RUN.$ZONE, *.web.e2e-$RUN.$ZONE {"
-#   sc restart zp:web; sc incus exec web -- systemctl is-active caddy   # → inactive, journal shows the ConditionPathExists skip
-# PASS (connect): `sc c zp:web -- hostname -f` prints web.e2e-$RUN.$ZONE, the ssh line is
-#       `Connecting: ssh dev@<bridge-ip>`, and ~/.ssh/known_hosts gains ONE line keyed `web.e2e-$RUN.$ZONE`
-#       with the `# sandcastle:<remote>/<tenant>` marker — no web.zp.<suffix> line, no short alias;
-#       `sc ssh-key purge --dry-run` reports nothing to do for it.
-# PASS (negative): `dig web.zp.<suffix> @<sidecar-tailscale-ip>` is NXDOMAIN — a zone-mode machine has
-#       no Machine Private Hostname.
+#   sc incus exec web -- systemctl is-active caddy                 # → active (the private block has its leaf)
+#   sc incus exec web -- ls /etc/sandcastle/tls                    # → cert.pem key.pem (the private leaf; no <name>/ dir yet)
+#   sc incus exec web -- test -s /usr/local/share/ca-certificates/sandcastle-tenant.crt   # → tenant CA trusted
+#   sc incus exec web -- head -1 /etc/caddy/Caddyfile              # → "web.zp.<suffix>, *.web.zp.<suffix> {"
+#   sc incus exec web -- grep -c 'tls /etc/sandcastle/tls/' /etc/caddy/Caddyfile   # → 1 (private block only)
+#   sc incus exec web -- /usr/local/sbin/sandcastle-caddy-setup --refresh; sc incus exec web -- systemctl is-active caddy
+#       # → exit 0, Caddyfile byte-identical, marker rewritten with a newer RENDERED=, caddy active (idempotent)
+#   sc restart zp:web; sc incus exec web -- systemctl is-active caddy   # → active again (no conditional start)
+#   openssl s_client -connect <bridge-ip>:443 -servername web.zp.<suffix> </dev/null 2>/dev/null | openssl x509 -noout -issuer
+#       # → the tenant CA issuer: the private name serves from the first boot
+# PASS (connect): `sc c zp:web -- hostname -f` prints web.zp.<suffix>, the ssh line is
+#       `Connecting: ssh dev@<bridge-ip>` with HostKeyAlias=web.zp.<suffix>, and ~/.ssh/known_hosts gains ONE line
+#       keyed `web.zp.<suffix>,web.e2e-$RUN.$ZONE` (private name first, then the public name) with the
+#       `# sandcastle:<remote>/<tenant>` marker; `sc ssh-key purge --dry-run` reports nothing to do for it.
+# PASS (private DNS): `dig web.zp.<suffix> @<sidecar-tailscale-ip>` answers the bridge IP — every machine keeps its
+#       Machine Private Hostname.
 ```
 
 ### 12d — A records and the certificate (Let's Encrypt staging)
@@ -2737,9 +2750,12 @@ sc ls zp:web; sc project status zp
 #       `sc project status zp` shows `installed` with a NOT AFTER ~90 days out;
 #       `sc incus config get web user.sandcastle.v2.cert-state` = installed and
 #       `… user.sandcastle.v2.cert-not-after` equals that NOT AFTER (RFC 3339 UTC).
-# PASS (machine side after the push): /etc/sandcastle/tls holds cert.pem (0644) and key.pem (0600), no *.new
-#       leftovers; `systemctl is-active caddy` → active (the first push's `systemctl start`);
-#       `journalctl -u caddy` shows one start, no reload failure loop.
+# PASS (machine side after the push): /etc/sandcastle/tls/web.e2e-$RUN.$ZONE/ holds cert.pem (0644) and key.pem
+#       (0600), no *.new leftovers; the private leaf /etc/sandcastle/tls/{cert,key}.pem is untouched;
+#       /etc/sandcastle/caddy.ready now has `PUBLIC=web.e2e-$RUN.$ZONE` and a newer RENDERED=; the Caddyfile has
+#       a second block "web.e2e-$RUN.$ZONE, *.web.e2e-$RUN.$ZONE {" with `tls /etc/sandcastle/tls/web.e2e-$RUN.$ZONE/…`;
+#       `systemctl is-active caddy` → active; `journalctl -u caddy` shows one start and one reload
+#       (the push's `sandcastle-caddy-setup --refresh`), no failure loop.
 openssl s_client -connect <bridge-ip>:443 -servername web.e2e-$RUN.$ZONE </dev/null 2>/dev/null \
   | openssl x509 -noout -ext subjectAltName -issuer
 # PASS: both SANs `DNS:web.e2e-$RUN.$ZONE, DNS:*.web.e2e-$RUN.$ZONE` and an issuer from the Let's Encrypt
@@ -2749,14 +2765,17 @@ curl --resolve x.web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://x.web.e2e-$RUN.$Z
 dig +short TXT _acme-challenge.web.e2e-$RUN.$ZONE @1.1.1.1
 # PASS: empty once installed (certmagic cleans up; the reconciler sweeps before every order).
 sc create --bare zp:b1
-# PASS: prints the Public name line and "HTTPS: https://b1.e2e-$RUN.$ZONE   (Let's Encrypt, certificate pending)";
-#       its cloud-init machine.env carries MODE=zone; the 12c marker/drop-in/enabled-inactive checks hold for b1
-#       too; it reaches CERT ok like web.
+# PASS: prints the DNS: line, the Public name line, "HTTPS: https://b1.zp.<suffix>   (Caddy with the tenant-CA leaf,
+#       proxying to localhost:3000)" and "HTTPS (public): https://b1.e2e-$RUN.$ZONE   (Let's Encrypt; served once the
+#       certificate lands)"; its cloud-init machine.env carries the same PUBLIC_HOSTNAMES line as the profile and no
+#       MODE; the 12c marker/no-drop-in/caddy-active checks hold for b1 too; it reaches CERT ok like web.
 sc create zp:devbox --image <dev-alias>
 # PASS: prints "Public name: devbox.e2e-$RUN.$ZONE (A record pending; no Caddy — no certificate)" plus the usual
 #       "Dev Image: no Caddy/TLS ingress — SSH only." line; the instance is stamped with the public name, gets an
-#       A record, but has no /etc/sandcastle/caddy.ready and no caddy unit; CERT stays `pending` and the auth-app
-#       log has exactly one "devbox: no caddy setup marker" line and no order for devbox.e2e-$RUN.$ZONE.
+#       A record, but has no /etc/sandcastle/caddy.ready, no /etc/sandcastle/hostnames and no caddy unit; CERT stays
+#       `pending` and the auth-app log has exactly one "devbox: no caddy setup marker" line and no order for
+#       devbox.e2e-$RUN.$ZONE. Its output reads "DNS: devbox.zp.<suffix> …" then
+#       "Public name: devbox.e2e-$RUN.$ZONE (A record pending; no Caddy — no certificate)".
 incus launch <ct-image> ff --project <prefix>-<tenant>-zp     # Freeform Machine, profile = default
 # PASS (≤ 60s): the auth-app log shows "stamped <prefix>-<tenant>-zp/ff user.sandcastle.v2.public-hostname=ff.e2e-$RUN.$ZONE"
 #       (once); `dig +short ff.e2e-$RUN.$ZONE @1.1.1.1` answers its bridge IP; while cloud-init runs the log has
@@ -2767,12 +2786,13 @@ incus launch <ct-image> ff --project <prefix>-<tenant>-zp     # Freeform Machine
 ### 12e — marker gate, stopped machines, reboot before the cert, drift
 
 ```bash
-# marker gate refuses a wrong hostname
-sc incus exec ff -- sh -c 'printf "MODE=zone\nFQDN=other.e2e-$RUN.$ZONE\n" > /etc/sandcastle/caddy.ready'
+# marker gate refuses a legacy (ADR-0027) marker
+sc incus exec ff -- sh -c 'cp /etc/sandcastle/caddy.ready /tmp/marker; printf "MODE=zone\nFQDN=ff.e2e-$RUN.$ZONE\n" > /etc/sandcastle/caddy.ready'
 sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
   sqlite3 /var/lib/sandcastle/auth/auth.db "UPDATE machine_certificates SET pushed_serial='' WHERE hostname='ff.e2e-$RUN.$ZONE'"   # (DB)
-# PASS: the log shows "caddy setup marker does not name ff.e2e-$RUN.$ZONE" once, CERT reads `pending`
-#       (state issued), nothing is pushed; restore the marker → pushed within 60s.
+# PASS: the log shows "caddy setup marker does not clear the push gate for ff.e2e-$RUN.$ZONE (MODE=zone FQDN=… (legacy))"
+#       once, CERT reads `pending` (state issued), nothing is pushed; restore the marker
+#       (`sc incus exec ff -- /usr/local/sbin/sandcastle-caddy-setup --refresh` rewrites it) → pushed within 60s.
 # stopped through a push
 sc stop zp:web
 sc-adm incus exec <remote>:<prefix>-auth-app --project <infra-project> -- \
@@ -2784,13 +2804,21 @@ sc start zp:web
 #       no new order); CERT ok again.
 # reboot before the certificate lands
 sc create zp:late; sc restart zp:late          # within ~60s of create
-# PASS: caddy is enabled, inactive, `systemctl status caddy` reports the ConditionPathExists skip, no crash loop;
-#       once pushed, caddy is active and `openssl s_client` serves the certificate.
+# PASS: caddy is enabled and active after the reboot (the private block serves), the marker has no PUBLIC= line
+#       yet; once pushed, `openssl s_client -servername late.e2e-$RUN.$ZONE` serves the Let's Encrypt certificate
+#       and `-servername late.zp.<suffix>` still serves the tenant leaf.
 # drift
-sc incus exec web -- sh -c 'echo x >> /etc/sandcastle/tls/cert.pem'
+sc incus exec web -- sh -c 'echo x >> /etc/sandcastle/tls/web.e2e-$RUN.$ZONE/cert.pem'
 # PASS (≤ 60s): the log shows "certificate on …/web differs from the issued one; re-pushing" and a new
-#       "installed" line with the SAME serial; cert.pem is byte-identical to the Auth App's copy again and Caddy
-#       serves the correct chain. No new order in the log.
+#       "installed" line with the SAME serial; that cert.pem is byte-identical to the Auth App's copy again and
+#       Caddy serves the correct chain. No new order in the log. The private leaf is not part of the drift check:
+#       `echo x >> /etc/sandcastle/tls/cert.pem` triggers nothing (repair with `sc restart` — generalize does not
+#       run again — or by re-fetching the leaf by hand).
+# refresh with a removed name
+sc incus exec web -- sh -c ': > /etc/sandcastle/hostnames; /usr/local/sbin/sandcastle-caddy-setup --refresh'
+# PASS: the Caddyfile has the private block only, the marker has no PUBLIC= line, caddy active; restore with
+#       `echo web.e2e-$RUN.$ZONE > /etc/sandcastle/hostnames; sandcastle-caddy-setup --refresh` → the public block
+#       is back without any push (the certificate directory was kept).
 # PASS (renewal timing is not spent) (DB): `SELECT renew_after, ari_check_after FROM machine_certificates` — renew_after
 #       is ~60 days out (2/3 of the 90-day lifetime) or the ARI window start once ari_check_after (6h) has passed;
 #       the log shows no order for web after the first one.
@@ -2822,22 +2850,24 @@ sc-adm public-dns-zone remove $ZONE
 # PASS (staging → production switch heals): redeploy the auth-app with the production directory on a throwaway
 #       install — every zone-mode row logs "certificate issued by <staging>, running <production>; re-ordering"
 #       once and is re-issued (spends production budget: only on a dedicated test zone).
-# PASS (private-mode regression): Phases 7c, 8, 8c run unchanged in a project without a domain on the same
-#       install — DNS:/HTTPS: lines byte-identical, CERT column `-`, the machine stamped `private`,
-#       /etc/sandcastle/caddy.ready reads MODE=private / FQDN=<m>.<p>.<suffix>, no sandcastle-zone.conf drop-in,
-#       Caddy active with the tenant-CA leaf, and the zone stage never touches such a machine (no A record,
-#       no cert-state key, no log line for it).
+# PASS (private-only regression): Phases 7c, 8, 8c run unchanged in a project without a domain on the same
+#       install — DNS:/HTTPS: lines byte-identical, CERT column `-`, no public-hostname(s) key on the machine,
+#       /etc/sandcastle/caddy.ready reads PRIVATE=<m>.<p>.<suffix> / RENDERED=<ts> (no PUBLIC=, no MODE=),
+#       /etc/sandcastle/hostnames exists and is empty, no sandcastle-zone.conf drop-in, Caddy active with the
+#       tenant-CA leaf, and the zone stage never touches such a machine (no A record, no cert-state key, no log
+#       line for it).
 ```
 
 ### 12g — explicit Machine Public Hostnames (ADR-0028) ⚠️ placeholder — automated by slice 4 of #172
 
-Slice 1 (#173) ships the reservations, the API and the CLI; slices 2–3 ship the
-machine contract and the per-name reconciler. `pp` is a project **without** a
-domain on the same install; `RUN` as above.
+Slice 1 (#173) ships the reservations, the API and the CLI; slice 2 (#174) the
+per-name machine contract; slice 3 the per-name reconciler. `pp` is a project
+**without** a domain on the same install; `RUN` as above.
 
 ```bash
 sc create zp:web2 --hostname web12-$RUN.$ZONE --fqdn shop-$RUN.$ZONE
-# PASS: three "Public name:" lines (shop-…, web2.e2e-$RUN.$ZONE, web12-…, sorted), one IP: line, returns at once;
+# PASS: the DNS: web2.zp.<suffix> line, then three "Public name:" lines (shop-…, web2.e2e-$RUN.$ZONE, web12-…,
+#       sorted), one IP: line, returns at once;
 #       `sc incus config get web2 user.sandcastle.v2.public-hostnames` = the same three names comma-separated,
 #       and NO user.sandcastle.v2.public-hostname key; `sc ls zp:web2` FQDN reads "shop-$RUN.$ZONE (+2)";
 #       `sc ls --json` carries publicHostnames; (DB) two machine_hostnames rows and three machine_certificates rows.
@@ -2847,6 +2877,16 @@ sc create zp:dup --hostname web12-$RUN.$ZONE
 sc create pp:solo --hostname solo-$RUN.$ZONE
 # PASS: the DNS: line is kept and one "Public name: solo-$RUN.$ZONE" line follows; `sc project set-domain pp x-$RUN.$ZONE --dry-run`
 #       is allowed (explicit names never block a domain change).
+# PASS (machine side, slice 2 — mixed and explicit-only, once cloud-init finished on web2 and solo):
+#   sc incus exec web2 -- grep PUBLIC_HOSTNAMES /etc/sandcastle/machine.env
+#       # → the derived name and, through the datasource read, the sorted stamped set (shop-…,web2.e2e-…,web12-…)
+#   sc incus exec web2 -- cat /etc/sandcastle/hostnames             # → shop-$RUN.$ZONE / web2.e2e-$RUN.$ZONE / web12-$RUN.$ZONE (sorted)
+#   sc incus exec solo -- cat /etc/sandcastle/hostnames             # → solo-$RUN.$ZONE (the private project's seed is the record alone)
+#   sc incus exec solo -- cat /etc/sandcastle/caddy.ready           # → PRIVATE=solo.pp.<suffix> / RENDERED=…; PUBLIC= per name once pushed
+#   sc incus exec web2 -- hostname -f                               # → web2.zp.<suffix>
+#   sc c zp:web2 -- true                                            # known_hosts line: web2.zp.<suffix>,shop-…,web2.e2e-…,web12-… (private first)
+#   (If the datasource read yields nothing on this image, /etc/sandcastle/hostnames on solo is empty until slice 3
+#    pushes it — record the outcome; the derived name on web2 is seeded either way.)
 sc hostname add zp:web2 api-$RUN.$ZONE; sc hostname list zp:web2; sc hostname remove zp:web2 api-$RUN.$ZONE
 # PASS: add prints "Public name: api-$RUN.$ZONE (certificate pending)" + the PUBLIC NAME/KIND/ZONE table (derived + 3 explicit);
 #       the instance key gains and then loses the name; `sc hostname remove zp:web2 web2.e2e-$RUN.$ZONE` is refused
@@ -2861,12 +2901,15 @@ sc-adm public-dns-zone remove $ZONE
 sc-adm incus delete <remote>:solo --project <prefix>-<tenant>-pp
 # PASS (GC, ≤ 5 min): the auth-app log shows "pruned orphaned machine hostname solo-$RUN.$ZONE (<tenant>/pp:solo)";
 #       `sc-adm public-dns-zone remove $ZONE` now succeeds.
-# Slices 2–3 add: A records for every name, one certificate per name (openssl s_client -servername per name),
-#       Caddy serving every name, known_hosts lines for private + public names, CERT ok for explicit names.
+# Slice 3 adds: A records for every name, one certificate per name pushed into /etc/sandcastle/tls/<name>/
+#       (openssl s_client -servername per name), Caddy serving every name (one PUBLIC= line per name in the
+#       marker), CERT ok for explicit names; the hostnames file pushed whole on `sc hostname add|remove`.
 ```
 
 **PASS (phase):** `scripts/e2e-pdz.sh` ends with `ALL PASS`, and the manual
 12d/12e extras above hold. Tenants provisioned before this feature keep working
-unchanged; their `/.sc` payload (the new `caddy-setup`) converges on the next
-`sc payload-sync` / `sc-adm tenant payload-sync <tenant>` — needed only before
-*their* projects claim a domain.
+unchanged; their `/.sc` payload (the per-name `caddy-setup`, a new payload
+version with slice 2 of #172) converges on the next `sc payload-sync` /
+`sc-adm tenant payload-sync <tenant>` — needed before *their* machines get a
+public name; machines that already ran an older `caddy-setup` are recreated,
+not migrated in place.

@@ -587,7 +587,7 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	// machine never trips the MITM warning and a real impostor always does.
 	// The machine's Machine Public Hostnames (ADR-0028) — the ensure read
 	// them off the instance — are recorded beside the private names, while
-	// HostKeyAlias stays the Machine Private Hostname (slice 2 of #172
+	// HostKeyAlias is the Machine Private Hostname (ADR-0028: every machine
 	// finalizes SSH naming) and the dial still goes to the tenant-bridge IP.
 	publicHostnames := ensured.PublicHostnames
 	names := v2MachineNames(summary, project, machineName, publicHostnames)
@@ -666,14 +666,12 @@ func derivedPublicHostnames(summary tenant.Summary, project, machine string) []s
 
 // formatCreateMachineV2 renders `sc create`'s text output. The machine's
 // public names are read off result.PublicHostnames — the set stamped on the
-// instance. A machine without public names renders exactly what it always
-// did. A machine whose project has a Project Domain replaces the DNS: line
-// with one "Public name:" line per name (rendered from the per-name
-// create-time certificate outcome in outcomes), and a bare such machine's
-// HTTPS: line names Let's Encrypt instead of the tenant-CA leaf. A machine
-// with explicit hostnames in a project WITHOUT a domain keeps its DNS: line
-// (its Machine Private Hostname is served) and adds the Public name: lines.
-// outcomes is ignored for --dry-run.
+// instance. Every machine prints its DNS: line (the Machine Private Hostname
+// is always served, ADR-0028); a machine with public names — derived or
+// explicit — adds one "Public name:" line per name under it, rendered from
+// the per-name create-time certificate outcome in outcomes. A machine
+// without public names renders exactly what it always did. outcomes is
+// ignored for --dry-run.
 func formatCreateMachineV2(summary tenant.Summary, project string, result incusx.CreateMachineV2Result, dryRun bool, outcomes map[string]machineCertificateOutcome) string {
 	var builder strings.Builder
 	verb := "created"
@@ -689,14 +687,11 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		fmt.Fprintf(&builder, "Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n")
 	}
 	// Canonical Machine Private Hostname; the default project also answers at
-	// the short alias (ADR-0018). A machine in a domain project is reached by
-	// its public names instead (slice 2 of #172 restores the private line).
+	// the short alias (ADR-0018). Public names come on top, never instead.
 	publicHostnames := result.PublicHostnames
 	if len(publicHostnames) == 0 && strings.TrimSpace(result.PublicHostname) != "" {
 		publicHostnames = []string{strings.TrimSpace(result.PublicHostname)}
 	}
-	derived := zoneModePublicHostname(summary, project, result.Name)
-	zone := derived != "" && len(publicHostnames) > 0
 	canonical := result.Name + "." + project + "." + summary.DNSSuffix
 	fqdn := canonical
 	if project == naming.DefaultProjectName {
@@ -722,13 +717,10 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		}
 		return lines
 	}
-	// nameLines tells the user how the machine will be reached by name.
+	// nameLines tells the user how the machine will be reached by name: the
+	// private name first, then every public name.
 	nameLines := func(booted bool) string {
-		lines := publicLines()
-		if !zone {
-			lines = append([]string{dnsLine(booted)}, lines...)
-		}
-		return strings.Join(lines, "\n")
+		return strings.Join(append([]string{dnsLine(booted)}, publicLines()...), "\n")
 	}
 	if dryRun {
 		builder.WriteString(nameLines(false))
@@ -741,7 +733,8 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		return builder.String()
 	}
 	switch {
-	case result.PrivateIP != "" && (zone || len(publicHostnames) > 0):
+	case result.PrivateIP != "" && len(publicHostnames) > 0:
+		// The Public name: lines are long; the IP stands alone above them.
 		fmt.Fprintf(&builder, "IP: %s\n%s\n", result.PrivateIP, nameLines(true))
 	case result.PrivateIP != "":
 		fmt.Fprintf(&builder, "IP: %s   %s\n", result.PrivateIP, nameLines(true))
@@ -752,10 +745,9 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 	// A bare machine has no user to ssh as, so the usual SSH advice would be a
 	// dead end. Point at the two things it does offer instead.
 	if result.Bare {
-		if zone {
-			fmt.Fprintf(&builder, "HTTPS: https://%s   (Let's Encrypt, certificate pending)\n", derived)
-		} else {
-			fmt.Fprintf(&builder, "HTTPS: https://%s   (Caddy with the tenant-CA leaf, proxying to localhost:3000)\n", canonical)
+		fmt.Fprintf(&builder, "HTTPS: https://%s   (Caddy with the tenant-CA leaf, proxying to localhost:3000)\n", canonical)
+		if len(publicHostnames) > 0 {
+			fmt.Fprintf(&builder, "HTTPS (public): https://%s   (Let's Encrypt; served once the certificate lands)\n", strings.Join(publicHostnames, ", https://"))
 		}
 		fmt.Fprintf(&builder, "Bare: no login user, no sshd — `sc connect` will not work; get a shell with: sc incus exec %s -- /bin/sh", result.Name)
 		return builder.String()

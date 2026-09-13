@@ -5544,3 +5544,73 @@ Decisions of #172 are the ADR's; what the slice ticket left to the implementer:
   `machine.Store` the handler already has) for the live machine set; a listing error
   degrades to project-level pruning only, never to "no machines".
 - **e2e 12g is a placeholder**, written for what slice 1 can show; slice 4 automates it.
+
+## 2026-09-13 — Machine Public Hostnames slice 2 (#174): the per-name machine contract
+
+Issue #174 (decisions on #172; ADR-0028; spec `docs/spec/machine-hostnames.md` §5). What the
+ticket left to the implementer:
+
+- **How the explicit names reach `machine.env` at first boot.** The profile is per project; an
+  explicit `--hostname` is per instance, and cloud-init runs the *profile's* user-data. Three
+  options: (a) an instance-level `cloud-init.user-data` override carrying the set (would make every
+  `--hostname` machine diverge from its profile forever, like `--bare` does on purpose), (b) let
+  `caddy-setup` query the guest socket (`/dev/incus/sock`, `GET /1.0/config/user.…`) at boot, (c) a
+  jinja read of the instance key through cloud-init's datasource. Chose (c):
+  `PUBLIC_HOSTNAMES={{ v1.local_hostname }}.<pd>,{{ ds.config['user.sandcastle.v2.public-hostnames']
+  | default('') if ds is defined and ds.config is defined else '' }}` — the LXD/Incus datasource
+  exposes every `user.*` instance key under `ds.config`, and the guard makes any other datasource
+  render `''` instead of a `CI_MISSING_JINJA_VAR` token or a template error. The derived name is
+  rendered **explicitly** from the Project Domain as well, so a project with a domain is correct even
+  if the datasource read yields nothing; `caddy-setup` normalizes and deduplicates. The seed is read
+  **once** (only when `/etc/sandcastle/hostnames` does not exist); the reconciler owns the file after
+  that (slice 3 pushes it whole). `PUBLIC_HOSTNAMES` rather than the spec's `FQDNS` — the line
+  carries public names only, never the private FQDN. The read is unverified on a live image in this
+  slice; e2e 12c/12g record what the image gives.
+- **The private identity is unconditional.** `fqdn:` and `FQDN=` are `<m>.<p>.<suffix>` for every
+  project; `V2ProfileUserData`'s `projectDomain` now only shapes the seed line. The profile of a
+  private project changes too (it gains the seed line, reading the instance record) because a
+  machine in a private project can carry explicit hostnames — so "private profile byte-identical to
+  pre-feature" (ADR-0027's promise) is gone on purpose; the *behaviour* of a private-only machine is
+  pinned instead by `TestCaddySetupPrivateOnly` (leaf fetch, private block, enable + restart, same
+  calls as before) and a `machine.env` without the line at all is tested to work.
+- **One `site_block` function, not a heredoc constant.** The per-name render loops over a bash
+  function; the golden test pins the rendered block text (handlers byte-identical to the ADR-0027
+  Caddyfile) and asserts exactly one `cat <<EOF` in the script, so every name goes through the same
+  block.
+- **Render to `.new`, `caddy validate`, then `mv`.** Not in the ticket. A refresh execed by the
+  reconciler must never replace a working Caddyfile with a broken one; a failed validate exits
+  nonzero, keeps the old Caddyfile *and* the old marker (the marker asserts what is in place).
+- **Both files must be non-empty (`-s`)**, not merely exist: a zero-byte `cert.pem` would fail
+  validation and take every name down with it.
+- **Marker gate = "per-name marker present".** `ReadyFor(host)` no longer compares names: a name
+  cannot be in the marker before its certificate is pushed, and the push's `--refresh` renders it.
+  What the gate now guards is "this machine runs the per-name contract" (`PRIVATE=` present), i.e.
+  it has per-name directories and `--refresh`. `Serves(host)` is the per-name question for
+  diagnostics and slice 3. **Legacy `MODE=` markers parse but never clear the gate** — the old push
+  path (private-leaf paths + `systemctl reload`) is gone with the drop-in, and pushing into a
+  machine running the old script would overwrite its only certificate. Those machines (ADR-0027
+  zone mode, or a stale payload) are recreated after a payload sync, not migrated in place; the
+  docs say so.
+- **The push moved to the per-host directory in this slice**, though the ticket said slice 3
+  rewires the reconciler. Leaving it would have had the interim reconciler overwrite the private
+  leaf with the derived name's Let's Encrypt certificate and never render the public block. Minimal
+  change: `PushMachineCertificate` gains `hostname` and loses `start` (the refresh starts Caddy when
+  inactive), creates the directory with a directory-type file push (the Incus file API makes no
+  parents), and its one exec appends the name to `/etc/sandcastle/hostnames` if missing before
+  `--refresh` — a Freeform Machine (no seed) is served as soon as its certificate lands, without
+  waiting for slice 3's hostnames push. `PushMachineHostnames` (file + refresh) is provided now as
+  the seam slice 3 wires; drift is checked against the name's `cert.pem`.
+- **`--refresh` does not re-seed a present file and never rewrites it**; an empty file means "no
+  public names". `machine-generalize` removes the file and every `tls/<name>/` directory so an
+  `sc image save` clone never inherits names or certificates.
+- **`sc create --bare` output** prints the private `HTTPS:` line always and an `HTTPS (public):`
+  line listing the public names (served once the certificate lands) — the old "Let's Encrypt,
+  certificate pending" line named a URL that did not serve yet; now the served one is first.
+- **HostKeyAlias** needed no code change (slice 1 already ordered private names first); the test
+  now pins derived-only, explicit-only, mixed and default-project orders, and the no-suffix case.
+- **Payload version bump.** Any change to `caddyIngressSetupScript`/`machineGeneralizeScript`
+  changes the content-derived payload version; existing tenants converge with `sc payload-sync` /
+  `sc-adm tenant payload-sync` (`--check` shows the drift) — only machines created *after* the sync
+  run the per-name script, hence "recreate" above.
+- **`sc project set-domain` help** no longer says "Naming Mode is fixed at creation"; the refusal
+  is described as the transitional guard it is.

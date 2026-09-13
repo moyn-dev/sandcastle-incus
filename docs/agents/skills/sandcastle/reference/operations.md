@@ -85,28 +85,37 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   before changing the project domain`). Re-claiming the same domain is a no-op.
 - The verbs need `sc login`; on a broker-only install they print `--domain is
   not available on this install`. All take `--dry-run`.
-- `sc create` in a zone project stamps `user.sandcastle.v2.public-hostname`
-  (= `<machine>.<domain>`; `private` in a private project) on the instance in
-  the create call and prints `Public name: <m>.<d> (A record pending,
-  certificate pending — see: sc project status <p>)` instead of the `DNS:`
-  line; `--bare` adds `HTTPS: https://<m>.<d>   (Let's Encrypt, certificate
-  pending)`; a Dev Image machine prints `(A record pending; no Caddy — no
-  certificate)`. Read the mode back with `sc ls` (FQDN + CERT columns) or
-  `sc incus config get <m> user.sandcastle.v2.public-hostname` — never guess it
-  from the project's current domain.
-- On the machine, `caddy-setup` (payload, `MODE=zone` from
-  `/etc/sandcastle/machine.env`) skips the sidecar leaf, writes the Caddyfile for
-  `<m>.<d>, *.<m>.<d>` against `/etc/sandcastle/tls/{cert,key}.pem`, adds a
-  `ConditionPathExists=` drop-in, enables Caddy, and writes the Caddy Setup
-  Marker `/etc/sandcastle/caddy.ready` (`MODE=`/`FQDN=`) last. Caddy stays
-  enabled-inactive until the Auth App pushes the certificate.
+- `sc create` in a project with a domain stamps the set
+  `user.sandcastle.v2.public-hostnames` (derived `<machine>.<domain>` + any
+  `--hostname`) on the instance in the create call and prints the usual `DNS:`
+  line followed by one `Public name: <h> (A record pending, certificate pending
+  — see: sc project status <p>)` line per name; `--bare` adds `HTTPS:
+  https://<m>.<p>.<suffix>   (Caddy with the tenant-CA leaf, …)` and `HTTPS
+  (public): https://<h>   (Let's Encrypt; served once the certificate lands)`;
+  a Dev Image machine prints `(A record pending; no Caddy — no certificate)`.
+  Read the set back with `sc ls` (FQDN + CERT columns), `sc hostname list`, or
+  `sc incus config get <m> user.sandcastle.v2.public-hostnames` — never guess
+  it from the project's current domain.
+- On the machine (ADR-0028, one contract for every machine): `caddy-setup`
+  (payload) fetches the **private** leaf from the sidecar into
+  `/etc/sandcastle/tls/{cert,key}.pem`, seeds `/etc/sandcastle/hostnames` from
+  `PUBLIC_HOSTNAMES=` in `/etc/sandcastle/machine.env` (once; the Auth App owns
+  the file afterwards), renders the private site block plus one block per
+  listed name whose `/etc/sandcastle/tls/<name>/{cert,key}.pem` both exist,
+  validates, enables + starts Caddy, and writes the Caddy Setup Marker
+  `/etc/sandcastle/caddy.ready` last (`PRIVATE=<m>.<p>.<suffix>`, one
+  `PUBLIC=<name>` per rendered block, `RENDERED=<unix ts>`). Caddy is always
+  running; a public name is served as soon as its certificate lands and
+  `sandcastle-caddy-setup --refresh` (execed by the reconciler after every
+  push; safe to run by hand) re-renders.
 - The Auth App's zone reconciler (30 s + instance events) does the rest with
   no operator step: public `A` records for `<m>.<d>` and `*.<m>.<d>` (DNS-only,
   tenant-bridge IP; stopped machines keep them, deleted ones lose them), one
   Let's Encrypt order per machine via DNS-01 (max 4 at once, backoff 1m → 6h
-  on failure, ARI-timed renewal with a fresh key), the cert + key push once the
-  marker names the hostname (`instance-started` re-pushes a stopped machine
-  within seconds), a per-pass fingerprint drift check, and the mirror into
+  on failure, ARI-timed renewal with a fresh key), the cert + key push into
+  `/etc/sandcastle/tls/<hostname>/` once a per-name marker exists
+  (`instance-started` re-pushes a stopped machine within seconds), a per-pass
+  fingerprint drift check against that directory, and the mirror into
   `user.sandcastle.v2.cert-state` / `cert-not-after` that `sc ls` and
   `sc project status` read. Freeform `incus launch` machines are stamped with
   their public name on first sight and treated the same; a Dev Image machine

@@ -79,10 +79,12 @@ type ZoneMachineServer interface {
 	// ReadInstanceFile returns a file's content; ErrInstanceFileNotFound when
 	// the instance answered but has no such file.
 	ReadInstanceFile(ctx context.Context, incusProject, name, path string) (string, error)
-	// PushMachineCertificate writes cert.pem.new / key.pem.new and runs the
-	// one mv + reload exec (spec §4.4); start adds `systemctl start caddy`
-	// for the first push.
-	PushMachineCertificate(ctx context.Context, incusProject, name, certPEM, keyPEM string, start bool) error
+	// PushMachineCertificate writes cert.pem.new / key.pem.new into the
+	// hostname's directory (tenant.MachineTLSHostDir) and runs the one
+	// mv + `sandcastle-caddy-setup --refresh` exec (spec §4.4, per name
+	// since ADR-0028); the refresh renders the block and reloads or starts
+	// Caddy, so there is no separate first-push start.
+	PushMachineCertificate(ctx context.Context, incusProject, name, hostname, certPEM, keyPEM string) error
 }
 
 // zoneDNSProvider is the slice of libdns the reconciler uses: read a zone,
@@ -512,9 +514,6 @@ func (r *zoneReconciler) reconcileTargetCertificate(ctx context.Context, t zoneT
 		r.logf("INFO", "zone reconcile: %s: certificate row created for %s/%s", t.hostname, m.IncusProject, m.Name)
 	}
 	var errs []error
-	// The first push also starts Caddy (enabled-inactive until now); a drift
-	// re-push clears pushed_serial below, so decide before that.
-	firstPush := row.PushedSerial == ""
 	if row.hasCertificate() && row.DirectoryURL != r.directory {
 		// Staging and production never mix (§3.5): re-order under the
 		// running directory.
@@ -543,7 +542,7 @@ func (r *zoneReconciler) reconcileTargetCertificate(ctx context.Context, t zoneT
 		}
 	}
 	if m.Running && row.usable(r.directory, now) && row.PushedSerial != row.Serial {
-		if pushed, err := r.push(ctx, t, row, firstPush, now); err != nil {
+		if pushed, err := r.push(ctx, t, row, now); err != nil {
 			errs = append(errs, err)
 		} else if pushed {
 			row.PushedSerial = row.Serial
@@ -601,7 +600,10 @@ func (r *zoneReconciler) refreshARI(ctx context.Context, row machineCertificate,
 }
 
 // markerReady reads the Caddy Setup Marker (§4.4 step 1). Absent, unparsable
-// or naming another host → false, logged once per instance + marker content.
+// or legacy (an ADR-0027 MODE=/FQDN= marker: no per-name contract on that
+// machine) → false, logged once per instance + marker content. A per-name
+// marker clears the gate for every hostname — the push lands in the name's
+// own directory and --refresh renders it.
 func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, error) {
 	m := t.machine
 	if !m.Running {
@@ -619,8 +621,8 @@ func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, e
 	marker, err := tenant.ParseCaddySetupMarker(content)
 	if err != nil || !marker.ReadyFor(t.hostname) {
 		r.logOnce(r.markerLogged, m.IncusProject+"/"+m.Name+"/"+content, "INFO",
-			"zone reconcile: %s/%s: caddy setup marker does not name %s (MODE=%s FQDN=%s); A record only",
-			m.IncusProject, m.Name, t.hostname, marker.Mode, marker.FQDN)
+			"zone reconcile: %s/%s: caddy setup marker does not clear the push gate for %s (%s); A record only",
+			m.IncusProject, m.Name, t.hostname, marker)
 		return false, nil
 	}
 	return true, nil
@@ -631,7 +633,7 @@ func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, e
 // is an error the caller logs and retries next pass.
 func (r *zoneReconciler) driftCheck(ctx context.Context, t zoneTarget, row machineCertificate) (bool, error) {
 	m := t.machine
-	content, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineTLSCertPath)
+	content, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineTLSHostCertPath(t.hostname))
 	if err != nil {
 		if errors.Is(err, ErrInstanceFileNotFound) {
 			return true, nil
@@ -653,7 +655,7 @@ func (r *zoneReconciler) driftCheck(ctx context.Context, t zoneTarget, row machi
 // push installs the row's certificate into the Machine (§4.4). It reports
 // whether the push happened; a failed push is an error retried next pass
 // without backoff, and a missing marker is neither.
-func (r *zoneReconciler) push(ctx context.Context, t zoneTarget, row machineCertificate, firstPush bool, now time.Time) (bool, error) {
+func (r *zoneReconciler) push(ctx context.Context, t zoneTarget, row machineCertificate, now time.Time) (bool, error) {
 	ready, err := r.markerReady(ctx, t)
 	if err != nil || !ready {
 		return false, err
@@ -663,7 +665,7 @@ func (r *zoneReconciler) push(ctx context.Context, t zoneTarget, row machineCert
 		return false, fmt.Errorf("%s: %w", t.hostname, err)
 	}
 	m := t.machine
-	if err := r.machines.PushMachineCertificate(ctx, m.IncusProject, m.Name, row.CertPEM, keyPEM, firstPush); err != nil {
+	if err := r.machines.PushMachineCertificate(ctx, m.IncusProject, m.Name, row.Hostname, row.CertPEM, keyPEM); err != nil {
 		return false, fmt.Errorf("%s: push certificate to %s/%s: %w", t.hostname, m.IncusProject, m.Name, err)
 	}
 	if _, err := setMachineCertificatePushedSerial(ctx, r.db, row.Hostname, row.Serial, now); err != nil {
