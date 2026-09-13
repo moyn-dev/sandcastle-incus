@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +19,7 @@ import (
 func TestPublicDNSZoneStore_AddEncryptsAndListsFingerprintOnly(t *testing.T) {
 	ctx := context.Background()
 	db := newClaimsTestDB(t)
-	if err := AddPublicDNSZone(ctx, db, "hase.de", "cf-1", "secret-token", "admin"); err != nil {
+	if err := AddPublicDNSZone(ctx, db, "hase.de", CloudflareZone{ID: "cf-1", Name: "hase.de"}, "secret-token", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	var stored string
@@ -31,7 +33,7 @@ func TestPublicDNSZoneStore_AddEncryptsAndListsFingerprintOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(zones) != 1 || zones[0].Zone != "hase.de" || zones[0].CloudflareZoneID != "cf-1" || zones[0].CreatedBy != "admin" {
+	if len(zones) != 1 || zones[0].Zone != "hase.de" || zones[0].CloudflareZone != "hase.de" || zones[0].CloudflareZoneID != "cf-1" || zones[0].CreatedBy != "admin" {
 		t.Fatalf("zones = %+v", zones)
 	}
 	if zones[0].TokenFingerprint != publicDNSZoneTokenFingerprint("secret-token") || len(zones[0].TokenFingerprint) != 8 {
@@ -44,12 +46,103 @@ func TestPublicDNSZoneStore_AddEncryptsAndListsFingerprintOnly(t *testing.T) {
 	if err != nil || token != "secret-token" {
 		t.Fatalf("token = %q, %v", token, err)
 	}
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, db, "hase.de")
+	if err != nil || cloudflareZone != "hase.de" || token != "secret-token" {
+		t.Fatalf("credentials = %q, %q, %v", cloudflareZone, token, err)
+	}
+	if _, _, err := PublicDNSZoneCredentials(ctx, db, "nope.de"); err == nil || err.Error() != "public DNS zone nope.de is not registered" {
+		t.Fatalf("credentials unknown: %v", err)
+	}
+}
+
+// A Public DNS Zone inside a Cloudflare zone stores the containing zone next
+// to the id, and hands it to the reconciler with the token.
+func TestPublicDNSZoneStore_ZoneInsideCloudflareZone(t *testing.T) {
+	ctx := context.Background()
+	db := newClaimsTestDB(t)
+	if err := AddPublicDNSZone(ctx, db, "e2e.sc.tc42.uk", CloudflareZone{ID: "cf-tc42", Name: "TC42.uk."}, "tok", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	zone, found, err := GetPublicDNSZone(ctx, db, "e2e.sc.tc42.uk")
+	if err != nil || !found || zone.CloudflareZone != "tc42.uk" || zone.CloudflareZoneID != "cf-tc42" {
+		t.Fatalf("zone = %+v, %v, %v", zone, found, err)
+	}
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, db, "e2e.sc.tc42.uk")
+	if err != nil || cloudflareZone != "tc42.uk" || token != "tok" {
+		t.Fatalf("credentials = %q, %q, %v", cloudflareZone, token, err)
+	}
+	// set-token re-resolves: the new token may be scoped to a closer zone.
+	if err := SetPublicDNSZoneToken(ctx, db, "e2e.sc.tc42.uk", CloudflareZone{ID: "cf-sc", Name: "sc.tc42.uk"}, "tok2"); err != nil {
+		t.Fatal(err)
+	}
+	cloudflareZone, token, err = PublicDNSZoneCredentials(ctx, db, "e2e.sc.tc42.uk")
+	if err != nil || cloudflareZone != "sc.tc42.uk" || token != "tok2" {
+		t.Fatalf("credentials after rotate = %q, %q, %v", cloudflareZone, token, err)
+	}
+}
+
+// A database created before cloudflare_zone existed gains the column in
+// place, and its rows — registered by exact name — read as their own
+// Cloudflare zone.
+func TestPublicDNSZoneStore_MigratesOldSchemaInPlace(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenDatabase(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE public_dns_zones (
+    zone               TEXT PRIMARY KEY,
+    cloudflare_zone_id TEXT NOT NULL,
+    encrypted_token    TEXT NOT NULL,
+    created_by         TEXT NOT NULL DEFAULT '',
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var columns int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('public_dns_zones') WHERE name = 'cloudflare_zone'`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 1 {
+		t.Fatalf("cloudflare_zone column count = %d", columns)
+	}
+	// An old row (inserted the old way, without the column).
+	key, err := secretEncryptionKey(ctx, db, publicDNSZoneEncryptionKeyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := encryptSecret(key, []byte("old-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO public_dns_zones (zone, cloudflare_zone_id, encrypted_token, created_by, created_at, updated_at)
+VALUES ('hase.de', 'cf-old', ?, 'root', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`, encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db); err != nil { // idempotent
+		t.Fatal(err)
+	}
+	zones, err := ListPublicDNSZones(ctx, db)
+	if err != nil || len(zones) != 1 || zones[0].CloudflareZone != "hase.de" || zones[0].CloudflareZoneID != "cf-old" {
+		t.Fatalf("zones = %+v, %v", zones, err)
+	}
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, db, "hase.de")
+	if err != nil || cloudflareZone != "hase.de" || token != "old-token" {
+		t.Fatalf("credentials = %q, %q, %v", cloudflareZone, token, err)
+	}
 }
 
 func TestPublicDNSZoneStore_RefusesDuplicateAndNesting(t *testing.T) {
 	ctx := context.Background()
 	db := newClaimsTestDB(t)
-	if err := AddPublicDNSZone(ctx, db, "sc.hase.de", "cf-1", "t", ""); err != nil {
+	if err := AddPublicDNSZone(ctx, db, "sc.hase.de", CloudflareZone{ID: "cf-1", Name: "hase.de"}, "t", ""); err != nil {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
@@ -58,7 +151,7 @@ func TestPublicDNSZoneStore_RefusesDuplicateAndNesting(t *testing.T) {
 		"dev.sc.hase.de": "public DNS zone dev.sc.hase.de overlaps registered zone sc.hase.de; zones may not nest",
 	}
 	for zone, want := range cases {
-		err := AddPublicDNSZone(ctx, db, zone, "cf-2", "t", "")
+		err := AddPublicDNSZone(ctx, db, zone, CloudflareZone{ID: "cf-2", Name: "hase.de"}, "t", "")
 		if err == nil || err.Error() != want {
 			t.Fatalf("add %s: err = %v, want %q", zone, err, want)
 		}
@@ -68,7 +161,7 @@ func TestPublicDNSZoneStore_RefusesDuplicateAndNesting(t *testing.T) {
 		}
 	}
 	// A sibling is fine — "hase.de" is not a suffix of "otherhase.de".
-	if err := AddPublicDNSZone(ctx, db, "otherhase.de", "cf-3", "t", ""); err != nil {
+	if err := AddPublicDNSZone(ctx, db, "otherhase.de", CloudflareZone{ID: "cf-3", Name: "otherhase.de"}, "t", ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -76,10 +169,10 @@ func TestPublicDNSZoneStore_RefusesDuplicateAndNesting(t *testing.T) {
 func TestPublicDNSZoneStore_SetTokenRotatesAndRemoveRefusesClaims(t *testing.T) {
 	ctx := context.Background()
 	db := newClaimsTestDB(t)
-	if err := AddPublicDNSZone(ctx, db, "hase.de", "cf-1", "old", ""); err != nil {
+	if err := AddPublicDNSZone(ctx, db, "hase.de", CloudflareZone{ID: "cf-1", Name: "hase.de"}, "old", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetPublicDNSZoneToken(ctx, db, "hase.de", "cf-1b", "new"); err != nil {
+	if err := SetPublicDNSZoneToken(ctx, db, "hase.de", CloudflareZone{ID: "cf-1b", Name: "hase.de"}, "new"); err != nil {
 		t.Fatal(err)
 	}
 	if token, _ := PublicDNSZoneToken(ctx, db, "hase.de"); token != "new" {
@@ -88,7 +181,7 @@ func TestPublicDNSZoneStore_SetTokenRotatesAndRemoveRefusesClaims(t *testing.T) 
 	if zone, _, _ := GetPublicDNSZone(ctx, db, "hase.de"); zone.CloudflareZoneID != "cf-1b" {
 		t.Fatalf("zone id after rotate = %q", zone.CloudflareZoneID)
 	}
-	if err := SetPublicDNSZoneToken(ctx, db, "nope.de", "x", "y"); err == nil || err.Error() != "public DNS zone nope.de is not registered" {
+	if err := SetPublicDNSZoneToken(ctx, db, "nope.de", CloudflareZone{ID: "x", Name: "nope.de"}, "y"); err == nil || err.Error() != "public DNS zone nope.de is not registered" {
 		t.Fatalf("set-token unknown: %v", err)
 	}
 
@@ -165,11 +258,12 @@ func TestNormalizePublicDNSZone(t *testing.T) {
 
 // ── Cloudflare validation against a fake server ──────────────────────────────
 
-// fakeCloudflare mimics the two v4 calls the validator makes.
+// fakeCloudflare mimics the two v4 calls the validator makes: a paged zone
+// listing (whatever the token is scoped to) and a one-record DNS read.
 type fakeCloudflare struct {
 	mu        sync.Mutex
 	validTok  string
-	zones     map[string]string // name -> id
+	zones     []CloudflareZone // what the token can see, in listing order
 	dnsDenied bool
 	calls     []string
 }
@@ -187,12 +281,23 @@ func (f *fakeCloudflare) handler() http.Handler {
 		}
 		switch {
 		case r.URL.Path == "/zones":
-			name := r.URL.Query().Get("name")
-			result := []map[string]any{}
-			if id, ok := f.zones[name]; ok {
-				result = append(result, map[string]any{"id": id, "name": name})
+			perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+			if perPage <= 0 {
+				perPage = 20
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": result})
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page <= 0 {
+				page = 1
+			}
+			totalPages := (len(f.zones) + perPage - 1) / perPage
+			result := []map[string]any{}
+			for i := (page - 1) * perPage; i < len(f.zones) && i < page*perPage; i++ {
+				result = append(result, map[string]any{"id": f.zones[i].ID, "name": f.zones[i].Name})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true, "errors": []any{}, "result": result,
+				"result_info": map[string]any{"page": page, "per_page": perPage, "total_pages": totalPages, "count": len(result), "total_count": len(f.zones)},
+			})
 		case strings.HasSuffix(r.URL.Path, "/dns_records"):
 			if f.dnsDenied {
 				w.WriteHeader(http.StatusForbidden)
@@ -206,17 +311,24 @@ func (f *fakeCloudflare) handler() http.Handler {
 	})
 }
 
+func (f *fakeCloudflare) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = nil
+}
+
 func TestCloudflareZoneClient_ValidatesTokenAndZone(t *testing.T) {
-	fake := &fakeCloudflare{validTok: "good", zones: map[string]string{"hase.de": "cf-hase"}}
+	fake := &fakeCloudflare{validTok: "good", zones: []CloudflareZone{{ID: "cf-hase", Name: "hase.de"}}}
 	server := httptest.NewServer(fake.handler())
 	defer server.Close()
 	client := CloudflareZoneClient{BaseURL: server.URL}
 
-	id, err := client.ValidateZoneToken(context.Background(), "hase.de", "good")
-	if err != nil || id != "cf-hase" {
-		t.Fatalf("validate = %q, %v", id, err)
+	// (a) the Public DNS Zone is the Cloudflare zone itself
+	resolved, err := client.ValidateZoneToken(context.Background(), "hase.de", "good")
+	if err != nil || resolved != (CloudflareZone{ID: "cf-hase", Name: "hase.de"}) {
+		t.Fatalf("validate = %+v, %v", resolved, err)
 	}
-	if len(fake.calls) != 2 || fake.calls[0] != "GET /zones?name=hase.de" || fake.calls[1] != "GET /zones/cf-hase/dns_records?per_page=1" {
+	if len(fake.calls) != 2 || fake.calls[0] != "GET /zones?per_page=50&page=1" || fake.calls[1] != "GET /zones/cf-hase/dns_records?per_page=1" {
 		t.Fatalf("calls = %v", fake.calls)
 	}
 
@@ -224,9 +336,14 @@ func TestCloudflareZoneClient_ValidatesTokenAndZone(t *testing.T) {
 	if err == nil || err.Error() != "Cloudflare rejected the token for zone hase.de: Authentication error" {
 		t.Fatalf("bad token: %v", err)
 	}
-	_, err = client.ValidateZoneToken(context.Background(), "igel.de", "good")
-	if err == nil || !strings.HasPrefix(err.Error(), "Cloudflare rejected the token for zone igel.de: ") {
-		t.Fatalf("invisible zone: %v", err)
+	// (c) no containing zone: a sibling, and a name that merely ends in the
+	// zone's characters without a label boundary
+	for _, zone := range []string{"igel.de", "otherhase.de"} {
+		_, err = client.ValidateZoneToken(context.Background(), zone, "good")
+		want := "Cloudflare rejected the token for zone " + zone + ": the token cannot see a zone containing " + zone + " (check Zone > Zone > Read and the zone the token is scoped to)"
+		if err == nil || err.Error() != want {
+			t.Fatalf("invisible zone %s: %v", zone, err)
+		}
 	}
 	fake.dnsDenied = true
 	_, err = client.ValidateZoneToken(context.Background(), "hase.de", "good")
@@ -245,6 +362,89 @@ func TestCloudflareZoneClient_ValidatesTokenAndZone(t *testing.T) {
 	}
 }
 
+// A Public DNS Zone may live inside its Cloudflare zone: the containing zone
+// is resolved, the DNS probe runs against it, and the longest match wins.
+func TestCloudflareZoneClient_ResolvesContainingZone(t *testing.T) {
+	fake := &fakeCloudflare{validTok: "good", zones: []CloudflareZone{{ID: "cf-tc42", Name: "tc42.uk"}, {ID: "cf-other", Name: "other.example"}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := CloudflareZoneClient{BaseURL: server.URL}
+
+	// (b) two labels deep inside the Cloudflare zone
+	resolved, err := client.ValidateZoneToken(context.Background(), "e2e.sc.tc42.uk", "good")
+	if err != nil || resolved != (CloudflareZone{ID: "cf-tc42", Name: "tc42.uk"}) {
+		t.Fatalf("validate = %+v, %v", resolved, err)
+	}
+	if len(fake.calls) != 2 || fake.calls[1] != "GET /zones/cf-tc42/dns_records?per_page=1" {
+		t.Fatalf("calls = %v", fake.calls)
+	}
+
+	// (d) the token sees both tc42.uk and sc.tc42.uk: the longest wins, in
+	// either listing order
+	for _, order := range [][]CloudflareZone{
+		{{ID: "cf-tc42", Name: "tc42.uk"}, {ID: "cf-sc", Name: "SC.tc42.uk."}},
+		{{ID: "cf-sc", Name: "sc.tc42.uk"}, {ID: "cf-tc42", Name: "tc42.uk"}},
+	} {
+		fake.zones = order
+		resolved, err = client.ValidateZoneToken(context.Background(), "e2e.sc.tc42.uk", "good")
+		if err != nil || resolved != (CloudflareZone{ID: "cf-sc", Name: "sc.tc42.uk"}) {
+			t.Fatalf("longest match (%v) = %+v, %v", order, resolved, err)
+		}
+		// the parent zone itself still resolves to the parent
+		resolved, err = client.ValidateZoneToken(context.Background(), "tc42.uk", "good")
+		if err != nil || resolved != (CloudflareZone{ID: "cf-tc42", Name: "tc42.uk"}) {
+			t.Fatalf("parent (%v) = %+v, %v", order, resolved, err)
+		}
+	}
+
+	// (c) a name inside no visible zone
+	_, err = client.ValidateZoneToken(context.Background(), "e2e.sc.tc42.de", "good")
+	if err == nil || !strings.HasPrefix(err.Error(), "Cloudflare rejected the token for zone e2e.sc.tc42.de: the token cannot see a zone containing e2e.sc.tc42.de") {
+		t.Fatalf("no containing zone: %v", err)
+	}
+
+	// paging: the containing zone sits on the second page of 50
+	fake.zones = nil
+	for i := 0; i < 55; i++ {
+		fake.zones = append(fake.zones, CloudflareZone{ID: fmt.Sprintf("cf-%d", i), Name: fmt.Sprintf("z%d.example", i)})
+	}
+	fake.zones = append(fake.zones, CloudflareZone{ID: "cf-tc42", Name: "tc42.uk"})
+	fake.reset()
+	resolved, err = client.ValidateZoneToken(context.Background(), "e2e.sc.tc42.uk", "good")
+	if err != nil || resolved.ID != "cf-tc42" {
+		t.Fatalf("paged validate = %+v, %v", resolved, err)
+	}
+	if len(fake.calls) != 3 || fake.calls[0] != "GET /zones?per_page=50&page=1" || fake.calls[1] != "GET /zones?per_page=50&page=2" || fake.calls[2] != "GET /zones/cf-tc42/dns_records?per_page=1" {
+		t.Fatalf("paged calls = %v", fake.calls)
+	}
+}
+
+func TestContainingCloudflareZone(t *testing.T) {
+	visible := []CloudflareZone{{ID: "1", Name: "tc42.uk"}, {ID: "2", Name: "sc.tc42.uk"}, {ID: "3", Name: "c42.uk"}}
+	for zone, want := range map[string]string{
+		"tc42.uk":             "1",
+		"e2e.tc42.uk":         "1",
+		"sc.tc42.uk":          "2",
+		"e2e.sc.tc42.uk":      "2",
+		"deep.e2e.sc.tc42.uk": "2",
+		"c42.uk":              "3",
+	} {
+		got, err := containingCloudflareZone(zone, visible)
+		if err != nil || got.ID != want {
+			t.Fatalf("%s → %+v, %v; want id %s", zone, got, err, want)
+		}
+	}
+	for _, zone := range []string{"tc42.de", "xtc42.uk", "uk", "sctc42.uk"} {
+		if got, err := containingCloudflareZone(zone, visible); err == nil {
+			t.Fatalf("%s → %+v, want no match", zone, got)
+		}
+	}
+	_, err := containingCloudflareZone("a.dup.example", []CloudflareZone{{ID: "1", Name: "dup.example"}, {ID: "2", Name: "dup.example"}})
+	if err == nil || err.Error() != "Cloudflare rejected the token for zone a.dup.example: the token sees 2 zones named dup.example; expected exactly one" {
+		t.Fatalf("duplicate: %v", err)
+	}
+}
+
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 type fakeClaimSource struct {
@@ -255,22 +455,28 @@ func (f *fakeClaimSource) ClaimsUnderZone(_ context.Context, zone string) ([]Pro
 	return f.claims[zone], nil
 }
 
+// fakeZoneValidator resolves a zone to the id in ids, in a Cloudflare zone
+// named by parents (defaulting to the zone itself).
 type fakeZoneValidator struct {
-	ids    map[string]string
-	reject string
-	calls  int
+	ids     map[string]string
+	parents map[string]string
+	calls   int
 }
 
-func (f *fakeZoneValidator) ValidateZoneToken(_ context.Context, zone, token string) (string, error) {
+func (f *fakeZoneValidator) ValidateZoneToken(_ context.Context, zone, token string) (CloudflareZone, error) {
 	f.calls++
 	if token != "good" {
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "Authentication error"}
+		return CloudflareZone{}, &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "Authentication error"}
 	}
 	id, ok := f.ids[zone]
 	if !ok {
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "the token cannot see a zone named " + zone}
+		return CloudflareZone{}, &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "the token cannot see a zone containing " + zone}
 	}
-	return id, nil
+	name := f.parents[zone]
+	if name == "" {
+		name = zone
+	}
+	return CloudflareZone{ID: id, Name: name}, nil
 }
 
 func zoneTestHandler(t *testing.T, validator CloudflareZoneValidator, claims ProjectDomainClaimSource) (http.Handler, string, string) {
@@ -344,7 +550,7 @@ func TestPublicDNSZonesAPI_AddListSetTokenRemove(t *testing.T) {
 
 	// dry-run add validates but stores nothing
 	code, out := zoneRequest(t, h, admin, http.MethodPost, "/api/public-dns-zones", `{"zone":"Hase.DE.","token":"good","dryRun":true}`)
-	if code != http.StatusOK || out["zone"] != "hase.de" || out["cloudflareZoneID"] != "cf-hase" || out["dryRun"] != true {
+	if code != http.StatusOK || out["zone"] != "hase.de" || out["cloudflareZone"] != "hase.de" || out["cloudflareZoneID"] != "cf-hase" || out["dryRun"] != true {
 		t.Fatalf("dry-run add: %d %v", code, out)
 	}
 	code, out = zoneRequest(t, h, admin, http.MethodGet, "/api/public-dns-zones", "")
@@ -364,7 +570,7 @@ func TestPublicDNSZonesAPI_AddListSetTokenRemove(t *testing.T) {
 
 	// real add
 	code, out = zoneRequest(t, h, admin, http.MethodPost, "/api/public-dns-zones", `{"zone":"hase.de","token":"good"}`)
-	if code != http.StatusCreated || out["zone"] != "hase.de" || out["cloudflareZoneID"] != "cf-hase" {
+	if code != http.StatusCreated || out["zone"] != "hase.de" || out["cloudflareZone"] != "hase.de" || out["cloudflareZoneID"] != "cf-hase" {
 		t.Fatalf("add: %d %v", code, out)
 	}
 	// exists + nesting → 409, and neither consults Cloudflare
@@ -393,7 +599,7 @@ func TestPublicDNSZonesAPI_AddListSetTokenRemove(t *testing.T) {
 		t.Fatalf("list: %d %v", code, out)
 	}
 	zone := zones[0].(map[string]any)
-	if zone["zone"] != "hase.de" || zone["cloudflareZoneID"] != "cf-hase" || zone["claims"] != float64(1) || zone["createdBy"] != "root" {
+	if zone["zone"] != "hase.de" || zone["cloudflareZone"] != "hase.de" || zone["cloudflareZoneID"] != "cf-hase" || zone["claims"] != float64(1) || zone["createdBy"] != "root" {
 		t.Fatalf("zone = %v", zone)
 	}
 	if fp, _ := zone["tokenFingerprint"].(string); len(fp) != 8 || fp == "good" {
@@ -459,6 +665,45 @@ func TestPublicDNSZonesAPI_AddListSetTokenRemove(t *testing.T) {
 	_, out = zoneRequest(t, h, admin, http.MethodGet, "/api/public-dns-zones", "")
 	if len(out["zones"].([]any)) != 0 {
 		t.Fatal("zone still listed after remove")
+	}
+}
+
+// A zone inside a Cloudflare zone: the API and the list carry the containing
+// zone's name (`cloudflareZone`) next to its id.
+func TestPublicDNSZonesAPI_ZoneInsideCloudflareZone(t *testing.T) {
+	validator := &fakeZoneValidator{ids: map[string]string{"e2e.sc.tc42.uk": "cf-tc42"}, parents: map[string]string{"e2e.sc.tc42.uk": "tc42.uk"}}
+	h, admin, _ := zoneTestHandler(t, validator, &fakeClaimSource{claims: map[string][]ProjectDomainClaimRef{}})
+	code, out := zoneRequest(t, h, admin, http.MethodPost, "/api/public-dns-zones", `{"zone":"e2e.sc.tc42.uk","token":"good"}`)
+	if code != http.StatusCreated || out["zone"] != "e2e.sc.tc42.uk" || out["cloudflareZone"] != "tc42.uk" || out["cloudflareZoneID"] != "cf-tc42" {
+		t.Fatalf("add: %d %v", code, out)
+	}
+	_, out = zoneRequest(t, h, admin, http.MethodGet, "/api/public-dns-zones", "")
+	zone := out["zones"].([]any)[0].(map[string]any)
+	if zone["zone"] != "e2e.sc.tc42.uk" || zone["cloudflareZone"] != "tc42.uk" || zone["cloudflareZoneID"] != "cf-tc42" {
+		t.Fatalf("list: %v", zone)
+	}
+	// the token is rotated to one scoped to a closer zone: list follows
+	validator.ids["e2e.sc.tc42.uk"], validator.parents["e2e.sc.tc42.uk"] = "cf-sc", "sc.tc42.uk"
+	code, out = zoneRequest(t, h, admin, http.MethodPut, "/api/public-dns-zones/e2e.sc.tc42.uk/token", `{"token":"good"}`)
+	if code != http.StatusOK || out["cloudflareZone"] != "sc.tc42.uk" || out["cloudflareZoneID"] != "cf-sc" {
+		t.Fatalf("set-token: %d %v", code, out)
+	}
+	_, out = zoneRequest(t, h, admin, http.MethodGet, "/api/public-dns-zones", "")
+	zone = out["zones"].([]any)[0].(map[string]any)
+	if zone["cloudflareZone"] != "sc.tc42.uk" || zone["cloudflareZoneID"] != "cf-sc" {
+		t.Fatalf("list after rotate: %v", zone)
+	}
+	code, out = zoneRequest(t, h, admin, http.MethodDelete, "/api/public-dns-zones/e2e.sc.tc42.uk?dryRun=1", "")
+	if code != http.StatusOK || out["cloudflareZone"] != "sc.tc42.uk" {
+		t.Fatalf("remove dry-run: %d %v", code, out)
+	}
+
+	// the client sees the same
+	server := httptest.NewServer(h)
+	defer server.Close()
+	zones, err := (DeviceClient{BaseURL: server.URL, AuthToken: admin}).ListPublicDNSZones(context.Background())
+	if err != nil || len(zones) != 1 || zones[0].CloudflareZone != "sc.tc42.uk" {
+		t.Fatalf("client list = %+v, %v", zones, err)
 	}
 }
 

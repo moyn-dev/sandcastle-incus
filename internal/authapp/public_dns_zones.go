@@ -20,16 +20,23 @@ import (
 // The public_dns_zones table is the install's registry of Public DNS Zones
 // (ADR-0027, spec public-dns-zones §1.3): the Cloudflare zones an admin has
 // handed the Auth App a token for, under which tenants claim Project Domains.
-// The zone name is the PK; the Cloudflare zone id is resolved once, at add
-// time, by the same call that proves the token works; the token itself is
-// sealed with encryptSecret and never leaves the process except towards
-// Cloudflare. Zones may not nest — a zone's claims are unambiguous only if
-// exactly one registered zone covers any given Project Domain.
+// The zone name is the PK. A Public DNS Zone may be the Cloudflare zone itself
+// (hase.de) or any name inside one (e2e.sc.tc42.uk inside tc42.uk): Cloudflare
+// tokens are zone-scoped, so the containing Cloudflare zone — name and id — is
+// resolved once, at add time, by the same call that proves the token works,
+// and every record is written into that zone with a name relative to it. The
+// token itself is sealed with encryptSecret and never leaves the process
+// except towards Cloudflare. Zones may not nest — a zone's claims are
+// unambiguous only if exactly one registered zone covers any given Project
+// Domain.
 
 // PublicDNSZone is a registered zone as the API and the CLI see it: never the
 // token, only its fingerprint.
 type PublicDNSZone struct {
-	Zone             string `json:"zone"`
+	Zone string `json:"zone"`
+	// CloudflareZone is the Cloudflare zone that contains Zone (equal to Zone
+	// when the Public DNS Zone is a Cloudflare zone itself).
+	CloudflareZone   string `json:"cloudflareZone"`
 	CloudflareZoneID string `json:"cloudflareZoneID"`
 	TokenFingerprint string `json:"tokenFingerprint"`
 	Claims           int    `json:"claims"`
@@ -104,7 +111,7 @@ func publicDNSZoneTokenFingerprint(token string) string {
 // the Claims count (the handler fills that from the claim source).
 func ListPublicDNSZones(ctx context.Context, db *sql.DB) ([]PublicDNSZone, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT zone, cloudflare_zone_id, encrypted_token, created_by, created_at, updated_at
+SELECT zone, cloudflare_zone, cloudflare_zone_id, encrypted_token, created_by, created_at, updated_at
 FROM public_dns_zones
 ORDER BY zone
 `)
@@ -120,9 +127,10 @@ ORDER BY zone
 	for rows.Next() {
 		var zone PublicDNSZone
 		var encrypted string
-		if err := rows.Scan(&zone.Zone, &zone.CloudflareZoneID, &encrypted, &zone.CreatedBy, &zone.CreatedAt, &zone.UpdatedAt); err != nil {
+		if err := rows.Scan(&zone.Zone, &zone.CloudflareZone, &zone.CloudflareZoneID, &encrypted, &zone.CreatedBy, &zone.CreatedAt, &zone.UpdatedAt); err != nil {
 			return nil, err
 		}
+		zone.CloudflareZone = cloudflareZoneOrSelf(zone.Zone, zone.CloudflareZone)
 		token, err := decryptSecret(key, encrypted)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt token for public DNS zone %s: %w", zone.Zone, err)
@@ -147,26 +155,45 @@ func GetPublicDNSZone(ctx context.Context, db *sql.DB, zone string) (PublicDNSZo
 	return PublicDNSZone{}, false, nil
 }
 
+// cloudflareZoneOrSelf resolves the stored cloudflare_zone: rows written
+// before the column existed carry ” and were registered by exact name, so
+// the Public DNS Zone is its own Cloudflare zone.
+func cloudflareZoneOrSelf(zone, cloudflareZone string) string {
+	cloudflareZone = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(cloudflareZone)), ".")
+	if cloudflareZone == "" {
+		return zone
+	}
+	return cloudflareZone
+}
+
 // PublicDNSZoneToken returns the decrypted Cloudflare token for a zone — for
-// the ACME issuer and the record reconciler, never for an HTTP response.
+// the ACME issuer, never for an HTTP response.
 func PublicDNSZoneToken(ctx context.Context, db *sql.DB, zone string) (string, error) {
+	_, token, err := PublicDNSZoneCredentials(ctx, db, zone)
+	return token, err
+}
+
+// PublicDNSZoneCredentials returns what the record reconciler needs to talk
+// to Cloudflare about a zone: the Cloudflare zone that contains it (the zone
+// name every libdns call must be addressed to) and the decrypted token.
+func PublicDNSZoneCredentials(ctx context.Context, db *sql.DB, zone string) (cloudflareZone, token string, err error) {
 	var encrypted string
-	err := db.QueryRowContext(ctx, `SELECT encrypted_token FROM public_dns_zones WHERE zone = ?`, zone).Scan(&encrypted)
+	err = db.QueryRowContext(ctx, `SELECT cloudflare_zone, encrypted_token FROM public_dns_zones WHERE zone = ?`, zone).Scan(&cloudflareZone, &encrypted)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "not-found"}
+		return "", "", &PublicDNSZoneError{Zone: zone, Kind: "not-found"}
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	key, err := secretEncryptionKey(ctx, db, publicDNSZoneEncryptionKeyKey)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	token, err := decryptSecret(key, encrypted)
+	plain, err := decryptSecret(key, encrypted)
 	if err != nil {
-		return "", fmt.Errorf("decrypt token for public DNS zone %s: %w", zone, err)
+		return "", "", fmt.Errorf("decrypt token for public DNS zone %s: %w", zone, err)
 	}
-	return string(token), nil
+	return cloudflareZoneOrSelf(zone, cloudflareZone), string(plain), nil
 }
 
 // CheckPublicDNSZoneAddable is the pre-flight for `add`: the zone must be new
@@ -195,7 +222,7 @@ func CheckPublicDNSZoneAddable(ctx context.Context, db *sql.DB, zone string) err
 // AddPublicDNSZone stores a validated zone. The caller has already run
 // CheckPublicDNSZoneAddable and the Cloudflare validation; the PK is the last
 // line of defence against a racing add.
-func AddPublicDNSZone(ctx context.Context, db *sql.DB, zone, cloudflareZoneID, token, createdBy string) error {
+func AddPublicDNSZone(ctx context.Context, db *sql.DB, zone string, cloudflare CloudflareZone, token, createdBy string) error {
 	if err := CheckPublicDNSZoneAddable(ctx, db, zone); err != nil {
 		return err
 	}
@@ -209,9 +236,9 @@ func AddPublicDNSZone(ctx context.Context, db *sql.DB, zone, cloudflareZoneID, t
 	}
 	now := timeNow().UTC().Format(time.RFC3339)
 	_, err = db.ExecContext(ctx, `
-INSERT INTO public_dns_zones (zone, cloudflare_zone_id, encrypted_token, created_by, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
-`, zone, cloudflareZoneID, encrypted, strings.TrimSpace(createdBy), now, now)
+INSERT INTO public_dns_zones (zone, cloudflare_zone, cloudflare_zone_id, encrypted_token, created_by, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`, zone, cloudflareZoneOrSelf(zone, cloudflare.Name), cloudflare.ID, encrypted, strings.TrimSpace(createdBy), now, now)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "PRIMARY KEY") {
 			return &PublicDNSZoneError{Zone: zone, Kind: "exists"}
@@ -222,8 +249,8 @@ VALUES (?, ?, ?, ?, ?, ?)
 }
 
 // SetPublicDNSZoneToken rotates a zone's token in place, re-recording the
-// Cloudflare zone id the new token resolved.
-func SetPublicDNSZoneToken(ctx context.Context, db *sql.DB, zone, cloudflareZoneID, token string) error {
+// Cloudflare zone (name and id) the new token resolved.
+func SetPublicDNSZoneToken(ctx context.Context, db *sql.DB, zone string, cloudflare CloudflareZone, token string) error {
 	key, err := secretEncryptionKey(ctx, db, publicDNSZoneEncryptionKeyKey)
 	if err != nil {
 		return err
@@ -233,9 +260,9 @@ func SetPublicDNSZoneToken(ctx context.Context, db *sql.DB, zone, cloudflareZone
 		return err
 	}
 	result, err := db.ExecContext(ctx, `
-UPDATE public_dns_zones SET cloudflare_zone_id = ?, encrypted_token = ?, updated_at = ?
+UPDATE public_dns_zones SET cloudflare_zone = ?, cloudflare_zone_id = ?, encrypted_token = ?, updated_at = ?
 WHERE zone = ?
-`, cloudflareZoneID, encrypted, timeNow().UTC().Format(time.RFC3339), zone)
+`, cloudflareZoneOrSelf(zone, cloudflare.Name), cloudflare.ID, encrypted, timeNow().UTC().Format(time.RFC3339), zone)
 	if err != nil {
 		return fmt.Errorf("set public DNS zone token: %w", err)
 	}
@@ -281,62 +308,124 @@ func NormalizePublicDNSZone(value string) (string, error) {
 	return domain.NormalizePublicDNSZone(value)
 }
 
-// CloudflareZoneValidator proves a token can see and manage a zone, returning
-// the Cloudflare zone id. A token Cloudflare rejects, or one that cannot see
-// exactly that zone, yields a *PublicDNSZoneError of Kind "rejected"; any
-// other error is a transport failure the caller should not treat as a
-// rejection.
+// CloudflareZone is a Cloudflare zone as resolved for a Public DNS Zone: the
+// zone the token can see that equals or contains the requested name.
+type CloudflareZone struct {
+	ID   string
+	Name string
+}
+
+// CloudflareZoneValidator proves a token can see and manage the Cloudflare
+// zone that contains a Public DNS Zone, returning that zone. A token
+// Cloudflare rejects, or one that sees no zone equal to or containing the
+// requested name, yields a *PublicDNSZoneError of Kind "rejected"; any other
+// error is a transport failure the caller should not treat as a rejection.
 type CloudflareZoneValidator interface {
-	ValidateZoneToken(ctx context.Context, zone, token string) (cloudflareZoneID string, err error)
+	ValidateZoneToken(ctx context.Context, zone, token string) (CloudflareZone, error)
 }
 
 // CloudflareZoneClient validates against the real API (or a test server via
-// BaseURL): `GET /zones?name=<zone>` must return exactly one zone the token can
-// see, then `GET /zones/<id>/dns_records?per_page=1` proves DNS read.
+// BaseURL): the zones the token can read (`GET /zones?per_page=50`, paged)
+// are searched for the longest name equal to the requested zone or its parent
+// on a label boundary; then `GET /zones/<id>/dns_records?per_page=1` against
+// that zone proves DNS read.
 type CloudflareZoneClient struct {
 	BaseURL string
 	HTTP    *http.Client
 }
 
-const cloudflareAPIBaseURL = "https://api.cloudflare.com/client/v4"
+const (
+	cloudflareAPIBaseURL   = "https://api.cloudflare.com/client/v4"
+	cloudflareZonesPerPage = 50
+	cloudflareZonesMaxPage = 100 // 5000 zones — a hard stop against a misbehaving server
+)
 
-func (c CloudflareZoneClient) ValidateZoneToken(ctx context.Context, zone, token string) (string, error) {
+func (c CloudflareZoneClient) ValidateZoneToken(ctx context.Context, zone, token string) (CloudflareZone, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "no token given"}
+		return CloudflareZone{}, &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "no token given"}
 	}
-	var zones []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+	visible, err := c.listZones(ctx, zone, token)
+	if err != nil {
+		return CloudflareZone{}, err
 	}
-	if err := c.get(ctx, zone, token, "/zones?name="+url.QueryEscape(zone), &zones); err != nil {
-		return "", err
+	resolved, err := containingCloudflareZone(zone, visible)
+	if err != nil {
+		return CloudflareZone{}, err
 	}
-	matches := []string{}
-	for _, candidate := range zones {
-		if strings.EqualFold(strings.TrimSuffix(candidate.Name, "."), zone) {
-			matches = append(matches, candidate.ID)
+	var records json.RawMessage
+	if err := c.get(ctx, zone, token, "/zones/"+url.PathEscape(resolved.ID)+"/dns_records?per_page=1", &records, nil); err != nil {
+		return CloudflareZone{}, err
+	}
+	return resolved, nil
+}
+
+// listZones pages through every zone the token can read.
+func (c CloudflareZoneClient) listZones(ctx context.Context, zone, token string) ([]CloudflareZone, error) {
+	var all []CloudflareZone
+	for page := 1; page <= cloudflareZonesMaxPage; page++ {
+		var zones []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		var info cloudflareResultInfo
+		path := fmt.Sprintf("/zones?per_page=%d&page=%d", cloudflareZonesPerPage, page)
+		if err := c.get(ctx, zone, token, path, &zones, &info); err != nil {
+			return nil, err
+		}
+		for _, z := range zones {
+			all = append(all, CloudflareZone{ID: z.ID, Name: z.Name})
+		}
+		if len(zones) == 0 || info.TotalPages <= page {
+			break
 		}
 	}
-	switch len(matches) {
+	return all, nil
+}
+
+// containingCloudflareZone picks, among the zones a token can see, the one
+// whose name equals zone or is its parent on a label boundary — the longest
+// such name. None is a rejection; two zones sharing the longest name is an
+// ambiguity Cloudflare should never produce, reported as such.
+func containingCloudflareZone(zone string, visible []CloudflareZone) (CloudflareZone, error) {
+	var best []CloudflareZone
+	for _, candidate := range visible {
+		name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate.Name)), ".")
+		if name == "" || (name != zone && !strings.HasSuffix(zone, "."+name)) {
+			continue
+		}
+		candidate.Name = name
+		switch {
+		case len(best) == 0 || len(name) > len(best[0].Name):
+			best = []CloudflareZone{candidate}
+		case len(name) == len(best[0].Name):
+			best = append(best, candidate)
+		}
+	}
+	switch len(best) {
 	case 0:
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "the token cannot see a zone named " + zone + " (check Zone > Zone > Read and the zone the token is scoped to)"}
+		return CloudflareZone{}, &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: "the token cannot see a zone containing " + zone + " (check Zone > Zone > Read and the zone the token is scoped to)"}
 	case 1:
+		return best[0], nil
 	default:
-		return "", &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: fmt.Sprintf("the token sees %d zones named %s; expected exactly one", len(matches), zone)}
+		return CloudflareZone{}, &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: fmt.Sprintf("the token sees %d zones named %s; expected exactly one", len(best), best[0].Name)}
 	}
-	zoneID := matches[0]
-	var records json.RawMessage
-	if err := c.get(ctx, zone, token, "/zones/"+url.PathEscape(zoneID)+"/dns_records?per_page=1", &records); err != nil {
-		return "", err
-	}
-	return zoneID, nil
+}
+
+// cloudflareResultInfo is the paging block of a Cloudflare list envelope.
+type cloudflareResultInfo struct {
+	Page       int `json:"page"`
+	PerPage    int `json:"per_page"`
+	TotalPages int `json:"total_pages"`
+	Count      int `json:"count"`
+	TotalCount int `json:"total_count"`
 }
 
 // get performs one authenticated Cloudflare v4 call. A non-success envelope
 // (auth failure, missing permission) is a rejection carrying Cloudflare's own
-// message; a transport or parse failure is returned as-is.
-func (c CloudflareZoneClient) get(ctx context.Context, zone, token, path string, out any) error {
+// message; a transport or parse failure is returned as-is. info, when given,
+// receives the envelope's result_info (paging) block.
+func (c CloudflareZoneClient) get(ctx context.Context, zone, token, path string, out any, info *cloudflareResultInfo) error {
 	base := strings.TrimRight(c.BaseURL, "/")
 	if base == "" {
 		base = cloudflareAPIBaseURL
@@ -366,7 +455,8 @@ func (c CloudflareZoneClient) get(ctx context.Context, zone, token, path string,
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"errors"`
-		Result json.RawMessage `json:"result"`
+		Result     json.RawMessage       `json:"result"`
+		ResultInfo *cloudflareResultInfo `json:"result_info"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return fmt.Errorf("cloudflare GET %s: HTTP %d: %s", path, response.StatusCode, strings.TrimSpace(string(data)))
@@ -380,6 +470,9 @@ func (c CloudflareZoneClient) get(ctx context.Context, zone, token, path string,
 			messages = append(messages, fmt.Sprintf("HTTP %d", response.StatusCode))
 		}
 		return &PublicDNSZoneError{Zone: zone, Kind: "rejected", Other: strings.Join(messages, "; ")}
+	}
+	if info != nil && envelope.ResultInfo != nil {
+		*info = *envelope.ResultInfo
 	}
 	if out != nil && len(envelope.Result) > 0 {
 		return json.Unmarshal(envelope.Result, out)

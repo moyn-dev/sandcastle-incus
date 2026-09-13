@@ -130,7 +130,7 @@ type zoneReconciler struct {
 	loggedMu       sync.Mutex
 	markerLogged   map[string]struct{}
 	skippedLogged  map[string]struct{}
-	providerByZone map[string]zoneDNSProvider
+	providerByZone map[string]zoneProvider
 }
 
 func newZoneReconciler(db *sql.DB, machines ZoneMachineServer, issuer certIssuer, directory string, logf func(level, format string, args ...any)) *zoneReconciler {
@@ -148,7 +148,7 @@ func newZoneReconciler(db *sql.DB, machines ZoneMachineServer, issuer certIssuer
 		inflight:       map[string]struct{}{},
 		markerLogged:   map[string]struct{}{},
 		skippedLogged:  map[string]struct{}{},
-		providerByZone: map[string]zoneDNSProvider{},
+		providerByZone: map[string]zoneProvider{},
 	}
 }
 
@@ -194,7 +194,7 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	}
 	// A fresh provider per pass and zone: a rotated token is picked up on the
 	// next pass, and the libdns/cloudflare zone-id cache lives one pass.
-	r.providerByZone = map[string]zoneDNSProvider{}
+	r.providerByZone = map[string]zoneProvider{}
 
 	var errs []error
 	var targets []zoneTarget
@@ -300,29 +300,41 @@ func (r *zoneReconciler) classify(ctx context.Context, m ZoneMachine, claimByPro
 	return zoneTarget{machine: m, hostname: stamp, claim: claim}, true, nil
 }
 
+// zoneProvider is a pass's libdns provider for a Public DNS Zone together
+// with the libdns zone name every call must be addressed to: the Cloudflare
+// zone containing the Public DNS Zone (equal to it when the zone is a
+// Cloudflare zone itself), in libdns form.
+type zoneProvider struct {
+	provider zoneDNSProvider
+	lz       string
+}
+
 // provider returns the pass's libdns provider for a zone, built from the
 // zone's decrypted token on first use.
-func (r *zoneReconciler) provider(ctx context.Context, zone string) (zoneDNSProvider, error) {
+func (r *zoneReconciler) provider(ctx context.Context, zone string) (zoneProvider, error) {
 	if p, ok := r.providerByZone[zone]; ok {
 		return p, nil
 	}
-	token, err := PublicDNSZoneToken(ctx, r.db, zone)
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, r.db, zone)
 	if err != nil {
-		return nil, fmt.Errorf("zone %s token: %w", zone, err)
+		return zoneProvider{}, fmt.Errorf("zone %s token: %w", zone, err)
 	}
-	p := r.providers(token)
+	p := zoneProvider{provider: r.providers(token), lz: libdnsZone(cloudflareZone)}
 	r.providerByZone[zone] = p
 	return p, nil
 }
 
 // libdnsZone is the zone name in libdns' conventional form (trailing dot),
-// the same shape certmagic hands the provider.
+// the same shape certmagic hands the provider. It must always be applied to
+// the Cloudflare zone, never to a Public DNS Zone that merely lives inside
+// one — Cloudflare knows only its own zones.
 func libdnsZone(zone string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zone)), ".") + "."
 }
 
 // desiredZoneRecords are the A records a set of zone targets needs (§4.2):
-// base + wildcard per Machine with a bridge address, relative to the zone.
+// base + wildcard per Machine with a bridge address, relative to the
+// Cloudflare zone (libdns form).
 // keep lists every live Machine's relative name, address or not, so a stopped
 // Machine's records survive.
 func desiredZoneRecords(zone string, targets []zoneTarget) (want map[string]netip.Addr, keep map[string]struct{}) {
@@ -350,13 +362,14 @@ func machineRelativeName(name string) string {
 // reconcileZoneRecords converges the A records of every claimed domain in
 // zone: missing/changed → SetRecords, records under a claimed domain with no
 // live Machine → DeleteRecords (covers deleted and out-of-band removed
-// Machines). Exactly one GetRecords per zone per pass.
+// Machines). Exactly one GetRecords per zone per pass. Every record name is
+// relative to the Cloudflare zone containing the Public DNS Zone.
 func (r *zoneReconciler) reconcileZoneRecords(ctx context.Context, zone string, targets []zoneTarget, claims []ProjectDomainClaim) error {
-	provider, err := r.provider(ctx, zone)
+	zp, err := r.provider(ctx, zone)
 	if err != nil {
 		return err
 	}
-	lz := libdnsZone(zone)
+	provider, lz := zp.provider, zp.lz
 	actual, err := provider.GetRecords(ctx, lz)
 	if err != nil {
 		return fmt.Errorf("zone %s: list records: %w", zone, err)
@@ -701,12 +714,12 @@ func (r *zoneReconciler) order(ctx context.Context, t zoneTarget) error {
 // hostname before an order (§4.3) — a crashed pass would otherwise fail the
 // next validation. Runs in the order goroutine with its own zone read.
 func (r *zoneReconciler) sweepChallengeRecords(ctx context.Context, t zoneTarget) error {
-	token, err := PublicDNSZoneToken(ctx, r.db, t.claim.Zone)
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, r.db, t.claim.Zone)
 	if err != nil {
 		return fmt.Errorf("zone %s token: %w", t.claim.Zone, err)
 	}
 	provider := r.providers(token)
-	lz := libdnsZone(t.claim.Zone)
+	lz := libdnsZone(cloudflareZone)
 	records, err := provider.GetRecords(ctx, lz)
 	if err != nil {
 		return fmt.Errorf("zone %s: list records for challenge sweep: %w", t.claim.Zone, err)
@@ -773,12 +786,12 @@ func (r *zoneReconciler) logOnce(set map[string]struct{}, key, level, format str
 // _acme-challenge TXT record under a released Project Domain (§4.6) — a
 // released domain can be re-claimed by another tenant.
 func releaseProjectDomainRecords(ctx context.Context, db *sql.DB, claim ProjectDomainClaim) error {
-	token, err := PublicDNSZoneToken(ctx, db, claim.Zone)
+	cloudflareZone, token, err := PublicDNSZoneCredentials(ctx, db, claim.Zone)
 	if err != nil {
 		return fmt.Errorf("zone %s token: %w", claim.Zone, err)
 	}
 	provider := newZoneDNSProvider(token)
-	lz := libdnsZone(claim.Zone)
+	lz := libdnsZone(cloudflareZone)
 	records, err := provider.GetRecords(ctx, lz)
 	if err != nil {
 		return fmt.Errorf("zone %s: list records: %w", claim.Zone, err)

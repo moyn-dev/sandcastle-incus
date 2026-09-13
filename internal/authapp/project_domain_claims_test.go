@@ -48,7 +48,15 @@ func TestNormalizeProjectDomain(t *testing.T) {
 
 func addZone(t *testing.T, db *sql.DB, zone string) {
 	t.Helper()
-	if err := AddPublicDNSZone(context.Background(), db, zone, "cf-"+zone, "tok", "root"); err != nil {
+	addZoneInside(t, db, zone, zone)
+}
+
+// addZoneInside registers zone as a Public DNS Zone living inside the
+// Cloudflare zone cloudflareZone (the two are equal for a zone that is a
+// Cloudflare zone itself).
+func addZoneInside(t *testing.T, db *sql.DB, zone, cloudflareZone string) {
+	t.Helper()
+	if err := AddPublicDNSZone(context.Background(), db, zone, CloudflareZone{ID: "cf-" + cloudflareZone, Name: cloudflareZone}, "tok", "root"); err != nil {
 		t.Fatal(err)
 	}
 }

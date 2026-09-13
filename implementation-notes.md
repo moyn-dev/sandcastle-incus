@@ -5379,3 +5379,53 @@ code changed; the decisions are about how the phase is wired and run:
 - **The installed skill copy** (`~/.claude/skills/sandcastle/`) was refreshed
   from the tracked `docs/agents/skills/sandcastle/`; the tracked directory
   remains the source.
+
+## 2026-09-13 — Public DNS Zones: a zone may live inside its Cloudflare zone
+
+The first live run of Phase 12 (`docs/e2e-runs/2026-09-13-phase12-public-dns-zones.md`,
+finding F1) failed at 12a: `sc admin public-dns-zone add e2e.sc.tc42.uk --token …`
+printed `Cloudflare rejected the token for zone e2e.sc.tc42.uk: the token cannot
+see a zone named e2e.sc.tc42.uk`. The Cloudflare zone is `tc42.uk`;
+`e2e.sc.tc42.uk` is a name inside it. The design (map #155, the #160 grilling,
+the tracked `.env.e2e.sample`) always allowed that — Cloudflare tokens are
+zone-scoped, records for `<m>.<pd>` are simply written into the containing
+zone under full names — but slice 2 resolved the zone id with an exact
+`GET /zones?name=<zone>`, and slice 6 handed the Public DNS Zone name itself to
+libdns, which would have failed the same way one step later.
+
+- **Resolution is "longest containing zone the token can see."**
+  `CloudflareZoneClient` now lists the token's zones (`GET /zones?per_page=50`,
+  following `result_info.total_pages`, capped at 100 pages) and picks the name
+  equal to the Public DNS Zone or its parent on a label boundary, longest
+  first, so a token that sees both `tc42.uk` and `sc.tc42.uk` lands on
+  `sc.tc42.uk`. Alternative considered: walking the name label by label with
+  `GET /zones?name=<candidate>` (one call per label, no paging) — rejected
+  because it costs up to N calls for a deep name and the listing is what Zone
+  Read grants anyway; a Sandcastle token sees a handful of zones. Two zones
+  with the same longest name is still an ambiguity error, as before. The
+  rejection text became `the token cannot see a zone containing <zone> (…)`.
+- **The Cloudflare zone name is persisted next to its id** (`cloudflare_zone`,
+  a guarded `ALTER TABLE … ADD COLUMN` via `ensureColumn`, so live and test
+  databases migrate in place). Rows from before the column carry `''` and are
+  read as "the zone itself" (`cloudflareZoneOrSelf`) — they were registered by
+  exact name, so that is exactly right; no backfill needed. `set-token`
+  re-resolves, since a rotated token may be scoped to a closer zone. The name
+  is exposed as `cloudflareZone` in the API/JSON, as `CLOUDFLARE-ZONE` in
+  `list`, and `add`/`set-token` print `(inside Cloudflare zone tc42.uk, id …)`
+  when it differs from the zone. Alternative: storing only the id and asking
+  Cloudflare for the name at reconcile time — rejected, the reconciler must
+  not depend on a Zone Read call per pass, and the name is what libdns wants.
+- **libdns is always addressed to the Cloudflare zone.** `PublicDNSZoneCredentials`
+  returns (cloudflare zone, token); the reconciler's per-pass provider cache
+  carries the libdns zone with the provider, and `reconcileZoneRecords`, the
+  `_acme-challenge` sweep and `releaseProjectDomainRecords` all use it, with
+  relative names via `libdns.RelativeName(<fqdn>, <cloudflare zone>)`
+  (`web.baum.e2e.sc` in `tc42.uk.`). The claimed-domain suffix filter and
+  `machineRelativeName` are therefore relative to the Cloudflare zone too.
+  The certmagic issuer needed no change: it is keyed by the Public DNS Zone
+  only to find the token, and its DNS-01 solver locates the zone by SOA.
+- **Tests** cover zone == Cloudflare zone, two labels deep, no containing
+  zone (sibling and non-label-boundary `otherhase.de`), longest match in both
+  listing orders, paging across two pages, the migration of an old-schema DB,
+  and a reconciler run with a subdomain zone (records, sweep, release all
+  relative to `tc42.uk.`, nothing written under `e2e.sc.tc42.uk.`).

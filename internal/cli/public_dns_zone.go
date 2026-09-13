@@ -235,7 +235,10 @@ func newPublicDNSZoneListCommand(config commandConfig, opts *rootOptions) *cobra
 
 func formatPublicDNSZoneResult(verb string, result authapp.PublicDNSZoneResult) string {
 	line := fmt.Sprintf("%s %s", verb, result.Zone)
-	if result.CloudflareZoneID != "" {
+	switch {
+	case result.CloudflareZone != "" && result.CloudflareZone != result.Zone:
+		line += fmt.Sprintf(" (inside Cloudflare zone %s, id %s)", result.CloudflareZone, result.CloudflareZoneID)
+	case result.CloudflareZoneID != "":
 		line += fmt.Sprintf(" (Cloudflare zone id %s)", result.CloudflareZoneID)
 	}
 	if result.DryRun {
@@ -247,10 +250,14 @@ func formatPublicDNSZoneResult(verb string, result authapp.PublicDNSZoneResult) 
 func formatPublicDNSZoneList(zones []authapp.PublicDNSZone) string {
 	var buffer bytes.Buffer
 	writer := tabwriter.NewWriter(&buffer, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(writer, "ZONE\tCLOUDFLARE-ID\tTOKEN\tCLAIMS\tCREATED-BY\tCREATED")
+	fmt.Fprintln(writer, "ZONE\tCLOUDFLARE-ZONE\tCLOUDFLARE-ID\tTOKEN\tCLAIMS\tCREATED-BY\tCREATED")
 	for _, zone := range zones {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\t%s\n",
-			zone.Zone, zone.CloudflareZoneID, zone.TokenFingerprint, zone.Claims, zone.CreatedBy, zone.CreatedAt)
+		cloudflareZone := zone.CloudflareZone
+		if cloudflareZone == "" {
+			cloudflareZone = zone.Zone
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			zone.Zone, cloudflareZone, zone.CloudflareZoneID, zone.TokenFingerprint, zone.Claims, zone.CreatedBy, zone.CreatedAt)
 	}
 	_ = writer.Flush()
 	return strings.TrimRight(buffer.String(), "\n")

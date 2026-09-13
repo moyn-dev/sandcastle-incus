@@ -172,6 +172,7 @@ func TestPublicDNSZoneDryRunOnMutatingVerbs(t *testing.T) {
 func TestPublicDNSZoneListTableAndJSON(t *testing.T) {
 	client := &fakePublicDNSZoneClient{zones: []authapp.PublicDNSZone{
 		{Zone: "hase.de", CloudflareZoneID: "cf-1", TokenFingerprint: "abcd1234", Claims: 2, CreatedBy: "root", CreatedAt: "2026-09-12T10:00:00Z"},
+		{Zone: "e2e.sc.tc42.uk", CloudflareZone: "tc42.uk", CloudflareZoneID: "cf-2", TokenFingerprint: "ffff0000", Claims: 0, CreatedBy: "root", CreatedAt: "2026-09-13T10:00:00Z"},
 	}}
 	userOut, userErr, adminOut, adminErr := runZoneOnBothRoots(t, commandConfig{authPublicDNSZones: client}, "list")
 	if userErr != nil || adminErr != nil {
@@ -179,14 +180,18 @@ func TestPublicDNSZoneListTableAndJSON(t *testing.T) {
 	}
 	for _, out := range []string{userOut, adminOut} {
 		lines := strings.Split(strings.TrimSpace(out), "\n")
-		if len(lines) != 2 {
+		if len(lines) != 3 {
 			t.Fatalf("list output:\n%s", out)
 		}
-		if strings.Join(strings.Fields(lines[0]), " ") != "ZONE CLOUDFLARE-ID TOKEN CLAIMS CREATED-BY CREATED" {
+		if strings.Join(strings.Fields(lines[0]), " ") != "ZONE CLOUDFLARE-ZONE CLOUDFLARE-ID TOKEN CLAIMS CREATED-BY CREATED" {
 			t.Fatalf("header = %q", lines[0])
 		}
-		if strings.Join(strings.Fields(lines[1]), " ") != "hase.de cf-1 abcd1234 2 root 2026-09-12T10:00:00Z" {
+		// An older Auth App that sends no cloudflareZone renders the zone itself.
+		if strings.Join(strings.Fields(lines[1]), " ") != "hase.de hase.de cf-1 abcd1234 2 root 2026-09-12T10:00:00Z" {
 			t.Fatalf("row = %q", lines[1])
+		}
+		if strings.Join(strings.Fields(lines[2]), " ") != "e2e.sc.tc42.uk tc42.uk cf-2 ffff0000 0 root 2026-09-13T10:00:00Z" {
+			t.Fatalf("row = %q", lines[2])
 		}
 	}
 	jsonOut, err := executeAdminForTestWithConfig(t, commandConfig{authPublicDNSZones: client}, "public-dns-zone", "list", "--output", "json")
@@ -236,5 +241,16 @@ func TestPublicDNSZoneRequiresLogin(t *testing.T) {
 	_, err := executeAdminForTestWithConfig(t, commandConfig{adminConfig: admin}, "public-dns-zone", "list")
 	if err == nil || !strings.Contains(err.Error(), "CLI Auth Token is required") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestFormatPublicDNSZoneResultNamesTheContainingZone(t *testing.T) {
+	inside := formatPublicDNSZoneResult("Registered public DNS zone", authapp.PublicDNSZoneResult{Zone: "e2e.sc.tc42.uk", CloudflareZone: "tc42.uk", CloudflareZoneID: "cf-1"})
+	if inside != "Registered public DNS zone e2e.sc.tc42.uk (inside Cloudflare zone tc42.uk, id cf-1)" {
+		t.Fatalf("inside = %q", inside)
+	}
+	same := formatPublicDNSZoneResult("Registered public DNS zone", authapp.PublicDNSZoneResult{Zone: "tc42.uk", CloudflareZone: "tc42.uk", CloudflareZoneID: "cf-1"})
+	if same != "Registered public DNS zone tc42.uk (Cloudflare zone id cf-1)" {
+		t.Fatalf("same = %q", same)
 	}
 }

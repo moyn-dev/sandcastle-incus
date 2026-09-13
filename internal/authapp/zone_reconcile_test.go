@@ -269,9 +269,17 @@ type zoneHarness struct {
 
 func newZoneHarness(t *testing.T, machines ...ZoneMachine) *zoneHarness {
 	t.Helper()
+	return newZoneHarnessInside(t, "hase.de", "hase.de", "baum.hase.de", machines...)
+}
+
+// newZoneHarnessInside is newZoneHarness with the Public DNS Zone living
+// inside the Cloudflare zone cloudflareZone and domain claimed under it for
+// acme/zp.
+func newZoneHarnessInside(t *testing.T, zone, cloudflareZone, domain string, machines ...ZoneMachine) *zoneHarness {
+	t.Helper()
 	db := newClaimsTestDB(t)
-	addZone(t, db, "hase.de")
-	claim(t, db, "baum.hase.de", "acme", "zp")
+	addZoneInside(t, db, zone, cloudflareZone)
+	claim(t, db, domain, "acme", "zp")
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	h := &zoneHarness{t: t, ctx: context.Background(), db: db, fleet: newFakeZoneFleet(machines...), dns: newFakeDNS(), now: now}
 	h.issuer = &fakeCertIssuer{now: now, lifetime: 90 * 24 * time.Hour}
@@ -371,6 +379,74 @@ func TestZoneReconcile_RecordConvergence(t *testing.T) {
 	}
 	if h.dns.sets != sets || h.dns.deletes != deletes {
 		t.Fatalf("unchanged fleet wrote records: sets %d→%d deletes %d→%d", sets, h.dns.sets, deletes, h.dns.deletes)
+	}
+}
+
+// A Public DNS Zone inside its Cloudflare zone (e2e.sc.tc42.uk in tc42.uk):
+// every libdns call is addressed to the Cloudflare zone and every record name
+// is relative to it — for convergence, the challenge sweep and the release.
+func TestZoneReconcile_ZoneInsideCloudflareZone(t *testing.T) {
+	const cf = "tc42.uk."
+	web := ZoneMachine{Tenant: "acme", Project: "zp", IncusProject: "sc2-acme-zp", Name: "web",
+		ProjectDomain: "baum.e2e.sc.tc42.uk", PublicHostname: "web.baum.e2e.sc.tc42.uk", BridgeIPv4: "10.249.7.9", Running: true}
+	h := newZoneHarnessInside(t, "e2e.sc.tc42.uk", "tc42.uk", "baum.e2e.sc.tc42.uk", web)
+	h.dns.add(cf, libdns.RR{Name: "gone.baum.e2e.sc", Type: "A", Data: "10.249.7.6"})   // deleted machine under the domain
+	h.dns.add(cf, libdns.RR{Name: "*.gone.baum.e2e.sc", Type: "A", Data: "10.249.7.6"}) // deleted machine under the domain
+	h.dns.add(cf, libdns.RR{Name: "web.baum.e2e.sc", Type: "A", Data: "10.249.7.1"})    // stale address
+	h.dns.add(cf, libdns.RR{Name: "other.e2e.sc", Type: "A", Data: "203.0.113.2"})      // in the zone, not under a claimed domain
+	h.dns.add(cf, libdns.RR{Name: "www", Type: "A", Data: "203.0.113.1"})               // Cloudflare zone apex neighbour
+	h.dns.add(cf, libdns.RR{Name: "_acme-challenge.web.baum.e2e.sc", Type: "TXT", Data: "left-over"})
+	h.dns.add(cf, libdns.RR{Name: "_acme-challenge.web.baum", Type: "TXT", Data: "unrelated"}) // web.baum.tc42.uk, not ours
+	if _, err := requestMachineCertificate(h.ctx, h.db, machineCertificateRequest{
+		Hostname: "web.baum.e2e.sc.tc42.uk", Tenant: "acme", Project: "zp", Machine: "web", Zone: "e2e.sc.tc42.uk", DirectoryURL: LetsEncryptStagingDirectory,
+	}, h.now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.pass(); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	got := recordNames(h.dns.list(cf), "A")
+	want := []string{"*.web.baum.e2e.sc=10.249.7.9", "other.e2e.sc=203.0.113.2", "web.baum.e2e.sc=10.249.7.9", "www=203.0.113.1"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("A records in %s = %v, want %v", cf, got, want)
+	}
+	if len(h.dns.list("e2e.sc.tc42.uk.")) != 0 {
+		t.Fatalf("records written to the Public DNS Zone name instead of the Cloudflare zone: %v", h.dns.list("e2e.sc.tc42.uk."))
+	}
+	gotTXT := recordNames(h.dns.list(cf), "TXT")
+	if strings.Join(gotTXT, ",") != "_acme-challenge.web.baum=unrelated" {
+		t.Fatalf("TXT after sweep = %v", gotTXT)
+	}
+	if h.logged("swept 1 leftover challenge record(s)") != 1 {
+		t.Fatal("sweep not logged")
+	}
+	// The issuer is keyed by the Public DNS Zone (that is where the token
+	// lives); certmagic finds the Cloudflare zone by itself.
+	if len(h.issuer.calls) != 1 || h.issuer.calls[0].Zone != "e2e.sc.tc42.uk" || strings.Join(h.issuer.calls[0].Hostnames, ",") != "web.baum.e2e.sc.tc42.uk,*.web.baum.e2e.sc.tc42.uk" {
+		t.Fatalf("issuer calls = %+v", h.issuer.calls)
+	}
+
+	// Release: A + challenge records under the domain go, relative to the
+	// Cloudflare zone; the neighbours stay.
+	old := newZoneDNSProvider
+	newZoneDNSProvider = h.dns.provider
+	t.Cleanup(func() { newZoneDNSProvider = old })
+	h.dns.add(cf, libdns.RR{Name: "_acme-challenge.web.baum.e2e.sc", Type: "TXT", Data: "mid-order"})
+	c, found, err := ReleaseProjectDomainClaim(h.ctx, h.db, "acme", "zp")
+	if err != nil || !found {
+		t.Fatalf("release: %v %v", found, err)
+	}
+	if err := onProjectDomainReleased(h.ctx, h.db, c); err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	got = recordNames(h.dns.list(cf), "A")
+	if strings.Join(got, ",") != "other.e2e.sc=203.0.113.2,www=203.0.113.1" {
+		t.Fatalf("A records after release = %v", got)
+	}
+	gotTXT = recordNames(h.dns.list(cf), "TXT")
+	if strings.Join(gotTXT, ",") != "_acme-challenge.web.baum=unrelated" {
+		t.Fatalf("TXT after release = %v", gotTXT)
 	}
 }
 

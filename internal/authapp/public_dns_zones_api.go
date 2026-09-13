@@ -26,6 +26,7 @@ type PublicDNSZoneRequest struct {
 // of any dry run of them).
 type PublicDNSZoneResult struct {
 	Zone             string `json:"zone"`
+	CloudflareZone   string `json:"cloudflareZone,omitempty"`
 	CloudflareZoneID string `json:"cloudflareZoneID,omitempty"`
 	DryRun           bool   `json:"dryRun,omitempty"`
 }
@@ -123,20 +124,22 @@ func (h handler) publicDNSZonesAPI(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, publicDNSZoneErrorStatus(err), err)
 			return
 		}
-		zoneID, err := h.zoneValidator().ValidateZoneToken(r.Context(), zone, request.Token)
+		cloudflare, err := h.zoneValidator().ValidateZoneToken(r.Context(), zone, request.Token)
 		if err != nil {
 			writeAPIError(w, cloudflareErrorStatus(err), err)
 			return
 		}
+		result := PublicDNSZoneResult{Zone: zone, CloudflareZone: cloudflareZoneOrSelf(zone, cloudflare.Name), CloudflareZoneID: cloudflare.ID}
 		if request.DryRun {
-			writeJSON(w, http.StatusOK, PublicDNSZoneResult{Zone: zone, CloudflareZoneID: zoneID, DryRun: true})
+			result.DryRun = true
+			writeJSON(w, http.StatusOK, result)
 			return
 		}
-		if err := AddPublicDNSZone(r.Context(), h.db, zone, zoneID, request.Token, user.UserKey); err != nil {
+		if err := AddPublicDNSZone(r.Context(), h.db, zone, cloudflare, request.Token, user.UserKey); err != nil {
 			writeAPIError(w, publicDNSZoneErrorStatus(err), err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, PublicDNSZoneResult{Zone: zone, CloudflareZoneID: zoneID})
+		writeJSON(w, http.StatusCreated, result)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 	}
@@ -180,20 +183,22 @@ func (h handler) publicDNSZoneAPI(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, &PublicDNSZoneError{Zone: zone, Kind: "not-found"})
 			return
 		}
-		zoneID, err := h.zoneValidator().ValidateZoneToken(r.Context(), zone, request.Token)
+		cloudflare, err := h.zoneValidator().ValidateZoneToken(r.Context(), zone, request.Token)
 		if err != nil {
 			writeAPIError(w, cloudflareErrorStatus(err), err)
 			return
 		}
+		result := PublicDNSZoneResult{Zone: zone, CloudflareZone: cloudflareZoneOrSelf(zone, cloudflare.Name), CloudflareZoneID: cloudflare.ID}
 		if request.DryRun {
-			writeJSON(w, http.StatusOK, PublicDNSZoneResult{Zone: zone, CloudflareZoneID: zoneID, DryRun: true})
+			result.DryRun = true
+			writeJSON(w, http.StatusOK, result)
 			return
 		}
-		if err := SetPublicDNSZoneToken(r.Context(), h.db, zone, zoneID, request.Token); err != nil {
+		if err := SetPublicDNSZoneToken(r.Context(), h.db, zone, cloudflare, request.Token); err != nil {
 			writeAPIError(w, publicDNSZoneErrorStatus(err), err)
 			return
 		}
-		writeJSON(w, http.StatusOK, PublicDNSZoneResult{Zone: zone, CloudflareZoneID: zoneID})
+		writeJSON(w, http.StatusOK, result)
 	case r.Method == http.MethodDelete && action == "":
 		dryRun := r.URL.Query().Get("dryRun") == "1" || r.URL.Query().Get("dryRun") == "true"
 		if dryRun {
@@ -210,7 +215,7 @@ func (h handler) publicDNSZoneAPI(w http.ResponseWriter, r *http.Request) {
 				writeAPIError(w, publicDNSZoneErrorStatus(err), err)
 				return
 			}
-			writeJSON(w, http.StatusOK, PublicDNSZoneResult{Zone: zone, CloudflareZoneID: existing.CloudflareZoneID, DryRun: true})
+			writeJSON(w, http.StatusOK, PublicDNSZoneResult{Zone: zone, CloudflareZone: existing.CloudflareZone, CloudflareZoneID: existing.CloudflareZoneID, DryRun: true})
 			return
 		}
 		if err := RemovePublicDNSZone(r.Context(), h.db, h.domainClaimSource(), zone); err != nil {

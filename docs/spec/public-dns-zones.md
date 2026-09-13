@@ -12,7 +12,9 @@ plus the existing **Machine Private Hostname**, **Tenant DNS Suffix**, **Tenant 
 
 ## Goal
 
-An admin registers a Cloudflare zone (`sc-adm public-dns-zone add hase.de --token …`); a tenant
+An admin registers a Public DNS Zone (`sc-adm public-dns-zone add hase.de --token …`) — a Cloudflare
+zone, or any name inside one (`e2e.sc.tc42.uk` inside `tc42.uk`; records are written into the
+containing Cloudflare zone under their full names); a tenant
 claims a Project Domain under it (`sc project create baum --domain baum.hase.de`); every Machine
 created afterwards in that project is `web.baum.hase.de` with a public A record pointing at its
 tenant-bridge address and a Let's Encrypt certificate for `web.baum.hase.de` + `*.web.baum.hase.de`,
@@ -71,6 +73,7 @@ entries carry it so `sc project status` and `sc create` can read it without a se
 ```sql
 CREATE TABLE IF NOT EXISTS public_dns_zones (
     zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)
+    cloudflare_zone    TEXT NOT NULL DEFAULT '',  -- the Cloudflare zone containing it, resolved at add time ('' = zone itself, pre-column rows)
     cloudflare_zone_id TEXT NOT NULL,             -- resolved at add time
     encrypted_token    TEXT NOT NULL,             -- AES-GCM under the auth_app_meta deployment key (see 1.4)
     created_by         TEXT NOT NULL DEFAULT '',  -- admin user key
@@ -130,7 +133,16 @@ Zone tokens and machine private keys are encrypted with the same mechanism as
 in `auth_app_meta`). Generalize those two functions to `encryptSecret`/`decryptSecret` with a
 purpose-labelled key (`public_dns_zone_key`, `machine_cert_key`) derived on first use the way
 `oidcEncryptionKey` is. Tokens are never logged, never returned by any endpoint (`list` shows the
-zone, the Cloudflare zone id, a token fingerprint `sha256[:8]`, created-by, created-at).
+zone, the containing Cloudflare zone and its id, a token fingerprint `sha256[:8]`, created-by, created-at).
+
+A Public DNS Zone may be the Cloudflare zone itself or any name inside one. Cloudflare tokens are
+zone-scoped, so the zone the token can see that equals the Public DNS Zone or is its parent on a
+label boundary (the longest such match) is the **Cloudflare zone** of the row; every libdns call
+(`GetRecords`/`SetRecords`/`DeleteRecords`, the challenge sweep, the release) is addressed to it,
+and record names are `libdns.RelativeName(<fqdn>, <cloudflare zone>)` — `web.baum.e2e.sc` in
+`tc42.uk` for `web.baum.e2e.sc.tc42.uk`. certmagic's DNS-01 solver finds the zone by SOA on its
+own. `cloudflare_zone` is added by a guarded `ALTER TABLE` so older databases migrate in place;
+their rows were registered by exact name and read as their own Cloudflare zone.
 
 ### 1.5 Machine Certificate state (derived, never stored)
 
@@ -166,21 +178,27 @@ public-dns-zone set-token <zone> (--token <t> | --token-file <path> | token on s
 ```
 
 - `add`: normalizes the zone (lowercase, trim, strip trailing dot; labels via `validateDomainLabels`),
-  calls the Auth App, which validates the token against Cloudflare (`GET /zones?name=<zone>` must
-  return exactly one zone the token can see, then a `GET /zones/<id>/dns_records?per_page=1` to prove
-  `DNS` read) and stores the id. Existing zone → `public DNS zone <zone> is already registered (use set-token to rotate its token)`.
+  calls the Auth App, which validates the token against Cloudflare: it lists the zones the token can
+  read (`GET /zones?per_page=50`, following `result_info` paging) and picks the one whose name equals
+  the Public DNS Zone or is its parent on a label boundary — the longest such match (the token may see
+  both `tc42.uk` and `sc.tc42.uk`); then `GET /zones/<id>/dns_records?per_page=1` against it proves
+  `DNS` read. The Cloudflare zone's name and id are stored. No containing zone →
+  `Cloudflare rejected the token for zone <zone>: the token cannot see a zone containing <zone> (check Zone > Zone > Read and the zone the token is scoped to)`.
+  Existing zone → `public DNS zone <zone> is already registered (use set-token to rotate its token)`.
   Nesting (`add hase.de` when `sc.hase.de` exists, or vice versa) →
   `public DNS zone <zone> overlaps registered zone <other>; zones may not nest`.
   Rejected token → `Cloudflare rejected the token for zone <zone>: <api message>` and nothing is stored.
-- `list`: table `ZONE  CLOUDFLARE-ID  TOKEN  CLAIMS  CREATED-BY  CREATED` (TOKEN = fingerprint, CLAIMS = count
-  of Project Domains under it).
+- `list`: table `ZONE  CLOUDFLARE-ZONE  CLOUDFLARE-ID  TOKEN  CLAIMS  CREATED-BY  CREATED` (CLOUDFLARE-ZONE = the
+  containing Cloudflare zone resolved at add time, TOKEN = fingerprint, CLAIMS = count of Project Domains under it).
 - `remove`: refused while any Project Domain is claimed under it —
   `public DNS zone <zone> still has claimed project domains: <d1> (<tenant>/<project>), …; unset them first`.
   No `--force`.
-- `set-token`: same Cloudflare validation as `add`, rotates in place, same rejection text.
+- `set-token`: same Cloudflare validation as `add`, rotates in place (re-resolving the Cloudflare zone —
+  the new token may be scoped to a closer one), same rejection text.
 - Required token scope, printed in the `add` help text and docs: `Zone > DNS > Edit` + `Zone > Zone > Read`
-  on that zone (Read is used only at `add`/`set-token`; runtime needs `DNS > Edit`). Cloudflare tokens cannot be
-  scoped below zone level — recommend dedicating a zone.
+  on the Cloudflare zone containing the Public DNS Zone (Read is used only at `add`/`set-token`; runtime
+  needs `DNS > Edit`). Cloudflare tokens cannot be scoped below zone level — registering a name inside
+  the zone keeps Sandcastle's records apart, not the token's reach.
 
 ### 2.2 Project Domain (tenant)
 
@@ -279,8 +297,8 @@ like `--acme-email`, which doubles as the ACME account contact. Not per zone.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| `GET` | `/api/public-dns-zones` | — | `{zones:[{zone, cloudflareZoneID, tokenFingerprint, claims, createdBy, createdAt}]}` |
-| `POST` | `/api/public-dns-zones` | `{zone, token, dryRun}` | 201 `{zone, cloudflareZoneID}`; 409 exists/nesting; 422 Cloudflare rejected |
+| `GET` | `/api/public-dns-zones` | — | `{zones:[{zone, cloudflareZone, cloudflareZoneID, tokenFingerprint, claims, createdBy, createdAt}]}` |
+| `POST` | `/api/public-dns-zones` | `{zone, token, dryRun}` | 201 `{zone, cloudflareZone, cloudflareZoneID}`; 409 exists/nesting; 422 Cloudflare rejected |
 | `PUT` | `/api/public-dns-zones/{zone}/token` | `{token, dryRun}` | 200; 404; 422 |
 | `DELETE` | `/api/public-dns-zones/{zone}` | `?dryRun=1` | 204; 409 with the claim list |
 

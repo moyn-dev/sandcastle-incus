@@ -109,18 +109,24 @@ certificate** to cover the new project. Prefer the tenant path.
 
 ```bash
 sc-adm public-dns-zone add hase.de --token-file ~/.cf-token   # or --token <t>, or token on stdin
-sc-adm public-dns-zone list [--output json]                   # ZONE CLOUDFLARE-ID TOKEN CLAIMS CREATED-BY CREATED
+sc-adm public-dns-zone add e2e.sc.tc42.uk --token-file ~/.cf   # a name inside the Cloudflare zone tc42.uk
+sc-adm public-dns-zone list [--output json]                   # ZONE CLOUDFLARE-ZONE CLOUDFLARE-ID TOKEN CLAIMS CREATED-BY CREATED
 sc-adm public-dns-zone set-token hase.de --token-file ~/.new  # rotate in place
 sc-adm public-dns-zone remove hase.de                         # refused while Project Domains are claimed; no --force
 ```
 
-The registry of Cloudflare zones tenants may claim Project Domains under
-(ADR-0027). Every verb takes `--dry-run`; all are thin clients of the Auth App's
+The registry of names tenants may claim Project Domains under (ADR-0027). A
+Public DNS Zone may be the Cloudflare zone itself or any name inside it; the
+Cloudflare zone that contains it is resolved at `add` time (longest match among
+the zones the token can see) and shown by `list` as `CLOUDFLARE-ZONE`. Records
+are written into that Cloudflare zone under their full names. Every verb takes `--dry-run`; all are thin clients of the Auth App's
 admin-only `/api/public-dns-zones`, so they need `sc login` as a Sandcastle
 Admin, work through a tunnel, and need no redeploy. `sc admin public-dns-zone …`
 is the same command. Token scope: `Zone > DNS > Edit` + `Zone > Zone > Read` on
-that one zone. `add`/`set-token` validate against Cloudflare first and store
-nothing on rejection (`Cloudflare rejected the token for zone <zone>: …`). Zones
+the containing Cloudflare zone. `add`/`set-token` validate against Cloudflare
+first and store nothing on rejection (`Cloudflare rejected the token for zone
+<zone>: …`; no containing zone visible → `… the token cannot see a zone
+containing <zone> (check Zone > Zone > Read and the zone the token is scoped to)`). Zones
 may not nest (`… overlaps registered zone <other>; zones may not nest`). The
 token is encrypted at rest and never shown — `TOKEN` is an 8-hex fingerprint.
 

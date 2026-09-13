@@ -655,6 +655,7 @@ CREATE TABLE IF NOT EXISTS routes (
 -- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 2: zone registry ─────────
 CREATE TABLE IF NOT EXISTS public_dns_zones (
     zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)
+    cloudflare_zone    TEXT NOT NULL DEFAULT '',  -- the Cloudflare zone containing it, resolved at add time ('' = zone itself)
     cloudflare_zone_id TEXT NOT NULL,             -- resolved at add time
     encrypted_token    TEXT NOT NULL,             -- AES-GCM under the public_dns_zone_key deployment key (secrets.go)
     created_by         TEXT NOT NULL DEFAULT '',  -- admin user key
@@ -713,6 +714,11 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 		return err
 	}
 	if err := migrateCloudIdentityConfigsTenantScope(ctx, db); err != nil {
+		return err
+	}
+	// Public DNS Zones: a zone may live inside its Cloudflare zone; databases
+	// from before the column carry '' and are read as "the zone itself".
+	if err := ensureColumn(ctx, db, "public_dns_zones", "cloudflare_zone", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// Public DNS Zones slice 5 (ADR-0027): acme_storage + machine_certificates.

@@ -2647,8 +2647,11 @@ manual.
 
 ```bash
 sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")
+# PASS: $ZONE may be the Cloudflare zone itself or a name inside it (e2e.sc.tc42.uk in tc42.uk);
+#       add prints "(inside Cloudflare zone <cf-zone>, id …)" in the latter case.
 sc-adm public-dns-zone list
-# PASS: the zone lists with a Cloudflare id, an 8-hex token fingerprint and CLAIMS 0.
+# PASS: the zone lists with CLOUDFLARE-ZONE = the Cloudflare zone the token is scoped to, a
+#       Cloudflare id, an 8-hex token fingerprint and CLAIMS 0.
 sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")   # again
 # PASS: "public DNS zone $ZONE is already registered (use set-token to rotate its token)".
 sc-adm public-dns-zone add garbage.$ZONE --token-file <(printf %s not-a-token)
