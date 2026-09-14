@@ -40,6 +40,7 @@ func newTailnetPublishCommand(config commandConfig, opts *rootOptions) *cobra.Co
 			if !projectAuthAppAvailable(bound, "") {
 				return fmt.Errorf("Tailnet publication requires sc login to an Auth App")
 			}
+			verboseCLI(bound, "tailnet: Auth App request started; waiting for Cloudflare DNS-01, Tenant Sidecar Caddy, and DNS publication")
 			result, err := (authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken, Verbose: os.Getenv("VERBOSE") == "1"}).PublishTailnetService(cmd.Context(), authapp.TailnetPublicationRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
 			if err != nil {
 				return err
