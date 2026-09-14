@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 )
 
 // Machine Tunnels are deliberately separate from Machine Public Hostnames and
@@ -51,7 +52,7 @@ func newTunnelPublishCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if err != nil {
 				return err
 			}
-			if err := installMachineTunnel(cmd.Context(), config, summary.V2IncusProjectName(project), machine, runTokenResult.Token); err != nil {
+			if err := installMachineTunnel(cmd.Context(), config, summary.V2IncusProjectName(project), machine, runTokenResult.Token, name); err != nil {
 				return err
 			}
 			payload := map[string]any{"project": project, "machine": machine, "hostname": name, "port": port, "status": "pending"}
@@ -64,7 +65,7 @@ func newTunnelPublishCommand(config commandConfig, opts *rootOptions) *cobra.Com
 	return command
 }
 
-func installMachineTunnel(ctx context.Context, config commandConfig, incusProject, machine, token string) error {
+func installMachineTunnel(ctx context.Context, config commandConfig, incusProject, machine, token, hostname string) error {
 	runner := config.incusRunner
 	if runner == nil {
 		runner = runIncusCLI
@@ -90,6 +91,9 @@ func installMachineTunnel(ctx context.Context, config commandConfig, incusProjec
 	script := "set -eu; if ! test -x /usr/local/bin/cloudflared; then case $(dpkg --print-architecture) in amd64) a=amd64;; arm64) a=arm64;; *) echo unsupported architecture >&2; exit 1;; esac; curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$a -o /usr/local/bin/cloudflared; chmod 755 /usr/local/bin/cloudflared; fi; systemctl daemon-reload; systemctl enable --now sandcastle-cloudflared.service"
 	if err := run([]string{"exec", machine, "--", "sh", "-ceu", script}, nil); err != nil {
 		return fmt.Errorf("start machine tunnel: %w", err)
+	}
+	if err := run([]string{"config", "set", machine, meta.KeyV2MachineTunnelHostname, hostname}, nil); err != nil {
+		return fmt.Errorf("record machine tunnel: %w", err)
 	}
 	return nil
 }

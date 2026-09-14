@@ -98,6 +98,10 @@ const (
 	// installed ones; empty until one is installed. Reconciler-written,
 	// Machines with a public name only.
 	KeyV2CertNotAfter = Prefix + "v2.cert-not-after"
+	// KeyV2MachineTunnelHostname and KeyV2TailnetPublications are opt-in
+	// publication summaries rendered by `sc ls`.
+	KeyV2MachineTunnelHostname = Prefix + "v2.machine-tunnel-hostname"
+	KeyV2TailnetPublications   = Prefix + "v2.tailnet-publications"
 	// KeyBinaryVersion records the release version (vX.Y.Z) of the sandcastle
 	// binary last pushed into an instance (#124 §7) — auth-app, broker, tenant
 	// sidecars. Written on every binary push; missing means "unknown" and is
@@ -229,11 +233,13 @@ type Machine struct {
 	// its CERT column. CertNotAfter mirrors KeyV2CertNotAfter: the earliest
 	// expiry among the machine's installed certificates. All are only read
 	// when the machine has at least one public name.
-	PublicHostname  string            `json:"publicHostname,omitempty"`
-	PublicHostnames []string          `json:"publicHostnames,omitempty"`
-	CertState       string            `json:"certState,omitempty"`
-	CertStates      map[string]string `json:"certStates,omitempty"`
-	CertNotAfter    string            `json:"certNotAfter,omitempty"`
+	PublicHostname        string            `json:"publicHostname,omitempty"`
+	PublicHostnames       []string          `json:"publicHostnames,omitempty"`
+	CertState             string            `json:"certState,omitempty"`
+	CertStates            map[string]string `json:"certStates,omitempty"`
+	CertNotAfter          string            `json:"certNotAfter,omitempty"`
+	MachineTunnelHostname string            `json:"machineTunnelHostname,omitempty"`
+	TailnetPublications   []string          `json:"tailnetPublications,omitempty"`
 }
 
 // PublicNames returns the machine's public-name set, tolerating a payload
@@ -340,6 +346,8 @@ func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.CertStates = ParseCertStates(config[KeyV2CertState], machine.PublicHostnames)
 	machine.CertState = WorstCertState(machine.CertStates, machine.PublicHostnames)
 	machine.CertNotAfter = strings.TrimSpace(config[KeyV2CertNotAfter])
+	machine.MachineTunnelHostname = strings.TrimSpace(config[KeyV2MachineTunnelHostname])
+	machine.TailnetPublications = ParsePublicHostnames(config[KeyV2TailnetPublications])
 	return machine
 }
 

@@ -92,9 +92,9 @@ func TestFormatMachineListZoneModeGolden(t *testing.T) {
 	got := formatMachineList(listPayload{Tenant: summary, AllProjects: true, Machines: []meta.Machine{private, zone}}, listRenderOptions{})
 	want := strings.Join([]string{
 		"the current install",
-		"PROJECT  MACHINE  TYPE  FQDN                            CERT  IP         CREATED  STATE",
-		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     10.1.0.9   -        running",
-		"zp       api      CT    api.baum.hase.de (+1)           ok    10.1.0.12  -        running",
+		"PROJECT  MACHINE  TYPE  FQDN                            CERT  TUNNEL  TAILNET  IP         CREATED  STATE",
+		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     -       -        10.1.0.9   -        running",
+		"zp       api      CT    api.baum.hase.de (+1)           ok    -       -        10.1.0.12  -        running",
 	}, "\n")
 	if got != want {
 		t.Fatalf("sc ls table:\n%s\nwant:\n%s", got, want)

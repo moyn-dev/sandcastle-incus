@@ -742,7 +742,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 	fmt.Fprintf(&builder, "%s\n", listContext(result))
 	if len(result.Machines) > 0 || len(result.Unmanaged) > 0 {
 		table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
+		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tTUNNEL\tTAILNET\tIP\tCREATED\tSTATE")
 		for _, machine := range result.Machines {
 			state := "stopped"
 			if machine.Running {
@@ -750,12 +750,14 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				machine.Project,
 				machine.Name,
 				machineTypeCell(machine),
 				machineFQDN(result.Tenant, machine),
 				machineCertCell(machine),
+				displayValue(machine.MachineTunnelHostname),
+				displayValue(strings.Join(machine.TailnetPublications, ",")),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
 				state,

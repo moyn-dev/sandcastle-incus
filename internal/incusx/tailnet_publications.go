@@ -7,6 +7,7 @@ import (
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
@@ -90,6 +91,17 @@ func (s ZoneMachineServer) Publish(ctx context.Context, p authapp.TailnetPublica
 	ip := strings.TrimSpace(out)
 	if ip == "" {
 		return "", fmt.Errorf("Tenant Sidecar has no Tailscale IPv4")
+	}
+	// Mirror the opt-in publication onto the Machine so both live and cached
+	// `sc ls` paths can render it without querying Cloudflare.
+	machineServer := s.Server.UseProject(target.IncusProject)
+	instance, _, err := machineServer.GetInstance(target.Name)
+	if err != nil {
+		return "", fmt.Errorf("read Machine publication metadata: %w", err)
+	}
+	names := append(meta.ParsePublicHostnames(instance.Config[meta.KeyV2TailnetPublications]), p.Hostname)
+	if err := stampInstanceConfig(machineServer, target.Name, map[string]string{meta.KeyV2TailnetPublications: meta.FormatPublicHostnames(names)}); err != nil {
+		return "", fmt.Errorf("record Tailnet publication: %w", err)
 	}
 	return ip, nil
 }
