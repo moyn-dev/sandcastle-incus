@@ -157,7 +157,10 @@ func uninstallMachineTunnel(ctx context.Context, config commandConfig, incusProj
 	if err := run([]string{"exec", machine, "--", "sh", "-ceu", script}, nil); err != nil {
 		return fmt.Errorf("stop machine tunnel: %w", err)
 	}
-	if err := run([]string{"config", "unset", machine, meta.KeyV2MachineTunnelHostname}, nil); err != nil {
+	// An empty value is semantically absent to DecodeMachine and is safe to
+	// repeat. Incus rejects `config unset` when an earlier unpublish already
+	// removed the key, which would make an otherwise idempotent lifecycle fail.
+	if err := run([]string{"config", "set", machine, meta.KeyV2MachineTunnelHostname, ""}, nil); err != nil {
 		return fmt.Errorf("clear machine tunnel record: %w", err)
 	}
 	return nil
