@@ -88,6 +88,22 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
+	if found, err := RouteHostnameRegistered(r.Context(), h.db, hostname); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	} else if found {
+		writeAPIError(w, http.StatusConflict, fmt.Errorf("%q is already published as a Public Route", hostname))
+		return
+	}
+	token, err := PublicDNSZoneToken(r.Context(), h.db, zone.Zone)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := (cf{token: token, baseURL: h.cloudflareBaseURL}).tailnetPreflight(r.Context(), zone.CloudflareZoneID, hostname); err != nil {
+		writeAPIError(w, http.StatusConflict, err)
+		return
+	}
 	issued, err := h.tailnetIssuer.Issue(r.Context(), zone.Zone, []string{hostname})
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, fmt.Errorf("issue tailnet certificate: %w", err))
@@ -100,11 +116,6 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadGateway, fmt.Errorf("configure Tenant Sidecar: %w", err))
 		return
 	}
-	token, err := PublicDNSZoneToken(r.Context(), h.db, zone.Zone)
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err)
-		return
-	}
 	if err := (cf{token: token, baseURL: h.cloudflareBaseURL}).tailnetA(r.Context(), zone.CloudflareZoneID, hostname, ip); err != nil {
 		writeAPIError(w, http.StatusBadGateway, fmt.Errorf("set tailnet DNS: %w", err))
 		return
@@ -113,6 +124,22 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		steps = append(steps, "tailscale api: Tenant Sidecar IPv4 "+ip, "cloudflare api: DNS-only A record set for "+hostname, "caddy api: Tenant Sidecar HTTPS route installed")
 	}
 	writeJSON(w, http.StatusOK, TailnetPublicationResult{Hostname: hostname, TargetPort: 443, TailnetIPv4: ip, Trace: steps})
+}
+
+func (c cf) tailnetPreflight(ctx context.Context, zoneID, hostname string) error {
+	var records []struct {
+		Type string `json:"type"`
+	}
+	if err := c.do(ctx, "GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(hostname), nil, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Type == "CNAME" {
+			return fmt.Errorf("%q is already published through a Machine Tunnel", hostname)
+		}
+		return fmt.Errorf("%q is already published as a Tailnet service", hostname)
+	}
+	return nil
 }
 
 func tailnetPublicationZone(ctx context.Context, db *sql.DB, hostname string) (PublicDNSZone, error) {
