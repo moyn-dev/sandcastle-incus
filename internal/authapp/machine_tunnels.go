@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -79,7 +80,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func provisionTunnel(ctx context.Context, token, zoneID, host string, port int) (string, error) {
-	c := cf{token}
+	c := cf{token: token}
 	account, e := c.account(ctx, zoneID)
 	if e != nil {
 		return "", e
@@ -99,7 +100,10 @@ func provisionTunnel(ctx context.Context, token, zoneID, host string, port int) 
 	return out, e
 }
 
-type cf struct{ token string }
+type cf struct {
+	token   string
+	baseURL string // test seam; production uses Cloudflare's v4 endpoint.
+}
 
 func (c cf) do(x context.Context, m, p string, b, out any) error {
 	var r io.Reader
@@ -107,7 +111,11 @@ func (c cf) do(x context.Context, m, p string, b, out any) error {
 		v, _ := json.Marshal(b)
 		r = bytes.NewReader(v)
 	}
-	q, e := http.NewRequestWithContext(x, m, "https://api.cloudflare.com/client/v4"+p, r)
+	baseURL := c.baseURL
+	if baseURL == "" {
+		baseURL = "https://api.cloudflare.com/client/v4"
+	}
+	q, e := http.NewRequestWithContext(x, m, baseURL+p, r)
 	if e != nil {
 		return e
 	}
@@ -147,7 +155,7 @@ func (c cf) tunnel(x context.Context, a, n string) (string, error) {
 	var v []struct {
 		ID string `json:"id"`
 	}
-	if e := c.do(x, "GET", "/accounts/"+a+"/cfd_tunnel?name="+n+"&is_deleted=false", nil, &v); e != nil {
+	if e := c.do(x, "GET", "/accounts/"+a+"/cfd_tunnel?name="+url.QueryEscape(n)+"&is_deleted=false", nil, &v); e != nil {
 		return "", e
 	}
 	if len(v) > 0 {
@@ -160,7 +168,24 @@ func (c cf) tunnel(x context.Context, a, n string) (string, error) {
 	return o.ID, e
 }
 func (c cf) dns(x context.Context, z, h, t string) error {
+	var records []struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	if err := c.do(x, "GET", "/zones/"+z+"/dns_records?name="+url.QueryEscape(h), nil, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Type == "CNAME" && sameTunnelTarget(record.Content, t) {
+			return nil
+		}
+		return fmt.Errorf("%q already has a DNS record; remove it before publishing a Machine Tunnel", h)
+	}
 	return c.do(x, "POST", "/zones/"+z+"/dns_records", map[string]any{"type": "CNAME", "name": h, "content": t, "proxied": true}, nil)
+}
+
+func sameTunnelTarget(got, want string) bool {
+	return strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(got), "."), strings.TrimSuffix(strings.TrimSpace(want), "."))
 }
 
 func (c DeviceClient) ProvisionMachineTunnel(x context.Context, q MachineTunnelRequest) (MachineTunnelResult, error) {

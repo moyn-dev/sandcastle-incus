@@ -5,6 +5,15 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-14 — Machine Tunnel publish is idempotent for its own CNAME
+
+Cloudflare rejects a second POST for an existing CNAME. Publishing the same
+Machine Tunnel again must converge rather than fail, so the Auth App first
+looks up the hostname's record: it reuses an identical `*.cfargotunnel.com`
+CNAME and refuses any other existing record. This retains the additive
+ownership boundary: a tunnel never silently repoints a Machine Public
+Hostname or hand-managed DNS record.
+
 ## 2026-09-14 — Fresh E2E uses simulated GitHub approval
 
 Fresh E2E deployments use `--simulate-github-token`, not a real GitHub OAuth

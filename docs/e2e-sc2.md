@@ -3034,4 +3034,6 @@ a registered tunnel connection, DNS resolves `app.$ZONE` through Cloudflare,
 and the public curl returns the machine's response. The command receives no
 Cloudflare API token; the Auth App reads the encrypted token belonging to the
 registered Public DNS Zone and gives the machine only its dedicated tunnel run
-token. The VM exposes no inbound public port.
+token. Repeating the same publish command succeeds and reuses the tunnel's
+existing CNAME; a hostname whose DNS record points elsewhere is refused. The
+VM exposes no inbound public port.
