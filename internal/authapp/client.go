@@ -31,6 +31,7 @@ type DeviceClient struct {
 	BaseURL    string
 	AuthToken  string
 	HTTPClient *http.Client
+	Verbose    bool
 }
 
 type DeviceStartResult struct {

@@ -41,12 +41,20 @@ type TailnetPublicationRequest struct {
 }
 
 type TailnetPublicationResult struct {
-	Hostname    string `json:"hostname"`
-	TargetPort  int    `json:"targetPort"`
-	TailnetIPv4 string `json:"tailnetIPv4"`
+	Hostname    string   `json:"hostname"`
+	TargetPort  int      `json:"targetPort"`
+	TailnetIPv4 string   `json:"tailnetIPv4"`
+	Trace       []string `json:"trace,omitempty"`
 }
 
 func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) {
+	verbose := r.Header.Get("X-Sandcastle-Verbose") == "1"
+	trace := func(s string) []string {
+		if verbose {
+			return []string{s}
+		}
+		return nil
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -85,6 +93,7 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadGateway, fmt.Errorf("issue tailnet certificate: %w", err))
 		return
 	}
+	steps := trace("cloudflare api: DNS-01 certificate issued for " + hostname)
 	ip, err := h.tailnetPublisher.Publish(r.Context(), TailnetPublication{Tenant: tenantName, Project: strings.TrimSpace(q.Project), Machine: strings.TrimSpace(q.Machine), Hostname: hostname, TargetPort: 443, CertPEM: issued.CertPEM, KeyPEM: issued.KeyPEM})
 	if err != nil {
 		log.Printf("auth-app tailnet publication %s: %v", hostname, err)
@@ -100,7 +109,10 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadGateway, fmt.Errorf("set tailnet DNS: %w", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, TailnetPublicationResult{Hostname: hostname, TargetPort: 443, TailnetIPv4: ip})
+	if verbose {
+		steps = append(steps, "tailscale api: Tenant Sidecar IPv4 "+ip, "cloudflare api: DNS-only A record set for "+hostname, "caddy api: Tenant Sidecar HTTPS route installed")
+	}
+	writeJSON(w, http.StatusOK, TailnetPublicationResult{Hostname: hostname, TargetPort: 443, TailnetIPv4: ip, Trace: steps})
 }
 
 func tailnetPublicationZone(ctx context.Context, db *sql.DB, hostname string) (PublicDNSZone, error) {
@@ -147,6 +159,9 @@ func (c DeviceClient) PublishTailnetService(ctx context.Context, q TailnetPublic
 		return TailnetPublicationResult{}, err
 	}
 	r.Header.Set("Authorization", "Bearer "+c.AuthToken)
+	if c.Verbose {
+		r.Header.Set("X-Sandcastle-Verbose", "1")
+	}
 	r.Header.Set("Content-Type", "application/json")
 	response, err := c.client().Do(r)
 	if err != nil {

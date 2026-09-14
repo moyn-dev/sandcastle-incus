@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
@@ -39,9 +40,12 @@ func newTailnetPublishCommand(config commandConfig, opts *rootOptions) *cobra.Co
 			if !projectAuthAppAvailable(bound, "") {
 				return fmt.Errorf("Tailnet publication requires sc login to an Auth App")
 			}
-			result, err := (authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken}).PublishTailnetService(cmd.Context(), authapp.TailnetPublicationRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
+			result, err := (authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken, Verbose: os.Getenv("VERBOSE") == "1"}).PublishTailnetService(cmd.Context(), authapp.TailnetPublicationRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
 			if err != nil {
 				return err
+			}
+			for _, step := range result.Trace {
+				verboseCLI(bound, "tailnet: %s", step)
 			}
 			payload := map[string]any{"project": project, "machine": machine, "hostname": result.Hostname, "targetPort": result.TargetPort, "tailnetIPv4": result.TailnetIPv4}
 			return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tailnet HTTPS published: https://%s → %s:443", result.Hostname, machine), payload)
