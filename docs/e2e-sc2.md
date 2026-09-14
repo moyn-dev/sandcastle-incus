@@ -3008,48 +3008,53 @@ version with slice 2 of #172) converges on the next `sc payload-sync` /
 public name; machines that already ran an older `caddy-setup` are recreated,
 not migrated in place.
 
-## Machine Tunnel: fresh nested-Incus E2E
+## Machine publication lifecycle: fresh nested-Incus E2E
 
-Run this phase in a new VM with a new Incus installation. The VM joins the
-tailnet only for CLI control-plane access and must use
-`tailscale set --accept-routes=false`: accepting a tailnet route overlapping a
-tenant CIDR would route replies away from the nested tenant bridge. The Auth
-App is installed with `--ingress cloudflare` and
-`--simulate-github-token`; do not use GitHub OAuth.
+Run this phase only in a new VM with a new Incus installation. Install the Auth
+App with `--ingress cloudflare` and `--simulate-github-token`; GitHub OAuth,
+browser approval, and GitHub client credentials are prohibited. The nested VM
+uses Tailscale for control-plane access only and keeps `tailscale set
+--accept-routes=false`; a separate enrolled Tailnet client accepts the Tenant
+subnet route.
 
-Register a Public DNS Zone with a token that has `Zone:Read`, `DNS:Edit`, and
-account-level `Cloudflare Tunnel:Edit`, then create a machine with an HTTP
-service on port 3000:
-
-```bash
-sc project create wordpress
-sc create wordpress:dev
-# start a service on localhost:3000 in wordpress:dev
-sc tunnel publish wordpress:dev --port 3000 --hostname app.$ZONE
-curl --fail https://app.$ZONE
-```
-
-**PASS:** `cloudflared` is active inside `wordpress:dev`, its journal records
-a registered tunnel connection, DNS resolves `app.$ZONE` through Cloudflare,
-and the public curl returns the machine's response. The command receives no
-Cloudflare API token; the Auth App reads the encrypted token belonging to the
-registered Public DNS Zone and gives the machine only its dedicated tunnel run
-token. Repeating the same publish command succeeds and reuses the tunnel's
-existing CNAME; a hostname whose DNS record points elsewhere is refused. The
-VM exposes no inbound public port.
-
-## Tailnet HTTPS publication: fresh nested-Incus E2E
-
-With the same simulated-GitHub installation and Public DNS Zone, publish the
-Machine's built-in private HTTPS endpoint (there is intentionally no port):
+The Public DNS Zone token needs `Zone:Read`, `DNS:Edit`, and account-level
+`Cloudflare Tunnel:Edit`. Use a disposable subzone and Let's Encrypt staging.
+The automated phase creates a disposable project and Machine, starts an HTTP
+response on `:3000`, then runs both publication lifecycles:
 
 ```bash
-sc tailnet publish wordpress:dev --hostname internal-app.$ZONE
+SANDCASTLE_E2E=1 \
+  SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1 \
+  SANDCASTLE_E2E_SIMULATED_GITHUB=1 \
+  scripts/e2e.sh publications
 ```
 
-**PASS:** Let's Encrypt DNS-01 issues a certificate, the DNS-only A record
-contains the Tenant Sidecar's `100.x` address (not a Cloudflare proxy), and a
-Tailnet client gets the Machine response over `https://internal-app.$ZONE`.
-The Sidecar terminates TLS and sends the request to the Machine's private
-`:443`; the Machine holds no Cloudflare credential and the VM exposes no
-Internet-routable inbound address.
+**Machine Tunnel PASS:** `sc tunnel publish` creates a dedicated Machine
+`cloudflared` connector and Sandcastle-owned Cloudflare Tunnel CNAME; public
+HTTPS returns the Machine response. An identical publish preserves that CNAME,
+`sc ls` renders it in `TUNNEL`, an occupied hostname is refused without
+mutation, and repeated `sc tunnel unpublish` is safe while removing the
+connector and CNAME. No Machine receives the Cloudflare API token and the VM
+has no inbound public service port.
+
+**Direct-Machine Tailnet PASS:** `sc tailnet publish` creates the existing
+Machine Public Hostname lifecycle: DNS-only direct A record(s) to the Machine's
+tenant-bridge IPv4, DNS-01 certificate, and Machine-Caddy site block. The
+record is never proxied and never targets the Tenant Sidecar's `100.x` address.
+From the Tailnet client HTTPS reaches the Machine and serves its certificate;
+the Machine holds the certificate/key but neither it nor the Sidecar holds the
+Cloudflare API token. Repeating publish is idempotent; `sc ls` renders the
+requested view in `TAILNET`; repeated `sc tailnet unpublish` safely removes DNS
+and the Machine-Caddy site according to Machine Public Hostname cleanup.
+
+Run `VERBOSE=1` for both paths. It must show immediate progress before a long
+wait and Cloudflare method/path/status/duration traces, with credentials
+redacted. Direct-Machine Tailnet output must name Machine/subnet-route
+resolution and must not invent a Sidecar-IP API step.
+
+Legacy Sidecar-backed publications are transition-only: after upgrading the
+nested install, verify they keep their existing target and work until explicit
+unpublish, DNS-propagation wait, and a new direct-Machine publish. No command
+may retarget a live hostname automatically. This legacy migration is a separate
+opt-in E2E run using the prior release artifact; it is not part of the fresh
+installation gate above.

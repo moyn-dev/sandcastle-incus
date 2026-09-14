@@ -14,6 +14,8 @@ Tiers:
   pdz       e2e Phase 12 — Public DNS Zones against Let's Encrypt staging (docs/e2e-sc2.md). Reads
             SANDCASTLE_E2E_CLOUDFLARE_TOKEN + SANDCASTLE_E2E_PUBLIC_DNS_ZONE from the environment or
             .env.sc2; SKIPPED (exit 0) when either is absent or SANDCASTLE_E2E is not 1.
+  publications  Fresh nested-Incus Machine Tunnel + direct-Machine Tailnet lifecycle. Requires
+            SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1 and SANDCASTLE_E2E_SIMULATED_GITHUB=1.
   all       Run unit, gated, incus, images and pdz tiers.
 
 Examples:
@@ -22,6 +24,7 @@ Examples:
   SANDCASTLE_E2E=1 SANDCASTLE_E2E_IMAGE_BUILD=1 SANDCASTLE_E2E_CODEX_VERSION=... SANDCASTLE_E2E_CLAUDE_CODE_VERSION=... SANDCASTLE_E2E_GEMINI_CLI_VERSION=... scripts/e2e.sh images
   SANDCASTLE_E2E=1 SANDCASTLE_E2E_RUN_ID=e2e-20260520-120000 scripts/e2e.sh cleanup
   SANDCASTLE_E2E=1 scripts/e2e.sh pdz          # .env.sc2 carries the Cloudflare token + test zone
+  SANDCASTLE_E2E=1 SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1 SANDCASTLE_E2E_SIMULATED_GITHUB=1 scripts/e2e.sh publications
 USAGE
 }
 
@@ -116,6 +119,30 @@ run_pdz() {
   run go test ./internal/e2e -run 'TestPublicDNSZonePhase12E2E' -count=1 -v
 }
 
+run_publications() {
+  local env_file="${SANDCASTLE_E2E_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.sc2}"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+  fi
+  if [[ "${SANDCASTLE_E2E_MACHINE_PUBLICATIONS:-}" != "1" ]]; then
+    echo "SKIP: Machine publication lifecycle — set SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1"
+    return 0
+  fi
+  require_e2e publications
+  require_env publications SANDCASTLE_E2E_SIMULATED_GITHUB
+  if [[ "${SANDCASTLE_E2E_SIMULATED_GITHUB:-}" != "1" ]]; then
+    echo "error: Machine publication lifecycle needs a fresh --simulate-github-token installation" >&2
+    return 2
+  fi
+  require_env publications SANDCASTLE_E2E_CLOUDFLARE_TOKEN
+  require_env publications SANDCASTLE_E2E_PUBLIC_DNS_ZONE
+  ensure_run_id publications
+  run go test ./internal/e2e -run 'TestMachinePublicationLifecycleE2E' -count=1 -v
+}
+
 run_cleanup() {
   require_e2e cleanup
   require_env cleanup SANDCASTLE_E2E_RUN_ID
@@ -142,12 +169,16 @@ case "$tier" in
   pdz)
     run_pdz
     ;;
+  publications)
+    run_publications
+    ;;
   all)
     run_unit
     run_gated
     run_incus
     run_images
     run_pdz
+    run_publications
     ;;
   -h|--help|help|"")
     usage

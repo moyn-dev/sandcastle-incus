@@ -660,6 +660,14 @@ CREATE TABLE IF NOT EXISTS routes (
     local_port INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS machine_tunnel_publications (
+    hostname TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    project TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 -- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 2: zone registry ─────────
 CREATE TABLE IF NOT EXISTS public_dns_zones (
     zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)

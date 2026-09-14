@@ -26,7 +26,7 @@ type MachineTunnelResult struct {
 }
 
 func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
@@ -46,7 +46,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, e := NormalizeMachineHostname(q.Hostname)
-	if e != nil || q.Port < 1 || q.Port > 65535 {
+	if e != nil || strings.TrimSpace(q.Project) == "" || strings.TrimSpace(q.Machine) == "" || (r.Method == http.MethodPost && (q.Port < 1 || q.Port > 65535)) {
 		writeAPIError(w, 400, fmt.Errorf("invalid tunnel hostname or port"))
 		return
 	}
@@ -70,17 +70,56 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, 500, e)
 		return
 	}
-	run, e := provisionTunnel(r.Context(), token, z.CloudflareZoneID, n, q.Port)
+	_ = tenant
+	if r.Method == http.MethodDelete {
+		publication, found, err := GetMachineTunnelPublication(r.Context(), h.db, n)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		// Installations upgraded from before the registry have no durable
+		// ownership row. Treat a repeat delete as done rather than guessing
+		// ownership and risking another Machine's hostname.
+		if !found {
+			writeJSON(w, http.StatusOK, MachineTunnelResult{Hostname: n})
+			return
+		}
+		if publication.Tenant != tenant || publication.Project != strings.TrimSpace(q.Project) || publication.Machine != strings.TrimSpace(q.Machine) {
+			writeAPIError(w, http.StatusConflict, fmt.Errorf("Machine Tunnel hostname %q is not published by this Machine", n))
+			return
+		}
+		if e := unprovisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n); e != nil {
+			writeAPIError(w, 502, fmt.Errorf("Cloudflare tunnel cleanup: %w", e))
+			return
+		}
+		if err := ReleaseMachineTunnelPublication(r.Context(), h.db, publication); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, 200, MachineTunnelResult{Hostname: n})
+		return
+	}
+	publication, claimed, err := ClaimMachineTunnelPublication(r.Context(), h.db, MachineTunnelPublication{Hostname: n, Tenant: tenant, Project: q.Project, Machine: q.Machine, Port: q.Port})
+	if err != nil {
+		writeAPIError(w, http.StatusConflict, err)
+		return
+	}
+	run, e := provisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n, q.Port)
 	if e != nil {
+		if claimed {
+			if releaseErr := ReleaseMachineTunnelPublication(r.Context(), h.db, publication); releaseErr != nil {
+				writeAPIError(w, http.StatusInternalServerError, releaseErr)
+				return
+			}
+		}
 		writeAPIError(w, 502, fmt.Errorf("Cloudflare tunnel setup: %w", e))
 		return
 	}
-	_ = tenant
 	writeJSON(w, 200, MachineTunnelResult{Hostname: n, Token: run, Port: q.Port})
 }
 
-func provisionTunnel(ctx context.Context, token, zoneID, host string, port int) (string, error) {
-	c := cf{token: token}
+func provisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, port int) (string, error) {
+	c := cf{token: token, baseURL: baseURL}
 	account, e := c.account(ctx, zoneID)
 	if e != nil {
 		return "", e
@@ -98,6 +137,18 @@ func provisionTunnel(ctx context.Context, token, zoneID, host string, port int) 
 	var out string
 	e = c.do(ctx, "GET", "/accounts/"+account+"/cfd_tunnel/"+id+"/token", nil, &out)
 	return out, e
+}
+
+// unprovisionTunnel removes a Machine Tunnel only after removing the CNAME
+// that proves this tunnel owns the hostname. Other records are deliberately
+// left alone: unpublish must never turn into a hostname replacement operation.
+func unprovisionTunnel(ctx context.Context, token, baseURL, zoneID, host string) error {
+	c := cf{token: token, baseURL: baseURL}
+	account, err := c.account(ctx, zoneID)
+	if err != nil {
+		return err
+	}
+	return c.unprovisionTunnel(ctx, account, zoneID, host)
 }
 
 type cf struct {
@@ -152,20 +203,29 @@ func (c cf) account(x context.Context, z string) (string, error) {
 	return v.Account.ID, e
 }
 func (c cf) tunnel(x context.Context, a, n string) (string, error) {
-	var v []struct {
-		ID string `json:"id"`
-	}
-	if e := c.do(x, "GET", "/accounts/"+a+"/cfd_tunnel?name="+url.QueryEscape(n)+"&is_deleted=false", nil, &v); e != nil {
+	if id, found, e := c.existingTunnel(x, a, n); e != nil {
 		return "", e
-	}
-	if len(v) > 0 {
-		return v[0].ID, nil
+	} else if found {
+		return id, nil
 	}
 	var o struct {
 		ID string `json:"id"`
 	}
 	e := c.do(x, "POST", "/accounts/"+a+"/cfd_tunnel", map[string]string{"name": n, "config_src": "cloudflare"}, &o)
 	return o.ID, e
+}
+
+func (c cf) existingTunnel(x context.Context, account, name string) (string, bool, error) {
+	var tunnels []struct {
+		ID string `json:"id"`
+	}
+	if err := c.do(x, "GET", "/accounts/"+account+"/cfd_tunnel?name="+url.QueryEscape(name)+"&is_deleted=false", nil, &tunnels); err != nil {
+		return "", false, err
+	}
+	if len(tunnels) == 0 {
+		return "", false, nil
+	}
+	return tunnels[0].ID, true, nil
 }
 func (c cf) dns(x context.Context, z, h, t string) error {
 	var records []struct {
@@ -182,6 +242,30 @@ func (c cf) dns(x context.Context, z, h, t string) error {
 		return fmt.Errorf("%q already has a DNS record; remove it before publishing a Machine Tunnel", h)
 	}
 	return c.do(x, "POST", "/zones/"+z+"/dns_records", map[string]any{"type": "CNAME", "name": h, "content": t, "proxied": true}, nil)
+}
+
+func (c cf) unprovisionTunnel(ctx context.Context, account, zoneID, hostname string) error {
+	id, found, err := c.existingTunnel(ctx, account, strings.ReplaceAll(hostname, ".", "-"))
+	if err != nil || !found {
+		return err
+	}
+	target := id + ".cfargotunnel.com"
+	var records []struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	if err := c.do(ctx, "GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(hostname), nil, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Type == "CNAME" && sameTunnelTarget(record.Content, target) {
+			if err := c.do(ctx, "DELETE", "/zones/"+zoneID+"/dns_records/"+record.ID, nil, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return c.do(ctx, "DELETE", "/accounts/"+account+"/cfd_tunnel/"+id, nil, nil)
 }
 
 func sameTunnelTarget(got, want string) bool {
@@ -204,6 +288,30 @@ func (c DeviceClient) ProvisionMachineTunnel(x context.Context, q MachineTunnelR
 	d, _ := io.ReadAll(v.Body)
 	if v.StatusCode != 200 {
 		return MachineTunnelResult{}, fmt.Errorf("provision machine tunnel: %s", strings.TrimSpace(string(d)))
+	}
+	var o MachineTunnelResult
+	e = json.Unmarshal(d, &o)
+	return o, e
+}
+
+// UnprovisionMachineTunnel drives DELETE /api/machine-tunnels. Repeating it
+// is safe: the Auth App treats an already-deleted Cloudflare tunnel as done.
+func (c DeviceClient) UnprovisionMachineTunnel(x context.Context, q MachineTunnelRequest) (MachineTunnelResult, error) {
+	b, _ := json.Marshal(q)
+	r, e := http.NewRequestWithContext(x, http.MethodDelete, c.url("/api/machine-tunnels"), bytes.NewReader(b))
+	if e != nil {
+		return MachineTunnelResult{}, e
+	}
+	r.Header.Set("Authorization", "Bearer "+c.AuthToken)
+	r.Header.Set("Content-Type", "application/json")
+	v, e := c.client().Do(r)
+	if e != nil {
+		return MachineTunnelResult{}, e
+	}
+	defer v.Body.Close()
+	d, _ := io.ReadAll(v.Body)
+	if v.StatusCode != http.StatusOK {
+		return MachineTunnelResult{}, fmt.Errorf("unpublish machine tunnel: %s", strings.TrimSpace(string(d)))
 	}
 	var o MachineTunnelResult
 	e = json.Unmarshal(d, &o)

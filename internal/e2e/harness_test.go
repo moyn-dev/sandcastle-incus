@@ -100,6 +100,27 @@ func TestValidateRejectsInvalidTailscaleTag(t *testing.T) {
 	}
 }
 
+func TestMachinePublicationLifecycleRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("SANDCASTLE_E2E_MACHINE_PUBLICATIONS", "")
+	t.Setenv("SANDCASTLE_E2E_SIMULATED_GITHUB", "")
+	if LoadConfig().MachinePublications.Enabled {
+		t.Fatal("Machine publication lifecycle must be opt-in")
+	}
+
+	t.Setenv("SANDCASTLE_E2E_MACHINE_PUBLICATIONS", "1")
+	if !LoadConfig().MachinePublications.Enabled {
+		t.Fatal("Machine publication lifecycle opt-in was not loaded")
+	}
+	if LoadConfig().MachinePublications.SimulatedGitHub {
+		t.Fatal("simulated GitHub assertion must be explicit")
+	}
+
+	t.Setenv("SANDCASTLE_E2E_SIMULATED_GITHUB", "1")
+	if !LoadConfig().MachinePublications.SimulatedGitHub {
+		t.Fatal("simulated GitHub assertion was not loaded")
+	}
+}
+
 func TestDisposableRunIDUsesSafeOverride(t *testing.T) {
 	t.Setenv("SANDCASTLE_E2E_RUN_ID", "Test_Run.1")
 	config := LoadConfig()

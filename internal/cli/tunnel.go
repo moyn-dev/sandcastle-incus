@@ -18,6 +18,7 @@ import (
 func newTunnelCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{Use: "tunnel", Short: "Publish services through a dedicated Cloudflare Tunnel per machine"}
 	command.AddCommand(newTunnelPublishCommand(config, opts))
+	command.AddCommand(newTunnelUnpublishCommand(config, opts))
 	return command
 }
 
@@ -94,6 +95,70 @@ func installMachineTunnel(ctx context.Context, config commandConfig, incusProjec
 	}
 	if err := run([]string{"config", "set", machine, meta.KeyV2MachineTunnelHostname, hostname}, nil); err != nil {
 		return fmt.Errorf("record machine tunnel: %w", err)
+	}
+	return nil
+}
+
+func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	var hostname string
+	command := &cobra.Command{
+		Use:   "unpublish [[remote:]project:]machine --hostname <fqdn>",
+		Short: "Remove a machine's dedicated Cloudflare Tunnel",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := authapp.NormalizeMachineHostname(hostname)
+			if err != nil {
+				return err
+			}
+			bound, reference, restore, err := rebindForReference(config, args[0])
+			if err != nil {
+				return err
+			}
+			defer restore()
+			summary, project, machine, err := hostnameTarget(cmd.Context(), bound, reference)
+			if err != nil {
+				return err
+			}
+			if !projectAuthAppAvailable(bound, "") {
+				return fmt.Errorf("Machine Tunnels require sc login to an Auth App")
+			}
+			client := authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken}
+			if _, err := client.UnprovisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name}); err != nil {
+				return err
+			}
+			if err := uninstallMachineTunnel(cmd.Context(), bound, summary.V2IncusProjectName(project), machine); err != nil {
+				return err
+			}
+			payload := map[string]any{"project": project, "machine": machine, "hostname": name, "status": "unpublished"}
+			return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tunnel unpublished: https://%s", name), payload)
+		},
+	}
+	command.Flags().StringVar(&hostname, "hostname", "", "public Cloudflare hostname to remove (required)")
+	_ = command.MarkFlagRequired("hostname")
+	return command
+}
+
+// uninstallMachineTunnel removes only the files Sandcastle owns. The binary is
+// intentionally retained: it may predate Sandcastle or serve another local use.
+func uninstallMachineTunnel(ctx context.Context, config commandConfig, incusProject, machine string) error {
+	runner := config.incusRunner
+	if runner == nil {
+		runner = runIncusCLI
+	}
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
+	}
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject)
+	run := func(args []string, in io.Reader) error {
+		return runner(ctx, args, env, in, config.stdout, config.stderr)
+	}
+	script := "set -eu; systemctl disable --now sandcastle-cloudflared.service >/dev/null 2>&1 || true; rm -f /etc/default/sandcastle-cloudflared /etc/systemd/system/sandcastle-cloudflared.service; systemctl daemon-reload"
+	if err := run([]string{"exec", machine, "--", "sh", "-ceu", script}, nil); err != nil {
+		return fmt.Errorf("stop machine tunnel: %w", err)
+	}
+	if err := run([]string{"config", "unset", machine, meta.KeyV2MachineTunnelHostname}, nil); err != nil {
+		return fmt.Errorf("clear machine tunnel record: %w", err)
 	}
 	return nil
 }

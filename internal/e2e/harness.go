@@ -13,21 +13,22 @@ import (
 const enabledEnv = "SANDCASTLE_E2E"
 
 type Config struct {
-	Enabled       bool
-	Remote        string
-	StoragePool   string
-	CIDRPool      string
-	RunID         string
-	Keep          bool
-	SandcastleBin string
-	SSHPublicKey  string
-	RouteBroker   RouteBrokerConfig
-	PublicRoutes  PublicRouteConfig
-	LocalVM       bool
-	Tailscale     TailscaleConfig
-	Images        ImageConfig
-	Auth          AuthConfig
-	PublicDNSZone PublicDNSZoneConfig
+	Enabled             bool
+	Remote              string
+	StoragePool         string
+	CIDRPool            string
+	RunID               string
+	Keep                bool
+	SandcastleBin       string
+	SSHPublicKey        string
+	RouteBroker         RouteBrokerConfig
+	PublicRoutes        PublicRouteConfig
+	LocalVM             bool
+	Tailscale           TailscaleConfig
+	Images              ImageConfig
+	Auth                AuthConfig
+	PublicDNSZone       PublicDNSZoneConfig
+	MachinePublications MachinePublicationConfig
 }
 
 // PublicDNSZoneConfig gates e2e Phase 12 (Public DNS Zones, ADR-0027): a real
@@ -36,6 +37,14 @@ type Config struct {
 type PublicDNSZoneConfig struct {
 	CloudflareToken string // SANDCASTLE_E2E_CLOUDFLARE_TOKEN
 	Zone            string // SANDCASTLE_E2E_PUBLIC_DNS_ZONE
+}
+
+// MachinePublicationConfig gates the destructive fresh-install lifecycle
+// phase. Public DNS Zone credentials alone must never unexpectedly create
+// Cloudflare Tunnels or issue certificates.
+type MachinePublicationConfig struct {
+	Enabled         bool // SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1
+	SimulatedGitHub bool // SANDCASTLE_E2E_SIMULATED_GITHUB=1; records fresh-install auth mode
 }
 
 // Configured reports whether both Phase 12 gate variables are set.
@@ -113,6 +122,10 @@ func LoadConfig() Config {
 		PublicDNSZone: PublicDNSZoneConfig{
 			CloudflareToken: strings.TrimSpace(os.Getenv("SANDCASTLE_E2E_CLOUDFLARE_TOKEN")),
 			Zone:            strings.ToLower(strings.TrimSuffix(strings.TrimSpace(os.Getenv("SANDCASTLE_E2E_PUBLIC_DNS_ZONE")), ".")),
+		},
+		MachinePublications: MachinePublicationConfig{
+			Enabled:         os.Getenv("SANDCASTLE_E2E_MACHINE_PUBLICATIONS") == "1",
+			SimulatedGitHub: os.Getenv("SANDCASTLE_E2E_SIMULATED_GITHUB") == "1",
 		},
 	}
 }
