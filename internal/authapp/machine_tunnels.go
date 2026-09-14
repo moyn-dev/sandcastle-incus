@@ -330,7 +330,16 @@ func (c cf) unprovisionTunnel(ctx context.Context, account, zoneID, hostname str
 			}
 		}
 	}
-	return c.do(ctx, "DELETE", "/accounts/"+account+"/cfd_tunnel/"+id, nil, nil)
+	if err := c.do(ctx, "DELETE", "/accounts/"+account+"/cfd_tunnel/"+id, nil, nil); err != nil {
+		// Cloudflare may report a stale delete while a concurrent/previous
+		// cleanup has already removed the tunnel. Re-read before failing an
+		// idempotent unpublish.
+		if _, stillThere, checkErr := c.existingTunnel(ctx, account, strings.ReplaceAll(hostname, ".", "-")); checkErr == nil && !stillThere {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func sameTunnelTarget(got, want string) bool {
