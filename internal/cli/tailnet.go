@@ -14,6 +14,22 @@ import (
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
+type tailnetLegacyClient interface {
+	UnpublishTailnetService(context.Context, authapp.TailnetPublicationRequest) (authapp.TailnetPublicationResult, error)
+}
+
+var _ tailnetLegacyClient = authapp.DeviceClient{}
+
+func legacyTailnetClient(config commandConfig) (tailnetLegacyClient, bool) {
+	if config.authTailnetLegacy != nil {
+		return config.authTailnetLegacy, true
+	}
+	if !projectAuthAppAvailable(config, "") {
+		return nil, false
+	}
+	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}, true
+}
+
 // Tailnet publication is intentionally separate from `sc tunnel publish`:
 // it gives the Machine's private HTTPS endpoint a DNS-only Machine Public
 // Hostname. The normal hostname reconciler owns the direct bridge A record,
@@ -107,6 +123,20 @@ func newTailnetUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.
 					return err
 				}
 			} else {
+				marked, err := tailnetPublicationMarked(cmd.Context(), bound, summary, project, machine, name)
+				if err != nil {
+					return err
+				}
+				if !marked {
+					return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tailnet HTTPS unpublished: https://%s", name), result)
+				}
+				legacy, available := legacyTailnetClient(bound)
+				if !available {
+					return errors.New("Tailnet publication requires sc login to an Auth App")
+				}
+				if _, err := legacy.UnpublishTailnetService(cmd.Context(), authapp.TailnetPublicationRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name}); err != nil {
+					return err
+				}
 				result.Released = name
 			}
 			if err := setTailnetPublicationMetadata(cmd.Context(), bound, summary, project, machine, result.Released, false); err != nil {
@@ -118,6 +148,36 @@ func newTailnetUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.
 	command.Flags().StringVar(&hostname, "hostname", "", "DNS-only public hostname to remove (required)")
 	_ = command.MarkFlagRequired("hostname")
 	return command
+}
+
+func tailnetPublicationMarked(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string) (bool, error) {
+	names, err := readTailnetPublicationMetadata(ctx, config, summary, project, machine)
+	if err != nil {
+		return false, err
+	}
+	for _, name := range names {
+		if name == hostname {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func readTailnetPublicationMetadata(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine string) ([]string, error) {
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return nil, fmt.Errorf("no Sandcastle-managed Incus config found for remote %q; add one with: sc remote add", config.adminConfig.Remote)
+	}
+	runner := config.incusRunner
+	if runner == nil {
+		runner = runIncusCLI
+	}
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	var current bytes.Buffer
+	if err := runner(ctx, []string{"config", "get", machine, meta.KeyV2TailnetPublications}, env, config.stdin, &current, config.stderr); err != nil {
+		return nil, fmt.Errorf("read Tailnet publication metadata: %w", err)
+	}
+	return meta.ParsePublicHostnames(current.String()), nil
 }
 
 // setTailnetPublicationMetadata maintains the additive display-only marker
@@ -134,11 +194,10 @@ func setTailnetPublicationMetadata(ctx context.Context, config commandConfig, su
 		runner = runIncusCLI
 	}
 	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
-	var current bytes.Buffer
-	if err := runner(ctx, []string{"config", "get", machine, meta.KeyV2TailnetPublications}, env, config.stdin, &current, config.stderr); err != nil {
-		return fmt.Errorf("read Tailnet publication metadata: %w", err)
+	names, err := readTailnetPublicationMetadata(ctx, config, summary, project, machine)
+	if err != nil {
+		return err
 	}
-	names := meta.ParsePublicHostnames(current.String())
 	if published {
 		names = append(names, hostname)
 	} else {

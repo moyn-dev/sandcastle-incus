@@ -8,9 +8,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 )
+
+type stubLegacyTailnet struct {
+	calls []authapp.TailnetPublicationRequest
+}
+
+func (s *stubLegacyTailnet) UnpublishTailnetService(_ context.Context, request authapp.TailnetPublicationRequest) (authapp.TailnetPublicationResult, error) {
+	s.calls = append(s.calls, request)
+	return authapp.TailnetPublicationResult{Hostname: request.Hostname}, nil
+}
 
 // The Tailnet verbs deliberately use the Machine Public Hostname seam.  That
 // keeps DNS, certificate delivery and Caddy configuration Machine-owned; the
@@ -89,7 +99,7 @@ func TestTailnetUnpublishIsIdempotentWhenHostnameIsAlreadyReleased(t *testing.T)
 	}
 	config.incusRunner = func(_ context.Context, args []string, _ []string, _ io.Reader, output io.Writer, _ io.Writer) error {
 		if args[1] == "get" {
-			_, _ = io.WriteString(output, "internal.tc42.uk\n")
+			_, _ = io.WriteString(output, "other.tc42.uk\n")
 		}
 		return nil
 	}
@@ -104,6 +114,35 @@ func TestTailnetUnpublishIsIdempotentWhenHostnameIsAlreadyReleased(t *testing.T)
 	}
 	if got, want := stdout.String(), "Tailnet HTTPS unpublished: https://internal.tc42.uk\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestTailnetUnpublishMigratesMarkedLegacySidecarPublication(t *testing.T) {
+	stub := &stubAuthHostnames{}
+	legacy := &stubLegacyTailnet{}
+	config, _ := hostnameTestConfig(t, stub)
+	config.adminConfig.Remote = "sandcastle-demo"
+	config.authTailnetLegacy = legacy
+	incusDir := scconfig.RemoteIncusDir(config.adminConfig.Remote)
+	if err := os.MkdirAll(incusDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(incusDir, "config.yml"), []byte("remotes: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.incusRunner = func(_ context.Context, args []string, _ []string, _ io.Reader, output io.Writer, _ io.Writer) error {
+		if args[1] == "get" {
+			_, _ = io.WriteString(output, "internal.tc42.uk\n")
+		}
+		return nil
+	}
+	command := newTailnetCommand(config, &rootOptions{output: outputText})
+	command.SetArgs([]string{"unpublish", "zp:web", "--hostname", "internal.tc42.uk"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.calls) != 1 || legacy.calls[0].Hostname != "internal.tc42.uk" {
+		t.Fatalf("legacy calls = %#v", legacy.calls)
 	}
 }
 

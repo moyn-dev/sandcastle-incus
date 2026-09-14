@@ -56,6 +56,26 @@ func withZone(m Machine, hostname, state, notAfter string) Machine {
 	return m
 }
 
+// Publication summaries are opt-in metadata independent of a Machine Public
+// Hostname. Private machines must retain them so `sc ls` can show active
+// tunnels and tailnet publications.
+func TestDecodeMachineReadsPublicationMetadataWithoutPublicHostname(t *testing.T) {
+	got := DecodeMachine(map[string]string{
+		KeyV2MachineTunnelHostname: "  codex.tunnel.example  ",
+		KeyV2TailnetPublications:   " API.TAILNET.EXAMPLE, web.tailnet.example, api.tailnet.example ",
+	}, Machine{Name: "codex"})
+
+	if got.HasPublicHostname() {
+		t.Fatalf("private Machine unexpectedly has public hostnames: %+v", got)
+	}
+	if got.MachineTunnelHostname != "codex.tunnel.example" {
+		t.Fatalf("MachineTunnelHostname = %q", got.MachineTunnelHostname)
+	}
+	if publications := strings.Join(got.TailnetPublications, ","); publications != "api.tailnet.example,web.tailnet.example" {
+		t.Fatalf("TailnetPublications = %q", publications)
+	}
+}
+
 // ADR-0028: DecodeMachine reads the list key first and falls back to the
 // legacy single key; PublicHostname stays the first of the sorted list.
 func TestDecodeMachineReadsBothPublicHostnameKeys(t *testing.T) {

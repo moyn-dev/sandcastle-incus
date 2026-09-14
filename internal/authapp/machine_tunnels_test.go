@@ -128,6 +128,57 @@ func TestMachineTunnelAPIUnpublishUsesConfiguredCloudflareEndpoint(t *testing.T)
 	if _, found, err := GetMachineTunnelPublication(context.Background(), db, "app.hase.de"); err != nil || found {
 		t.Fatalf("publication after unpublish = found %t, err %v", found, err)
 	}
+	if err := RequireMachinePublicationHostnameAvailable(context.Background(), db, "app.hase.de"); err == nil {
+		t.Fatal("missing DNS propagation cooldown after unpublish")
+	}
+}
+
+func TestMachineTunnelDNSPreflightRefusesForeignRecordWithoutMutation(t *testing.T) {
+	var mutations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			mutations = append(mutations, r.Method+" "+r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/zones/zone":
+			fmt.Fprint(w, `{"success":true,"result":{"account":{"id":"account"}}}`)
+		case "/accounts/account/cfd_tunnel":
+			fmt.Fprint(w, `{"success":true,"result":[]}`)
+		case "/zones/zone/dns_records":
+			fmt.Fprint(w, `{"success":true,"result":[{"type":"A","content":"192.0.2.1"}]}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	err := (cf{token: "test", baseURL: server.URL}).tunnelDNSPreflight(context.Background(), "zone", "app.example.com")
+	if err == nil || !strings.Contains(err.Error(), "already has a DNS record") {
+		t.Fatalf("preflight = %v", err)
+	}
+	if len(mutations) != 0 {
+		t.Fatalf("mutations before conflict = %v", mutations)
+	}
+}
+
+func TestMachineTunnelPreflightRefusesMachineHostnameAndRoute(t *testing.T) {
+	_, db, _, _ := projectDomainTestHandler(t, nil)
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `INSERT INTO machine_hostnames (hostname, tenant, project, machine, zone, user_key, created_at) VALUES ('app.hase.de', 'acme', 'web', 'app', 'hase.de', '', '')`); err != nil {
+		t.Fatal(err)
+	}
+	h := handler{db: db}
+	if err := h.preflightMachineTunnel(ctx, "app.hase.de", "", ""); err == nil || !strings.Contains(err.Error(), "Machine Public Hostname") {
+		t.Fatalf("hostname preflight = %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM machine_hostnames`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertRoute(ctx, db, Route{Hostname: "app.hase.de", Tenant: "acme", Project: "web", Machine: "app", BackendPort: 3000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.preflightMachineTunnel(ctx, "app.hase.de", "", ""); err == nil || !strings.Contains(err.Error(), "Public Route") {
+		t.Fatalf("route preflight = %v", err)
+	}
 }
 
 func TestMachineTunnelAPIUnpublishRefusesAnotherMachine(t *testing.T) {

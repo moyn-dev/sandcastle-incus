@@ -19,6 +19,11 @@ func (f *fakeTailnetPublisher) Publish(_ context.Context, p TailnetPublication) 
 	return f.ip, nil
 }
 
+func (f *fakeTailnetPublisher) Unpublish(_ context.Context, p TailnetPublication) (string, error) {
+	f.got = p
+	return f.ip, nil
+}
+
 func TestTailnetPublicationIssuesCertificateAndPublishesDNSOnlyA(t *testing.T) {
 	db, err := OpenDatabase(filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {

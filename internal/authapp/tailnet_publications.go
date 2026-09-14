@@ -31,6 +31,9 @@ type TailnetPublication struct {
 // Caddy route on the Tenant Sidecar, returning its Tailscale IPv4 address.
 type TailnetPublisher interface {
 	Publish(context.Context, TailnetPublication) (tailnetIPv4 string, err error)
+	// Unpublish removes only the legacy Sidecar endpoint. It exists solely for
+	// explicit migration; direct-Machine publications use Machine Hostnames.
+	Unpublish(context.Context, TailnetPublication) (tailnetIPv4 string, err error)
 }
 
 type TailnetPublicationRequest struct {
@@ -55,11 +58,11 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		}
 		return nil
 	}
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.tailnetPublisher == nil || h.tailnetIssuer == nil {
+	if h.tailnetPublisher == nil || (r.Method == http.MethodPost && h.tailnetIssuer == nil) {
 		writeAPIError(w, http.StatusNotImplemented, fmt.Errorf("tailnet publishing is not available on this deployment"))
 		return
 	}
@@ -93,6 +96,28 @@ func (h handler) tailnetPublicationsAPI(w http.ResponseWriter, r *http.Request) 
 		return
 	} else if found {
 		writeAPIError(w, http.StatusConflict, fmt.Errorf("%q is already published as a Public Route", hostname))
+		return
+	}
+	if r.Method == http.MethodDelete {
+		ip, err := h.tailnetPublisher.Unpublish(r.Context(), TailnetPublication{Tenant: tenantName, Project: strings.TrimSpace(q.Project), Machine: strings.TrimSpace(q.Machine), Hostname: hostname, TargetPort: 443})
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, fmt.Errorf("remove legacy Tenant Sidecar publication: %w", err))
+			return
+		}
+		token, err := PublicDNSZoneToken(r.Context(), h.db, zone.Zone)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := (cf{token: token, baseURL: h.cloudflareBaseURL}).tailnetDeleteA(r.Context(), zone.CloudflareZoneID, hostname, ip); err != nil {
+			writeAPIError(w, http.StatusBadGateway, fmt.Errorf("remove legacy tailnet DNS: %w", err))
+			return
+		}
+		if err := HoldMachinePublicationHostname(r.Context(), h.db, hostname); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, TailnetPublicationResult{Hostname: hostname, TargetPort: 443, TailnetIPv4: ip, Trace: trace("legacy Tenant Sidecar publication removed")})
 		return
 	}
 	token, err := PublicDNSZoneToken(r.Context(), h.db, zone.Zone)
@@ -179,6 +204,26 @@ func (c cf) tailnetA(ctx context.Context, zoneID, hostname, ip string) error {
 	return c.do(ctx, "POST", "/zones/"+zoneID+"/dns_records", map[string]any{"type": "A", "name": hostname, "content": ip, "ttl": 60, "proxied": false}, nil)
 }
 
+// tailnetDeleteA deletes only the DNS-only A record aimed at the legacy
+// Sidecar's known Tailnet address; a replacement record is never touched.
+func (c cf) tailnetDeleteA(ctx context.Context, zoneID, hostname, ip string) error {
+	var records []struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Content string `json:"content"`
+		Proxied bool   `json:"proxied"`
+	}
+	if err := c.do(ctx, "GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(hostname), nil, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Type == "A" && strings.TrimSpace(record.Content) == strings.TrimSpace(ip) && !record.Proxied {
+			return c.do(ctx, "DELETE", "/zones/"+zoneID+"/dns_records/"+record.ID, nil, nil)
+		}
+	}
+	return nil
+}
+
 func (c DeviceClient) PublishTailnetService(ctx context.Context, q TailnetPublicationRequest) (TailnetPublicationResult, error) {
 	b, _ := json.Marshal(q)
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/api/tailnet-publications"), bytes.NewReader(b))
@@ -198,6 +243,30 @@ func (c DeviceClient) PublishTailnetService(ctx context.Context, q TailnetPublic
 	payload, _ := io.ReadAll(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return TailnetPublicationResult{}, fmt.Errorf("publish tailnet service: %s", strings.TrimSpace(string(payload)))
+	}
+	var result TailnetPublicationResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return TailnetPublicationResult{}, err
+	}
+	return result, nil
+}
+
+func (c DeviceClient) UnpublishTailnetService(ctx context.Context, q TailnetPublicationRequest) (TailnetPublicationResult, error) {
+	b, _ := json.Marshal(q)
+	r, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.url("/api/tailnet-publications"), bytes.NewReader(b))
+	if err != nil {
+		return TailnetPublicationResult{}, err
+	}
+	r.Header.Set("Authorization", "Bearer "+c.AuthToken)
+	r.Header.Set("Content-Type", "application/json")
+	response, err := c.client().Do(r)
+	if err != nil {
+		return TailnetPublicationResult{}, err
+	}
+	defer response.Body.Close()
+	payload, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return TailnetPublicationResult{}, fmt.Errorf("unpublish tailnet service: %s", strings.TrimSpace(string(payload)))
 	}
 	var result TailnetPublicationResult
 	if err := json.Unmarshal(payload, &result); err != nil {

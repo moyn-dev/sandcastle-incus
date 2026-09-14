@@ -63,7 +63,7 @@ VALUES (?, ?, ?, ?, ?, datetime('now'))
 	return publication, true, nil
 }
 
-// ReleaseMachineTunnelPublication removes only the exact owner record.
+// ReleaseMachineTunnelPublication removes only the exact active owner record.
 func ReleaseMachineTunnelPublication(ctx context.Context, db *sql.DB, publication MachineTunnelPublication) error {
 	result, err := db.ExecContext(ctx, `
 DELETE FROM machine_tunnel_publications

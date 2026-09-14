@@ -86,6 +86,9 @@ type commandConfig struct {
 	// Hostnames (ADR-0028). nil = a DeviceClient for the logged-in Auth
 	// Hostname; injected in tests.
 	authMachineHostnames authMachineHostnameClient
+	// authTailnetLegacy removes transition-only Sidecar publications during an
+	// explicit migration; nil uses the logged-in Auth App.
+	authTailnetLegacy tailnetLegacyClient
 	// routeHostResolver overrides the DNS probe `sc route` uses to warn about a
 	// missing wildcard. nil = a real lookup; injected in tests so they never
 	// touch the network. Mirrors authapp's RouteResolveHost seam.

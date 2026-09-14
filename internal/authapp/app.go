@@ -668,6 +668,10 @@ CREATE TABLE IF NOT EXISTS machine_tunnel_publications (
     port INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS machine_publication_cooldowns (
+    hostname TEXT PRIMARY KEY,
+    released_at TEXT NOT NULL
+);
 -- ── Public DNS Zones (ADR-0027, spec §1.3) — slice 2: zone registry ─────────
 CREATE TABLE IF NOT EXISTS public_dns_zones (
     zone               TEXT PRIMARY KEY,          -- normalized (lowercase, no trailing dot)

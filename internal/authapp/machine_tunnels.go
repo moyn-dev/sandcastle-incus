@@ -96,7 +96,15 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, err)
 			return
 		}
+		if err := HoldMachinePublicationHostname(r.Context(), h.db, n); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, 200, MachineTunnelResult{Hostname: n})
+		return
+	}
+	if err := h.preflightMachineTunnel(r.Context(), n, token, z.CloudflareZoneID); err != nil {
+		writeAPIError(w, http.StatusConflict, err)
 		return
 	}
 	publication, claimed, err := ClaimMachineTunnelPublication(r.Context(), h.db, MachineTunnelPublication{Hostname: n, Tenant: tenant, Project: q.Project, Machine: q.Machine, Port: q.Port})
@@ -116,6 +124,31 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, MachineTunnelResult{Hostname: n, Token: run, Port: q.Port})
+}
+
+// preflightMachineTunnel completes every non-mutating ownership check before
+// Cloudflare can create a tunnel, alter its ingress configuration, or write
+// DNS. Machine Tunnels are deliberately a separate publication kind, so they
+// may not share a hostname with a Machine Public Hostname or Public Route.
+func (h handler) preflightMachineTunnel(ctx context.Context, hostname, token, zoneID string) error {
+	if err := RequireMachinePublicationHostnameAvailable(ctx, h.db, hostname); err != nil {
+		return err
+	}
+	hostnames, err := ListMachineHostnames(ctx, h.db)
+	if err != nil {
+		return err
+	}
+	for _, existing := range hostnames {
+		if existing.Hostname == hostname {
+			return fmt.Errorf("%q is already claimed as a Machine Public Hostname", hostname)
+		}
+	}
+	if route, found, err := GetRoute(ctx, h.db, hostname); err != nil {
+		return err
+	} else if found {
+		return fmt.Errorf("%q is already published as a Public Route by machine %q", hostname, route.Project+":"+route.Machine)
+	}
+	return (cf{token: token, baseURL: h.cloudflareBaseURL}).tunnelDNSPreflight(ctx, zoneID, hostname)
 }
 
 func provisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, port int) (string, error) {
@@ -242,6 +275,38 @@ func (c cf) dns(x context.Context, z, h, t string) error {
 		return fmt.Errorf("%q already has a DNS record; remove it before publishing a Machine Tunnel", h)
 	}
 	return c.do(x, "POST", "/zones/"+z+"/dns_records", map[string]any{"type": "CNAME", "name": h, "content": t, "proxied": true}, nil)
+}
+
+// tunnelDNSPreflight refuses a foreign DNS record before provisioning starts.
+// An existing named tunnel is read only so its own CNAME remains idempotent.
+func (c cf) tunnelDNSPreflight(ctx context.Context, zoneID, hostname string) error {
+	account, err := c.account(ctx, zoneID)
+	if err != nil {
+		return err
+	}
+	id, found, err := c.existingTunnel(ctx, account, strings.ReplaceAll(hostname, ".", "-"))
+	if err != nil {
+		return err
+	}
+	var records []struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	if err := c.do(ctx, "GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(hostname), nil, &records); err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if found {
+		for _, record := range records {
+			if record.Type != "CNAME" || !sameTunnelTarget(record.Content, id+".cfargotunnel.com") {
+				return fmt.Errorf("%q already has a DNS record; remove it before publishing a Machine Tunnel", hostname)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("%q already has a DNS record; remove it before publishing a Machine Tunnel", hostname)
 }
 
 func (c cf) unprovisionTunnel(ctx context.Context, account, zoneID, hostname string) error {

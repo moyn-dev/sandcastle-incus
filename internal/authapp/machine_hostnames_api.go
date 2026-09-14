@@ -217,6 +217,10 @@ func (h handler) machineHostnameAdd(w http.ResponseWriter, r *http.Request, user
 		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := RequireMachinePublicationHostnameAvailable(r.Context(), h.db, request.Hostname); err != nil {
+		writeAPIError(w, http.StatusConflict, err)
+		return
+	}
 	row, err := ClaimMachineHostname(r.Context(), h.db, ClaimMachineHostnameRequest{
 		Hostname:        request.Hostname,
 		Tenant:          tenantName,
@@ -367,6 +371,10 @@ func (h handler) machineHostnameRemove(w http.ResponseWriter, r *http.Request, u
 	result.Released, result.Zone = released.Hostname, released.Zone
 	if err := onMachineHostnameReleased(r.Context(), h.db, released); err != nil {
 		svclog.Logf(r.Context(), "machine hostname %s released with cleanup errors: %v", released.Hostname, err)
+	}
+	if err := HoldMachinePublicationHostname(r.Context(), h.db, released.Hostname); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
 	}
 	err = svclog.Span(r.Context(), "machine.hostname-remove", func() error {
 		return h.stampMachinePublicHostnames(r.Context(), tenantName, project, machine)

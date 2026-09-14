@@ -328,14 +328,17 @@ func FormatPublicHostnames(names []string) string {
 // own config (ADR-0027/0028). It is the one place those keys are read, and
 // every instance → Machine conversion — the live per-project sweep and the
 // ADR-0023 resource-cache renderer alike — funnels through it, so the two
-// paths cannot disagree on a machine's public names or certificate state. A
-// machine without public names comes back untouched: the certificate keys
-// are ignored unless the machine has a public name, so a stray cert-state on
-// an unstamped machine can never make it render as anything but private.
-// CertStates is the per-hostname mirror, CertState its worst entry.
+// paths cannot disagree on a machine's public names or certificate state.
+// Publication summaries are independent of Machine Public Hostnames, so they
+// are always read. Certificate keys are ignored unless the machine has a
+// public name, so a stray cert-state on an unstamped machine can never make it
+// render as anything but private. CertStates is the per-hostname mirror,
+// CertState its worst entry.
 func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.PublicHostnames = PublicHostnamesFromConfig(config)
 	machine.PublicHostname = ""
+	machine.MachineTunnelHostname = strings.TrimSpace(config[KeyV2MachineTunnelHostname])
+	machine.TailnetPublications = ParsePublicHostnames(config[KeyV2TailnetPublications])
 	if len(machine.PublicHostnames) == 0 {
 		machine.CertState = ""
 		machine.CertStates = nil
@@ -346,8 +349,6 @@ func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.CertStates = ParseCertStates(config[KeyV2CertState], machine.PublicHostnames)
 	machine.CertState = WorstCertState(machine.CertStates, machine.PublicHostnames)
 	machine.CertNotAfter = strings.TrimSpace(config[KeyV2CertNotAfter])
-	machine.MachineTunnelHostname = strings.TrimSpace(config[KeyV2MachineTunnelHostname])
-	machine.TailnetPublications = ParsePublicHostnames(config[KeyV2TailnetPublications])
 	return machine
 }
 

@@ -105,3 +105,36 @@ func (s ZoneMachineServer) Publish(ctx context.Context, p authapp.TailnetPublica
 	}
 	return ip, nil
 }
+
+// Unpublish removes the transition-only Sidecar Caddy endpoint. New direct
+// publications never create these files, so this cannot retarget them.
+func (s ZoneMachineServer) Unpublish(ctx context.Context, p authapp.TailnetPublication) (string, error) {
+	summaries, err := tenant.ListForPrefix(ctx, s.Store, s.Prefix)
+	if err != nil {
+		return "", fmt.Errorf("list tenants: %w", err)
+	}
+	infra := ""
+	for _, summary := range summaries {
+		if summary.Tenant == p.Tenant {
+			infra = summary.InfraProject
+			break
+		}
+	}
+	if infra == "" {
+		return "", fmt.Errorf("Tenant %s has no infrastructure project", p.Tenant)
+	}
+	sidecar := s.Server.UseProject(infra)
+	out, err := execSidecarCapture(sidecar, naming.V2SidecarInstanceName, "tailscale ip -4 | head -1")
+	if err != nil {
+		return "", fmt.Errorf("read Tenant Sidecar Tailscale IPv4: %w", err)
+	}
+	ip := strings.TrimSpace(out)
+	if ip == "" {
+		return "", fmt.Errorf("Tenant Sidecar has no Tailscale IPv4")
+	}
+	script := "set -eu; rm -rf /etc/sandcastle/tailnet-publish/" + p.Hostname + " /etc/caddy/tailnet-publish/" + p.Hostname + ".caddy; if command -v caddy >/dev/null 2>&1; then caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy; fi"
+	if err := execSidecar(sidecar, naming.V2SidecarInstanceName, script); err != nil {
+		return "", fmt.Errorf("remove legacy Sidecar Caddy publication: %w", err)
+	}
+	return ip, nil
+}
