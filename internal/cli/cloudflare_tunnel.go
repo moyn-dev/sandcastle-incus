@@ -17,6 +17,13 @@ import (
 // dashboard steps. Idempotent: an existing tunnel with the same name is reused
 // and the DNS record is repointed.
 func ensureCloudflareTunnel(ctx context.Context, apiToken string, hostname string) (string, error) {
+	return ensureCloudflareTunnelService(ctx, apiToken, hostname, "http://localhost:8080")
+}
+
+// ensureCloudflareTunnelService is the reusable tunnel provisioner. The
+// connector token it returns is deliberately scoped to this one tunnel; the
+// caller's account-level API token is never installed on an origin.
+func ensureCloudflareTunnelService(ctx context.Context, apiToken string, hostname string, service string) (string, error) {
 	cf := cloudflareAPI{token: strings.TrimSpace(apiToken)}
 	zoneID, accountID, err := cf.findZone(ctx, hostname)
 	if err != nil {
@@ -27,7 +34,39 @@ func ensureCloudflareTunnel(ctx context.Context, apiToken string, hostname strin
 	if err != nil {
 		return "", err
 	}
-	if err := cf.setTunnelIngress(ctx, accountID, tunnelID, hostname); err != nil {
+	if err := cf.setTunnelIngressService(ctx, accountID, tunnelID, hostname, service); err != nil {
+		return "", err
+	}
+	if err := cf.ensureDNSRecord(ctx, zoneID, hostname, tunnelID+".cfargotunnel.com"); err != nil {
+		return "", err
+	}
+	return cf.tunnelToken(ctx, accountID, tunnelID)
+}
+
+// ensureMachineCloudflareTunnel refuses to repurpose an existing DNS record.
+// Machine Tunnels are additive: a Machine Public Hostname, a hand-managed
+// record, or another service must be removed deliberately before its name can
+// become a Cloudflare Tunnel hostname.
+func ensureMachineCloudflareTunnel(ctx context.Context, apiToken, hostname string, port int) (string, error) {
+	cf := cloudflareAPI{token: strings.TrimSpace(apiToken)}
+	zoneID, accountID, err := cf.findZone(ctx, hostname)
+	if err != nil {
+		return "", err
+	}
+	var records []struct {
+		ID string `json:"id"`
+	}
+	if err := cf.do(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records?name="+hostname, nil, &records); err != nil {
+		return "", err
+	}
+	if len(records) != 0 {
+		return "", fmt.Errorf("%q already has a DNS record; remove it (and any Machine Public Hostname claim) before publishing a Machine Tunnel", hostname)
+	}
+	tunnelID, err := cf.ensureTunnel(ctx, accountID, strings.ReplaceAll(hostname, ".", "-"))
+	if err != nil {
+		return "", err
+	}
+	if err := cf.setTunnelIngressService(ctx, accountID, tunnelID, hostname, fmt.Sprintf("http://localhost:%d", port)); err != nil {
 		return "", err
 	}
 	if err := cf.ensureDNSRecord(ctx, zoneID, hostname, tunnelID+".cfargotunnel.com"); err != nil {
@@ -140,10 +179,14 @@ func (c cloudflareAPI) ensureTunnel(ctx context.Context, accountID string, name 
 }
 
 func (c cloudflareAPI) setTunnelIngress(ctx context.Context, accountID string, tunnelID string, hostname string) error {
+	return c.setTunnelIngressService(ctx, accountID, tunnelID, hostname, "http://localhost:8080")
+}
+
+func (c cloudflareAPI) setTunnelIngressService(ctx context.Context, accountID string, tunnelID string, hostname string, service string) error {
 	return c.do(ctx, http.MethodPut, "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", map[string]any{
 		"config": map[string]any{
 			"ingress": []map[string]string{
-				{"hostname": hostname, "service": "http://localhost:8080"},
+				{"hostname": hostname, "service": service},
 				{"service": "http_status:404"},
 			},
 		},

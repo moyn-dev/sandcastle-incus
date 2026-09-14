@@ -3007,3 +3007,31 @@ version with slice 2 of #172) converges on the next `sc payload-sync` /
 `sc-adm tenant payload-sync <tenant>` — needed before *their* machines get a
 public name; machines that already ran an older `caddy-setup` are recreated,
 not migrated in place.
+
+## Machine Tunnel: fresh nested-Incus E2E
+
+Run this phase in a new VM with a new Incus installation. The VM joins the
+tailnet only for CLI control-plane access and must use
+`tailscale set --accept-routes=false`: accepting a tailnet route overlapping a
+tenant CIDR would route replies away from the nested tenant bridge. The Auth
+App is installed with `--ingress cloudflare` and
+`--simulate-github-token`; do not use GitHub OAuth.
+
+Register a Public DNS Zone with a token that has `Zone:Read`, `DNS:Edit`, and
+account-level `Cloudflare Tunnel:Edit`, then create a machine with an HTTP
+service on port 3000:
+
+```bash
+sc project create wordpress
+sc create wordpress:dev
+# start a service on localhost:3000 in wordpress:dev
+sc tunnel publish wordpress:dev --port 3000 --hostname app.$ZONE
+curl --fail https://app.$ZONE
+```
+
+**PASS:** `cloudflared` is active inside `wordpress:dev`, its journal records
+a registered tunnel connection, DNS resolves `app.$ZONE` through Cloudflare,
+and the public curl returns the machine's response. The command receives no
+Cloudflare API token; the Auth App reads the encrypted token belonging to the
+registered Public DNS Zone and gives the machine only its dedicated tunnel run
+token. The VM exposes no inbound public port.

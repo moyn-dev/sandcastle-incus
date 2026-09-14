@@ -6,6 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Keep chat responses concise by default: report the result and the key facts, skip the play-by-play and long recaps. Give the full, verbose treatment (detailed reasoning, step listings, exhaustive summaries) only when the environment has `VERBOSE=1` set.
 
+## Compatibility
+
+Every feature is additive unless the user explicitly authorizes changing
+existing behaviour. Preserve established commands, topology, DNS records, and
+defaults, and add an opt-in interface instead. Do not treat a new feature as
+permission to migrate, replace, or repurpose existing resources.
+
+## E2E authentication
+
+Fresh E2E installations must use the Auth App's simulated-GitHub mode
+(`--simulate-github-token`), never real GitHub OAuth credentials. Cloudflare
+and Tailscale test credentials are sufficient for an E2E deployment; do not
+block an E2E on GitHub client ID or secret.
+
 ## What this is
 
 `sandcastle-incus` is a Go CLI + Auth App that provisions multi-tenant "Sandcastle" infrastructure on [Incus](https://linuxcontainers.org/incus/). The system manages tenant namespaces, projects, machines (Incus containers/VMs), Tailscale networking, public routes, and workload identity. Domain vocabulary is canonical in `CONTEXT.md`; use it when naming code.

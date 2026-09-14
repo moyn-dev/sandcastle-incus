@@ -5,6 +5,24 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-14 — Fresh E2E uses simulated GitHub approval
+
+Fresh E2E deployments use `--simulate-github-token`, not a real GitHub OAuth
+application. This keeps the test isolated and repeatable: Cloudflare and
+Tailscale credentials exercise their real integrations while authentication is
+explicitly test-only.
+
+## 2026-09-13 — Machine Tunnels are additive, dedicated Cloudflare connectors
+
+Machine Tunnels are an opt-in public-ingress feature: one Cloudflare Tunnel and
+one connector belong to each Machine, rather than extending either a Machine
+Public Hostname (which remains tailnet-only) or the install's shared Public
+Route ingress. The alternative of routing every Machine Tunnel through the
+Auth App would reuse existing infrastructure, but contradicts the requested
+per-Machine isolation and leaves one tunnel's availability and credentials as
+a shared blast radius. Existing public hostnames and public routes are
+unchanged; a hostname must be released before a tunnel can claim it.
+
 ## 2026-09-13 — `sc skill` reminder: a once-a-day interactive hint
 
 The spec: after a successful interactive `sc` run, print one stderr line when

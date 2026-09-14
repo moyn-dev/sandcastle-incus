@@ -1031,6 +1031,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/device/poll", app.devicePoll)
 	mux.HandleFunc("/api/workload/enable", app.workloadEnable)
 	mux.HandleFunc("/api/routes", app.routesAPI)
+	mux.HandleFunc("/api/machine-tunnels", app.machineTunnelsAPI)
 	mux.HandleFunc("/api/machine-certificates", app.machineCertificatesAPI)
 	mux.HandleFunc("/api/routes/ask", app.routesAsk)
 	mux.HandleFunc("/api/routes/config", app.routesConfig)
