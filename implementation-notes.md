@@ -5904,3 +5904,14 @@ Caddy site and holds the issued certificate, while the Auth App alone uses the
 registered Public DNS Zone token for DNS-01 and a DNS-only A record to the
 sidecar's Tailscale address. Raw `tailscale serve` was rejected because it
 cannot select several Machine upstreams by SNI on one shared port.
+
+## 2026-09-14 — Direct-Machine Tailnet publication converges on Machine Public Hostnames
+
+The Sidecar-Caddy implementation above is legacy transition infrastructure. New
+`sc tailnet publish` work must create and manage the same **Machine Public
+Hostname** resource used by `sc hostname add`: a DNS-only record targeting the
+Machine's tenant-private address, plus the Auth App-issued certificate installed
+in that Machine's Caddy. `sc tailnet unpublish` reverses that same resource
+lifecycle. Existing Sidecar-backed publications are deliberately preserved until
+an operator explicitly unpublishes and republishes them; changing their target
+automatically is unsafe because DNS changes are not instantaneous.
