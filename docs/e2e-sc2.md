@@ -3037,3 +3037,19 @@ registered Public DNS Zone and gives the machine only its dedicated tunnel run
 token. Repeating the same publish command succeeds and reuses the tunnel's
 existing CNAME; a hostname whose DNS record points elsewhere is refused. The
 VM exposes no inbound public port.
+
+## Tailnet HTTPS publication: fresh nested-Incus E2E
+
+With the same simulated-GitHub installation and Public DNS Zone, publish the
+Machine's built-in private HTTPS endpoint (there is intentionally no port):
+
+```bash
+sc tailnet publish wordpress:dev --hostname internal-app.$ZONE
+```
+
+**PASS:** Let's Encrypt DNS-01 issues a certificate, the DNS-only A record
+contains the Tenant Sidecar's `100.x` address (not a Cloudflare proxy), and a
+Tailnet client gets the Machine response over `https://internal-app.$ZONE`.
+The Sidecar terminates TLS and sends the request to the Machine's private
+`:443`; the Machine holds no Cloudflare credential and the VM exposes no
+Internet-routable inbound address.

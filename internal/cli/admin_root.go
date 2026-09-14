@@ -136,11 +136,14 @@ func ExecuteAdmin(name string, args []string) int {
 	// Same nil-interface care for the Public DNS Zone reconciler seam
 	// (ADR-0027 §4): only the serving appliance runs it.
 	var authAppZoneMachines authapp.ZoneMachineServer
+	var authAppTailnetPublisher authapp.TailnetPublisher
 	if authAppServeArgs(args) {
 		if socketServer, err := adminSocketServer(); err == nil && socketServer != nil {
 			authAppSocketServer = socketServer
 			authAppTenants = incusx.NewTenantStoreForServer(socketServer)
-			authAppZoneMachines = incusx.NewZoneMachineServer(socketServer, authAppTenants, adminConfig.IncusProjectPrefix)
+			zoneMachines := incusx.NewZoneMachineServer(socketServer, authAppTenants, adminConfig.IncusProjectPrefix)
+			authAppZoneMachines = zoneMachines
+			authAppTailnetPublisher = zoneMachines
 			authAppMachines = incusx.NewHostOverrideManagerForServer(socketServer)
 			authAppCreator = incusx.NewTenantCreatorForServer(socketServer).WithVerbose(verbose, os.Stderr)
 			authAppDeleter = incusx.NewTenantDeleterForServer(socketServer).WithVerbose(verbose, os.Stderr)
@@ -225,7 +228,8 @@ func ExecuteAdmin(name string, args []string) int {
 				}
 				return authAppDNSReconciler(authAppSocketServer, authAppTenants, adminConfig.IncusProjectPrefix).Reconcile(ctx)
 			},
-			ZoneMachines: authAppZoneMachines,
+			ZoneMachines:     authAppZoneMachines,
+			TailnetPublisher: authAppTailnetPublisher,
 			Projects: incusx.ProjectBrokerCreator{
 				Creator: authAppCreator,
 				Trust:   authAppTrust,

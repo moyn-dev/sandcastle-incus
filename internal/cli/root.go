@@ -408,6 +408,7 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newShareCommand(config, opts))
 	root.AddCommand(newRouteCommand(config, opts))
 	root.AddCommand(newTunnelCommand(config, opts))
+	root.AddCommand(newTailnetCommand(config, opts))
 	root.AddCommand(newSSHKeyCommand(config, opts))
 
 	return root

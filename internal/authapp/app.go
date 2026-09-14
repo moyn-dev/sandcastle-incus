@@ -114,6 +114,9 @@ type HTTPRunner struct {
 	// is the Incus seam of the Public DNS Zone reconciler (ADR-0027 §4): it
 	// runs as the zone stage of the same DNS loop, after DNSReconcile.
 	ZoneMachines ZoneMachineServer
+	// TailnetPublisher configures the serving Tenant Sidecar for the opt-in
+	// tailnet publication endpoint.
+	TailnetPublisher TailnetPublisher
 	// Routes, when set (ACME-ingress installs only), is the Incus seam for Public
 	// Routes: per-Route proxy devices + Machine state. Its presence is what makes
 	// `sc route` available on this install.
@@ -253,8 +256,9 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 	// holds the database the zone tokens are decrypted from. Built before the
 	// handler so the hostname endpoints can kick it.
 	var zones *zoneReconciler
+	var issuer certIssuer
 	if r.ZoneMachines != nil {
-		issuer := newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
+		issuer = newACMEIssuer(db, plan.ACMEDirectory, r.ACMEEmail, func(ctx context.Context, zone string) (string, error) {
 			return PublicDNSZoneToken(ctx, db, zone)
 		})
 		zones = newZoneReconciler(db, r.ZoneMachines, issuer, plan.ACMEDirectory, func(level, format string, args ...any) {
@@ -300,6 +304,8 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			ResourceCache:                resourceCache,
 			ResourceCacheMachineRenderer: r.ResourceCacheMachineRenderer,
 			ZoneReconcileKick:            zones.RequestPass,
+			TailnetPublisher:             r.TailnetPublisher,
+			TailnetIssuer:                issuer,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -924,6 +930,12 @@ type HandlerOptions struct {
 	// the hostname and domain endpoints call it after a change so records,
 	// orders and the hostnames-file push do not wait for the 30 s ticker.
 	ZoneReconcileKick func()
+	// TailnetPublisher installs the opt-in per-Machine HTTPS site on the
+	// Tenant Sidecar. Its certificate issuer remains in the Auth App.
+	TailnetPublisher TailnetPublisher
+	TailnetIssuer    certIssuer
+	// CloudflareBaseURL is a test seam; production uses Cloudflare's API.
+	CloudflareBaseURL string
 }
 
 // TenantProjectCreator creates an app project for a tenant and extends the
@@ -982,6 +994,9 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
 		projectDomains:        handlerOptions.ProjectDomains,
 		zoneReconcileKick:     handlerOptions.ZoneReconcileKick,
+		tailnetPublisher:      handlerOptions.TailnetPublisher,
+		tailnetIssuer:         handlerOptions.TailnetIssuer,
+		cloudflareBaseURL:     handlerOptions.CloudflareBaseURL,
 	}
 	if app.projectDomainResolver == nil && app.db != nil {
 		// Slice 3 landed the claims table: it is the production resolver.
@@ -1032,6 +1047,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 	mux.HandleFunc("/api/workload/enable", app.workloadEnable)
 	mux.HandleFunc("/api/routes", app.routesAPI)
 	mux.HandleFunc("/api/machine-tunnels", app.machineTunnelsAPI)
+	mux.HandleFunc("/api/tailnet-publications", app.tailnetPublicationsAPI)
 	mux.HandleFunc("/api/machine-certificates", app.machineCertificatesAPI)
 	mux.HandleFunc("/api/routes/ask", app.routesAsk)
 	mux.HandleFunc("/api/routes/config", app.routesConfig)
@@ -1122,6 +1138,9 @@ type handler struct {
 	projectDomainClaims   ProjectDomainClaimSource
 	projectDomains        TenantProjectDomainManager
 	zoneReconcileKick     func()
+	tailnetPublisher      TailnetPublisher
+	tailnetIssuer         certIssuer
+	cloudflareBaseURL     string
 }
 
 // kickZoneReconcile asks the zone reconciler for a pass soon (no-op when

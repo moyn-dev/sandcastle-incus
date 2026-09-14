@@ -5896,3 +5896,11 @@ branch; no spec change beyond a §5 note.
 ## 2026-09-13 — F9 (live run mph3): hostnames below the Auth Hostname are not install-reserved
 
 `scanMachineHostnameConflicts` refused any hostname *inside* the Auth Hostname / route base subtree, while `scanProjectDomainConflicts` refused only the reserved name itself or an ancestor. With the e2e zone `e2e.sc.tc42.uk` registered under the Auth Hostname `sc.tc42.uk`, a Project Domain claim passed and an explicit hostname of the same shape was refused ("reserved by this install"). Aligned the hostname rule to the domain rule: equal/ancestor conflicts, descendants do not — a real collision with a Public Route (`<label>.<tenant>.<route base>`) is caught by the route reservation scan in both directions. Alternative rejected: making Project Domains refuse the subtree too, which would forbid registering any zone under the Auth Hostname, a layout an admin may well choose.
+## 2026-09-14 — Tailnet publication terminates TLS on the Tenant Sidecar
+
+`sc tailnet publish` always proxies to the selected Machine's established
+private HTTPS endpoint on port 443. The Tenant Sidecar owns the generated
+Caddy site and holds the issued certificate, while the Auth App alone uses the
+registered Public DNS Zone token for DNS-01 and a DNS-only A record to the
+sidecar's Tailscale address. Raw `tailscale serve` was rejected because it
+cannot select several Machine upstreams by SNI on one shared port.
