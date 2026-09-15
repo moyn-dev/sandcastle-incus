@@ -21,9 +21,9 @@ import (
 )
 
 // newUpdateCommand is the tenant-facing `sc update` (#124 §3): one status
-// table covering the sc CLI (vs the GitHub latest release) and the caller's
-// tenant sidecar (vs the deployment's version), then acts on what is
-// outdated. Always user-initiated — never automatic.
+// table covering the sc CLI (vs the GitHub latest release), the caller's
+// tenant sidecar (vs the deployment's version), and each visible project's
+// shared /.sc platform payload. Always user-initiated — never automatic.
 func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var check, yes bool
 	var pin string
@@ -72,6 +72,16 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				skillsOutdated = skillsOutdated || r.outdated
 			}
 
+			// Project payloads are the central Machine update mechanism: one
+			// versioned shared volume per project, mounted by every Machine. A
+			// check is read-only and deliberately does not run `sc fix` or SSH to
+			// individual Machines.
+			payloadRows, payloadCheckErr := projectPayloadUpdateRows(ctx, config)
+			payloadsOutdated := false
+			for _, r := range payloadRows {
+				payloadsOutdated = payloadsOutdated || r.outdated
+			}
+
 			// Status table.
 			w := tabwriter.NewWriter(config.stdout, 2, 8, 2, ' ', 0)
 			fmt.Fprintln(w, "TARGET\tCURRENT\tWANTED\tSTATUS")
@@ -83,6 +93,12 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			for _, r := range skillRows {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
 			}
+			for _, r := range payloadRows {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
+			}
+			if payloadCheckErr != nil {
+				fmt.Fprintf(w, "project payloads\tunknown\tunknown\tunknown (%v)\n", payloadCheckErr)
+			}
 			w.Flush()
 			if release.HTMLURL != "" && cliOutdated {
 				fmt.Fprintf(config.stdout, "\nRelease notes: %s\n", release.HTMLURL)
@@ -91,7 +107,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if check {
 				return nil
 			}
-			if !cliOutdated && !sidecarOutdated && !skillsOutdated {
+			if !cliOutdated && !sidecarOutdated && !skillsOutdated && !payloadsOutdated {
 				fmt.Fprintln(config.stdout, "\nEverything is up to date.")
 				return nil
 			}
@@ -125,6 +141,24 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if skillsOutdated {
 				refreshManagedSkills(config.stdout, config.stderr, skillRows, skillHome(config))
 			}
+			if payloadsOutdated {
+				if cliOutdated {
+					// The payload is embedded in the executable. This process still
+					// contains the old payload after a self-replacement, so never
+					// write it while claiming to install the new one.
+					fmt.Fprintln(config.stdout, "Project payload updates use the newly installed CLI; rerun `sc update` to apply them.")
+				} else {
+					statuses, err := config.tenantCreator.SyncVisiblePlatformPayload(ctx, strings.TrimSpace(config.adminConfig.Tenant), false)
+					if err != nil {
+						return fmt.Errorf("update project payloads: %w", err)
+					}
+					for _, status := range statuses {
+						if status.Changed {
+							fmt.Fprintf(config.stdout, "Project payload updated: %s (%s -> %s). All Machines observe it through /.sc.\n", status.IncusProject, orUnknown(status.Before), status.Target)
+						}
+					}
+				}
+			}
 			return nil
 		},
 	}
@@ -132,6 +166,45 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command.Flags().BoolVar(&yes, "yes", false, "apply without prompting")
 	command.Flags().StringVar(&pin, "version", "", "pin the CLI to a release tag (vX.Y.Z); an older tag rolls back")
 	return command
+}
+
+type projectPayloadUpdateRow struct {
+	project  string
+	current  string
+	wanted   string
+	outdated bool
+}
+
+func (r projectPayloadUpdateRow) name() string { return "platform payload (" + r.project + ")" }
+
+func (r projectPayloadUpdateRow) status() string {
+	if r.outdated {
+		return "outdated (shared by project Machines)"
+	}
+	return "current"
+}
+
+// projectPayloadUpdateRows checks the current tenant's visible projects. An
+// absent tenant is normal before login, so it simply contributes no row.
+func projectPayloadUpdateRows(ctx context.Context, config commandConfig) ([]projectPayloadUpdateRow, error) {
+	tenantName := strings.TrimSpace(config.adminConfig.Tenant)
+	if tenantName == "" {
+		return nil, nil
+	}
+	statuses, err := config.tenantCreator.SyncVisiblePlatformPayload(ctx, tenantName, true)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]projectPayloadUpdateRow, 0, len(statuses))
+	for _, status := range statuses {
+		rows = append(rows, projectPayloadUpdateRow{
+			project:  status.IncusProject,
+			current:  orUnknown(status.Before),
+			wanted:   orUnknown(status.Target),
+			outdated: status.Before != status.Target,
+		})
+	}
+	return rows, nil
 }
 
 func orUnknown(v string) string {

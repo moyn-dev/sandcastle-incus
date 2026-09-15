@@ -5979,3 +5979,15 @@ publication record if provider cleanup fails, and retries the documented short
 connection-drain window. This ordering makes a retry safe: publish can restore
 the connector from the retained Cloudflare token, while unpublish can finish
 the external cleanup without an orphaned ownership record.
+
+## 2026-09-15 — `sc update` checks project payloads centrally
+
+`sc update` includes a read-only row for each visible app project's shared
+`/.sc` platform payload. Applying it writes once per stale project, so all of
+that project's Machines observe the new platform payload without a per-Machine
+SSH sweep or any change to publication state. A self-updated executable cannot
+load its newly embedded payload until the next process, therefore an update
+that replaces the CLI proposes the payload update but asks for one rerun rather
+than writing the old payload under a new release label. `sc update` also skips
+passive version notices after its own status table, avoiding a false skew
+warning from the still-running pre-update process.

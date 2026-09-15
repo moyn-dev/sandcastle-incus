@@ -224,10 +224,20 @@ func Execute(name string, args []string) int {
 	executed, err := cmd.ExecuteContextC(context.Background())
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
-		maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
+		// Even a partially completed self-update still runs in the old
+		// process; its explicit error is more useful than passive skew noise.
+		if executed == nil || executed.Name() != "update" {
+			maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
+		}
 		return 1
 	}
-	maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
+	// `sc update` has already printed its authoritative status table. In
+	// particular, a self-update cannot change the version of this running
+	// process, so a later sidecar request would otherwise produce a misleading
+	// CLI↔deployment skew notice after a successful update.
+	if executed.Name() != "update" {
+		maybePrintUpdateNotices(os.Stderr, refreshedUpdateState)
+	}
 	// Success only: the skill hint never rides on an error path.
 	maybePrintSkillReminder(os.Stderr, cmd, executed, config)
 	return 0
