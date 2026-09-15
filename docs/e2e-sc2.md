@@ -3045,6 +3045,8 @@ Machine Public Hostname lifecycle: DNS-only direct A record(s) to the Machine's
 tenant-bridge IPv4, DNS-01 certificate, and Machine-Caddy site block. The
 record is never proxied and never targets the Tenant Sidecar's `100.x` address.
 From the Tailnet client HTTPS reaches the Machine and serves its certificate;
+assert the Machine's Caddy service override executes
+`/.sc/platform/sbin/caddy` for start and reload;
 the Machine holds the certificate/key but neither it nor the Sidecar holds the
 Cloudflare API token. Repeating publish is idempotent; `sc ls` renders the
 requested view in `TAILNET`; repeated `sc tailnet unpublish` safely removes DNS

@@ -40,6 +40,11 @@ func TestPlatformPayloadFilesAndVersion(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload missing %s: %v", SCPayloadCloudflaredPath, files)
 	}
+
+	caddy, ok := byPath[SCPayloadCaddyPath]
+	if !ok || caddy.Mode != 0o755 || !strings.Contains(caddy.Content, "exec /usr/bin/caddy") {
+		t.Fatalf("payload missing usable Caddy launcher %s: %#v", SCPayloadCaddyPath, caddy)
+	}
 	if cloudflared.Mode != 0o755 || !strings.Contains(cloudflared.Content, "cloudflared-linux-") {
 		t.Fatalf("cloudflared payload launcher is not executable/download-capable: %#v", cloudflared)
 	}

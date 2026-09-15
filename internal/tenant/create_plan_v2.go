@@ -531,6 +531,19 @@ fi
 exec "$cache" "$@"
 `
 
+// caddyPlatformLauncher is the stable platform entry point for Caddy. Debian's
+// package supplies its service account and unit integration; this launcher is
+// what every Machine service executes, so the platform payload owns the
+// execution contract rather than `/usr/bin/caddy` being wired into units.
+const caddyPlatformLauncher = `#!/bin/sh
+set -eu
+if [ ! -x /usr/bin/caddy ]; then
+  echo "caddy: runtime binary missing; run sandcastle-caddy-setup" >&2
+  exit 1
+fi
+exec /usr/bin/caddy "$@"
+`
+
 // machineGeneralizeScript freshens per-instance identity so a machine launched
 // from an `sc image save` base image does NOT inherit the source machine's SSH
 // host keys, machine-id, or stale TLS leaf. It runs once per instance (cloud-init
@@ -604,6 +617,9 @@ REFRESH=0
 if [ "${1:-}" = --refresh ]; then REFRESH=1; fi
 export DEBIAN_FRONTEND=noninteractive
 install -d -m 0755 /etc/sandcastle/tls /usr/local/share/ca-certificates /etc/caddy /etc/systemd/system/caddy.service.d
+# The shared launcher is present on current Machines. Keep the package command
+# as a legacy fallback so an older mounted payload can still repair itself.
+if [ -x /.sc/platform/sbin/caddy ]; then CADDY=/.sc/platform/sbin/caddy; else CADDY=caddy; fi
 
 # hostnames_normalized prints the machine's public names, one per line:
 # lower case, trimmed, no trailing dot, only DNS characters, never the
@@ -681,12 +697,12 @@ RENDERED=""
     fi
   done
 } > /etc/caddy/Caddyfile.new
-caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null
+"$CADDY" validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null
 mv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
 
 if [ "$REFRESH" = 0 ]; then
   # Caddy runs as root so it can read $HOME/... regardless of owner and bind :443.
-  printf '%s\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' > /etc/systemd/system/caddy.service.d/override.conf
+  printf '%s\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' 'ExecStart=' 'ExecStart=/.sc/platform/sbin/caddy run --environ --config /etc/caddy/Caddyfile' 'ExecReload=' 'ExecReload=/.sc/platform/sbin/caddy reload --config /etc/caddy/Caddyfile --force' > /etc/systemd/system/caddy.service.d/override.conf
   systemctl daemon-reload
   systemctl enable caddy
 fi

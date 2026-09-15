@@ -65,8 +65,8 @@ func TestCaddySetupScriptContract(t *testing.T) {
 		"curl -fsS \"$SIGNER/tls/ca\" -o /usr/local/share/ca-certificates/sandcastle-tenant.crt && update-ca-certificates || true\n",
 		"  curl -fsS \"$SIGNER/tls/leaf?fqdn=$FQDN\" | python3 -c 'import json,sys;d=json.load(sys.stdin);open(\"/etc/sandcastle/tls/cert.pem\",\"w\").write(d[\"cert\"]);open(\"/etc/sandcastle/tls/key.pem\",\"w\").write(d[\"key\"])'\n  chmod 600 /etc/sandcastle/tls/key.pem\n",
 		"if [ ! -e " + MachineHostnamesPath + " ]; then\n  printf '%s\\n' \"${" + PublicHostnamesEnvKey + ":-}\" | hostnames_normalized > " + MachineHostnamesPath + "\nfi\n",
-		"caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null\nmv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile\n",
-		"printf '%s\\n' '[Service]' 'User=root' 'Group=root' 'AmbientCapabilities=' > /etc/systemd/system/caddy.service.d/override.conf\n",
+		"\"$CADDY\" validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null\nmv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile\n",
+		"'ExecStart=/.sc/platform/sbin/caddy run --environ --config /etc/caddy/Caddyfile' 'ExecReload=' 'ExecReload=/.sc/platform/sbin/caddy reload --config /etc/caddy/Caddyfile --force' > /etc/systemd/system/caddy.service.d/override.conf\n",
 		"  printf 'PRIVATE=%s\\n' \"$FQDN\"\n  for host in $RENDERED; do printf 'PUBLIC=%s\\n' \"$host\"; done\n  printf 'RENDERED=%s\\n' \"$(date +%s)\"\n} > " + CaddySetupMarkerPath + "\n",
 		"if [ \"$REFRESH\" = 0 ]; then\n  systemctl restart caddy\nelif systemctl is-active --quiet caddy; then\n  systemctl reload caddy || systemctl restart caddy\nelse\n  systemctl start caddy\nfi\n",
 	} {
@@ -74,7 +74,7 @@ func TestCaddySetupScriptContract(t *testing.T) {
 			t.Fatalf("caddy-setup missing %q:\n%s", want, script)
 		}
 	}
-	order := []string{"tls/leaf", "site_block()", "> /etc/caddy/Caddyfile.new", "caddy validate", "override.conf", "systemctl daemon-reload", "systemctl enable caddy", "> " + CaddySetupMarkerPath, "systemctl restart caddy"}
+	order := []string{"tls/leaf", "site_block()", "> /etc/caddy/Caddyfile.new", "\"$CADDY\" validate", "override.conf", "systemctl daemon-reload", "systemctl enable caddy", "> " + CaddySetupMarkerPath, "systemctl restart caddy"}
 	last := -1
 	for _, step := range order {
 		idx := strings.Index(script, step)
@@ -367,7 +367,7 @@ func TestCaddySetupPrivateOnly(t *testing.T) {
 	if got := r.read("usr/local/share/ca-certificates/sandcastle-tenant.crt"); got != "TENANT-CA\n" {
 		t.Fatalf("tenant CA = %q", got)
 	}
-	if got := r.read("etc/systemd/system/caddy.service.d/override.conf"); got != "[Service]\nUser=root\nGroup=root\nAmbientCapabilities=\n" {
+	if got := r.read("etc/systemd/system/caddy.service.d/override.conf"); got != "[Service]\nUser=root\nGroup=root\nAmbientCapabilities=\nExecStart=\nExecStart=/.sc/platform/sbin/caddy run --environ --config "+r.root+"/etc/caddy/Caddyfile\nExecReload=\nExecReload=/.sc/platform/sbin/caddy reload --config "+r.root+"/etc/caddy/Caddyfile --force\n" {
 		t.Fatalf("override.conf = %q", got)
 	}
 	r.absent("etc/systemd/system/caddy.service.d/sandcastle-zone.conf")

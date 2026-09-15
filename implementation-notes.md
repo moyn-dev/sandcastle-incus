@@ -6002,3 +6002,13 @@ the launcher populates that cache only on first use. This retains the existing
 no-provider-token-on-Machine boundary while allowing a payload sync to update
 the connector launcher for every Machine in a project. Old units are preserved
 until the user explicitly runs `sc fix --only cloudflared` after payload sync.
+
+## 2026-09-15 — Machine Caddy executes through the platform launcher
+
+The Machine Caddy setup script now validates through and writes a systemd
+override whose start/reload commands use `/.sc/platform/sbin/caddy`. Debian's
+Caddy package remains responsible for the local executable, service account,
+and package lifecycle; the platform launcher is the versioned control point.
+This avoids replacing package-managed operating-system integration while making
+the running command path centrally converged by the shared payload. Older
+Machines retain their package unit until an explicit Caddy publications fix.
