@@ -44,7 +44,7 @@ func TestTailnetPublishAndUnpublishUseMachineHostnameLifecycle(t *testing.T) {
 		case "get":
 			_, _ = io.WriteString(output, publicationValue+"\n")
 		case "set":
-			publicationValue = args[4]
+			publicationValue = strings.TrimPrefix(args[3], meta.KeyV2TailnetPublications+"=")
 		case "unset":
 			publicationValue = ""
 		}
@@ -63,7 +63,7 @@ func TestTailnetPublishAndUnpublishUseMachineHostnameLifecycle(t *testing.T) {
 	if got, want := stdout.String(), "Tailnet HTTPS published: https://internal.tc42.uk → web:443\n"; got != want {
 		t.Fatalf("publish output = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(incusCalls, "|"), "config get web "+meta.KeyV2TailnetPublications+"|config set web "+meta.KeyV2TailnetPublications+" existing.tc42.uk,internal.tc42.uk"; got != want {
+	if got, want := strings.Join(incusCalls, "|"), "config get web "+meta.KeyV2TailnetPublications+"|config set web "+meta.KeyV2TailnetPublications+"=existing.tc42.uk,internal.tc42.uk"; got != want {
 		t.Fatalf("publish metadata calls = %q, want %q", got, want)
 	}
 
@@ -81,7 +81,7 @@ func TestTailnetPublishAndUnpublishUseMachineHostnameLifecycle(t *testing.T) {
 	if got, want := stdout.String(), "Tailnet HTTPS unpublished: https://internal.tc42.uk\n"; got != want {
 		t.Fatalf("unpublish output = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(incusCalls, "|"), "config get web "+meta.KeyV2TailnetPublications+"|config set web "+meta.KeyV2TailnetPublications+" existing.tc42.uk"; got != want {
+	if got, want := strings.Join(incusCalls, "|"), "config get web "+meta.KeyV2TailnetPublications+"|config set web "+meta.KeyV2TailnetPublications+"=existing.tc42.uk"; got != want {
 		t.Fatalf("unpublish metadata calls = %q, want %q", got, want)
 	}
 }
@@ -172,7 +172,7 @@ func TestTailnetUnpublishWildcardAndOmittedHostnameSelectOnlyRecordedNames(t *te
 				case "get":
 					_, _ = io.WriteString(output, publicationValue+"\n")
 				case "set":
-					publicationValue = args[4]
+					publicationValue = strings.TrimPrefix(args[3], meta.KeyV2TailnetPublications+"=")
 				case "unset":
 					publicationValue = ""
 				}

@@ -40,7 +40,7 @@ func TestUninstallMachineTunnelRemovesOnlySandcastleConnectorAndMetadata(t *test
 	if got := strings.Join(calls[0], " "); !strings.Contains(got, "systemctl disable --now sandcastle-cloudflared.service") || !strings.Contains(got, "rm -f /etc/default/sandcastle-cloudflared /etc/systemd/system/sandcastle-cloudflared.service") {
 		t.Fatalf("cleanup command = %q", got)
 	}
-	if got, want := strings.Join(calls[1], " "), "config set web "+meta.KeyV2MachineTunnelHostname+" "; got != want {
+	if got, want := strings.Join(calls[1], " "), "config set web "+meta.KeyV2MachineTunnelHostname+"="; got != want {
 		t.Fatalf("metadata command = %q, want %q", got, want)
 	}
 }

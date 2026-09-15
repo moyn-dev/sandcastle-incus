@@ -237,7 +237,7 @@ func setTailnetPublicationMetadata(ctx context.Context, config commandConfig, su
 		names = kept
 	}
 	value := meta.FormatPublicHostnames(names)
-	args := []string{"config", "set", machine, meta.KeyV2TailnetPublications, value}
+	args := []string{"config", "set", machine, meta.KeyV2TailnetPublications + "=" + value}
 	if strings.TrimSpace(value) == "" {
 		args = []string{"config", "unset", machine, meta.KeyV2TailnetPublications}
 	}
