@@ -6012,3 +6012,13 @@ and package lifecycle; the platform launcher is the versioned control point.
 This avoids replacing package-managed operating-system integration while making
 the running command path centrally converged by the shared payload. Older
 Machines retain their package unit until an explicit Caddy publications fix.
+
+## 2026-09-15 — Publication E2E environment validation is tier-local
+
+The publication runner's shared `require_env` helper did not bind its function
+arguments, so Bash attempted an invalid indirect expansion before any test
+resource was created. It now accepts the tier and variable name explicitly,
+which makes the destructive publication tier fail with the missing credential's
+actual name. This is intentionally a hard preflight error: a real Cloudflare
+publication E2E must not fall back to a fake credential or a production OAuth
+installation.

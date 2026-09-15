@@ -36,6 +36,7 @@ require_e2e() {
 }
 
 require_env() {
+	local tier="$1" name="$2"
   if [[ -z "${!name:-}" ]]; then
     echo "error: set $name to run e2e tier '$tier'" >&2
     exit 2

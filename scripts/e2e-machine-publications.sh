@@ -73,6 +73,14 @@ assert_no_sidecar_tailnet_artifact() {
     echo "NOTE: restricted credential cannot inspect Tenant Sidecar; direct DNS, Machine Caddy, and certificate assertions remain authoritative"
   fi
 }
+assert_machine_platform_launchers() {
+  sc incus exec "$REF" -- sh -ceu 'test -x /.sc/platform/sbin/cloudflared; test -x /.sc/platform/sbin/caddy' \
+    || fail "Machine lacks platform connector launchers"
+  sc incus exec "$REF" -- systemctl cat "sandcastle-cloudflared-$(printf %s "$TUNNEL" | tr . -).service" | grep -Fq 'ExecStart=/.sc/platform/sbin/cloudflared' \
+    || fail "Machine Tunnel unit does not start the platform cloudflared launcher"
+  sc incus exec "$REF" -- systemctl cat caddy | grep -Fq '/.sc/platform/sbin/caddy run' \
+    || fail "Machine Caddy unit does not start the platform Caddy launcher"
+}
 
 step "register disposable Public DNS Zone and create an HTTP Machine"
 if sc_adm public-dns-zone list --output json | jq -e --arg z "$ZONE" 'map(select(.zone==$z)) | length > 0' >/dev/null; then ZONE_PREREGISTERED=1; else sc_adm public-dns-zone add "$ZONE" --token-file <(printf %s "$TOKEN"); fi
@@ -86,6 +94,7 @@ step "Machine Tunnel publish, idempotence, list, conflict, and cleanup"
 TUNNEL_VERBOSE="$(VERBOSE=1 sc tunnel publish "$REF" --port 3000 --hostname "$TUNNEL" 2>&1)" || fail "$TUNNEL_VERBOSE"
 [[ "$TUNNEL_VERBOSE" == *"Tunnel published: https://$TUNNEL"* ]] || fail "tunnel publish output missing hostname"
 [[ "$TUNNEL_VERBOSE" != *"$TOKEN"* ]] || fail "verbose tunnel trace leaked Cloudflare credential"
+assert_machine_platform_launchers
 curl --fail --retry 12 --retry-delay 5 "https://$TUNNEL" | grep -q machine-publications || fail "public tunnel response"
 FIRST_CNAME="$(dig_cname "$TUNNEL")"; [[ "$FIRST_CNAME" == *.cfargotunnel.com ]] || fail "tunnel DNS is not a Cloudflare Tunnel CNAME: $FIRST_CNAME"
 sc tunnel publish "$REF" --port 3000 --hostname "$TUNNEL" >/dev/null

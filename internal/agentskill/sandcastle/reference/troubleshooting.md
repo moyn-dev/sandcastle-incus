@@ -158,6 +158,7 @@ dig +short <m>.<domain> @1.1.1.1                        # the public A record �
 sc incus exec <m> -- cat /etc/sandcastle/caddy.ready    # marker: PRIVATE=<m>.<p>.<suffix> / PUBLIC=<name> per served name / RENDERED=<ts>
 sc incus exec <m> -- cat /etc/sandcastle/hostnames      # the machine's public-name set, one per line
 sc incus exec <m> -- systemctl is-active caddy          # active (always — the private name has a certificate from the first boot)
+sc incus exec <m> -- systemctl cat caddy | grep '/.sc/platform/sbin/caddy' # platform-routed Caddy start/reload
 sc incus exec <m> -- ls -R /etc/sandcastle/tls          # cert.pem + key.pem (private leaf) + <name>/cert.pem,key.pem per pushed name
 sc incus exec <m> -- /usr/local/sbin/sandcastle-caddy-setup --refresh   # re-render + reload by hand (idempotent)
 openssl s_client -connect <bridge-ip>:443 -servername <m>.<domain> </dev/null 2>/dev/null \
@@ -205,6 +206,10 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
 - **Caddy `inactive`** — not expected any more (the private block always has
   a certificate). `journalctl -u caddy` for the reason; `--refresh` starts it
   when the render validates.
+- **Caddy unit still starts `/usr/bin/caddy` directly** — converge the shared
+  payload (`sc payload-sync`), then run `sc fix <machine> --only
+  caddy-publications`; the fix rerenders the Machine-local config and installs
+  the `/.sc/platform/sbin/caddy` systemd override.
 - **`CERT failed`** — `sc project status <project>` DETAIL carries the reason
   token only; the reconciler retries with backoff (see the table above). The
   raw error is in the auth-app log line `zone reconcile: <m>.<domain>: order

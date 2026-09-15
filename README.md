@@ -1,11 +1,14 @@
 # Sandcastle Incus
 
-Sandcastle Incus is the Incus-backed implementation of Sandcastle v1.
+Sandcastle Incus is the Incus-backed implementation of Sandcastle.
 
 The product CLI is `sandcastle`, with `sc` installed as an alias. The system
 creates tenant-scoped Incus container machines for AI and development workflows,
 connects them to a user-selected Tailscale network, serves private tenant DNS,
-and can publish HTTP routes through shared infrastructure Caddy.
+and supports direct-Machine Tailnet HTTPS plus opt-in Cloudflare Tunnels.
+Machine Caddy and Cloudflare connector launchers are centrally versioned under
+the project-shared `/.sc/platform` payload; Machine-specific Caddy
+configuration and certificates remain on each Machine.
 
 ## Documents
 
@@ -103,6 +106,7 @@ SANDCASTLE_E2E=1 SANDCASTLE_E2E_BASE_IMAGE_SOURCE=sandcastle/base:debian-13 SAND
 SANDCASTLE_E2E=1 SANDCASTLE_E2E_IMAGE_BUILD=1 SANDCASTLE_E2E_CODEX_VERSION=... SANDCASTLE_E2E_CLAUDE_CODE_VERSION=... SANDCASTLE_E2E_GEMINI_CLI_VERSION=... scripts/e2e.sh images
 SANDCASTLE_E2E=1 SANDCASTLE_E2E_BASE_IMAGE_SOURCE=sandcastle/base:debian-13 SANDCASTLE_E2E_AI_IMAGE_SOURCE=sandcastle/ai:debian-13 scripts/e2e.sh route-broker
 SANDCASTLE_E2E=1 SANDCASTLE_E2E_BASE_IMAGE_SOURCE=sandcastle/base:debian-13 SANDCASTLE_E2E_AI_IMAGE_SOURCE=sandcastle/ai:debian-13 SANDCASTLE_E2E_PUBLIC_DOMAIN=e2e.example.com SANDCASTLE_E2E_INFRA_HOST=203.0.113.10 SANDCASTLE_E2E_LETSENCRYPT_EMAIL=ops@example.com scripts/e2e.sh public-routes
+SANDCASTLE_E2E=1 SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1 SANDCASTLE_E2E_SIMULATED_GITHUB=1 SANDCASTLE_E2E_CLOUDFLARE_TOKEN=<token> SANDCASTLE_E2E_PUBLIC_DNS_ZONE=<zone> scripts/e2e.sh publications
 SANDCASTLE_E2E=1 SANDCASTLE_E2E_RUN_ID=e2e-20260520-120000 scripts/e2e.sh cleanup
 ```
 

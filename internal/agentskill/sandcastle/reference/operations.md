@@ -110,7 +110,9 @@ sc project status zp                         # Domain: baum.hase.de   (zone hase
   `PUBLIC=<name>` per rendered block, `RENDERED=<unix ts>`). Caddy is always
   running; a public name is served as soon as its certificate lands and
   `sandcastle-caddy-setup --refresh` (execed by the reconciler after every
-  push; safe to run by hand) re-renders.
+  push; safe to run by hand) re-renders. Validation, systemd start, and reload
+  execute through `/.sc/platform/sbin/caddy`; the rendered Caddyfile and the
+  certificate/key files remain Machine-local.
 - The Auth App's zone reconciler (30 s + instance events + a kick from every
   `sc hostname add|remove` / `set-domain` / `unset-domain`) does the rest with
   no operator step, **per (machine, public name)** — the derived `<m>.<d>` plus
@@ -173,6 +175,29 @@ sc incus config get web user.sandcastle.v2.public-hostnames     # the sorted lis
 `--write-remote` on `sc project create` adds a separate directly-addressable
 incus remote for the project. It is off by default — the install's single remote
 plus `sc project switch` already covers projects.
+
+## Machine Tunnels and Tailnet HTTPS
+
+```bash
+sc tunnel publish <project>:<machine> --port 3000 --hostname app.example.com
+sc tunnel unpublish <project>:<machine> [--hostname 'app-*.example.com']
+sc tailnet publish <project>:<machine> --hostname internal.example.com
+sc tailnet unpublish <project>:<machine> [--hostname 'internal-*.example.com']
+```
+
+A Machine Tunnel is public Cloudflare ingress: it creates one dedicated tunnel
+and connector per hostname. Its systemd unit starts
+`/.sc/platform/sbin/cloudflared`; the launcher is shared and versioned with the
+project payload, while the run token and service unit are Machine-local. A
+Tailnet publication is different: it creates DNS-only A records to the
+Machine's private bridge address, gets a Let's Encrypt DNS-01 certificate, and
+the Auth App pushes that certificate/key into
+`/etc/sandcastle/tls/<hostname>/` before running Caddy refresh. Neither
+Machine receives the Cloudflare API token. Omit `--hostname` on unpublish to
+remove every recorded publication of that kind from that Machine.
+
+For a pre-platform connector or Caddy unit, run `sc payload-sync`, then
+`sc fix <machine> --only cloudflared` or `--only caddy-publications`.
 
 ## Public routes
 
