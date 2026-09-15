@@ -71,6 +71,9 @@ func TestDecodeMachineReadsPublicationMetadataWithoutPublicHostname(t *testing.T
 	if got.MachineTunnelHostname != "codex.tunnel.example" {
 		t.Fatalf("MachineTunnelHostname = %q", got.MachineTunnelHostname)
 	}
+	if len(got.MachineTunnelPendingHostnames) != 0 {
+		t.Fatalf("unexpected pending tunnel metadata: %v", got.MachineTunnelPendingHostnames)
+	}
 	if publications := strings.Join(got.TailnetPublications, ","); publications != "api.tailnet.example,web.tailnet.example" {
 		t.Fatalf("TailnetPublications = %q", publications)
 	}

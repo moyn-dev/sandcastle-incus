@@ -5953,3 +5953,12 @@ records a normalized hostname collection and creates a namespaced systemd unit
 per member. The former singleton metadata and unit remain readable and are
 removed only when that exact legacy hostname is unpublished; this keeps old
 Machines operable without silently interrupting their connector.
+
+## 2026-09-15 — Machine Tunnel reservation is recorded before connector setup
+
+Cloudflare provisioning and guest connector installation are separate failure
+domains. The Machine writes a `pending` publication entry immediately after a
+Cloudflare run token is returned, then clears that state only after systemd has
+started the connector. This prefers a visible, retryable reservation over a
+best-effort rollback: the latter can fail independently and leaves a hostname
+claimed with no CLI recovery path.

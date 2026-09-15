@@ -106,7 +106,11 @@ const (
 	// `sc ls`.
 	KeyV2MachineTunnelHostname  = Prefix + "v2.machine-tunnel-hostname"
 	KeyV2MachineTunnelHostnames = Prefix + "v2.machine-tunnel-hostnames"
-	KeyV2TailnetPublications    = Prefix + "v2.tailnet-publications"
+	// KeyV2MachineTunnelPendingHostnames marks collection members for which
+	// Cloudflare has reserved the hostname but the Machine connector has not
+	// started yet. It makes an interrupted publish discoverable and retryable.
+	KeyV2MachineTunnelPendingHostnames = Prefix + "v2.machine-tunnel-pending-hostnames"
+	KeyV2TailnetPublications           = Prefix + "v2.tailnet-publications"
 	// KeyBinaryVersion records the release version (vX.Y.Z) of the sandcastle
 	// binary last pushed into an instance (#124 §7) — auth-app, broker, tenant
 	// sidecars. Written on every binary push; missing means "unknown" and is
@@ -238,14 +242,15 @@ type Machine struct {
 	// its CERT column. CertNotAfter mirrors KeyV2CertNotAfter: the earliest
 	// expiry among the machine's installed certificates. All are only read
 	// when the machine has at least one public name.
-	PublicHostname         string            `json:"publicHostname,omitempty"`
-	PublicHostnames        []string          `json:"publicHostnames,omitempty"`
-	CertState              string            `json:"certState,omitempty"`
-	CertStates             map[string]string `json:"certStates,omitempty"`
-	CertNotAfter           string            `json:"certNotAfter,omitempty"`
-	MachineTunnelHostname  string            `json:"machineTunnelHostname,omitempty"`
-	MachineTunnelHostnames []string          `json:"machineTunnelHostnames,omitempty"`
-	TailnetPublications    []string          `json:"tailnetPublications,omitempty"`
+	PublicHostname                string            `json:"publicHostname,omitempty"`
+	PublicHostnames               []string          `json:"publicHostnames,omitempty"`
+	CertState                     string            `json:"certState,omitempty"`
+	CertStates                    map[string]string `json:"certStates,omitempty"`
+	CertNotAfter                  string            `json:"certNotAfter,omitempty"`
+	MachineTunnelHostname         string            `json:"machineTunnelHostname,omitempty"`
+	MachineTunnelHostnames        []string          `json:"machineTunnelHostnames,omitempty"`
+	MachineTunnelPendingHostnames []string          `json:"machineTunnelPendingHostnames,omitempty"`
+	TailnetPublications           []string          `json:"tailnetPublications,omitempty"`
 }
 
 // PublicNames returns the machine's public-name set, tolerating a payload
@@ -344,6 +349,7 @@ func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.PublicHostnames = PublicHostnamesFromConfig(config)
 	machine.PublicHostname = ""
 	machine.MachineTunnelHostnames = MachineTunnelHostnamesFromConfig(config)
+	machine.MachineTunnelPendingHostnames = ParsePublicHostnames(config[KeyV2MachineTunnelPendingHostnames])
 	machine.MachineTunnelHostname = ""
 	if len(machine.MachineTunnelHostnames) > 0 {
 		// Keep the historical scalar for API consumers through the transition.

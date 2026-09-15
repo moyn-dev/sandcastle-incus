@@ -816,10 +816,21 @@ func machineTunnelCell(machine meta.Machine) string {
 	if len(names) == 0 {
 		return "-"
 	}
+	pending := map[string]bool{}
+	for _, name := range machine.MachineTunnelPendingHostnames {
+		pending[name] = true
+	}
 	if len(names) == 1 {
+		if pending[names[0]] {
+			return names[0] + " (pending)"
+		}
 		return names[0]
 	}
-	return fmt.Sprintf("%s (+%d)", names[0], len(names)-1)
+	state := ""
+	if pending[names[0]] {
+		state = " pending"
+	}
+	return fmt.Sprintf("%s (+%d%s)", names[0], len(names)-1, state)
 }
 
 // The resource-type sections below are appended only when their flag was

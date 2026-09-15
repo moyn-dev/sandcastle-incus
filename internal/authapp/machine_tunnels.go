@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -20,9 +21,10 @@ type MachineTunnelRequest struct {
 	Port     int    `json:"port"`
 }
 type MachineTunnelResult struct {
-	Hostname string `json:"hostname"`
-	Token    string `json:"token"`
-	Port     int    `json:"port"`
+	Hostname string   `json:"hostname"`
+	Token    string   `json:"token"`
+	Port     int      `json:"port"`
+	Trace    []string `json:"trace,omitempty"`
 }
 
 func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +38,12 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q MachineTunnelRequest
+	var trace []string
+	tracef := func(format string, values ...any) {
+		if r.Header.Get("X-Sandcastle-Verbose") == "1" {
+			trace = append(trace, fmt.Sprintf(format, values...))
+		}
+	}
 	if json.NewDecoder(r.Body).Decode(&q) != nil {
 		writeAPIError(w, 400, fmt.Errorf("invalid request body"))
 		return
@@ -88,7 +96,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, fmt.Errorf("Machine Tunnel hostname %q is not published by this Machine", n))
 			return
 		}
-		if e := unprovisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n); e != nil {
+		if e := unprovisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n, tracef); e != nil {
 			writeAPIError(w, 502, fmt.Errorf("Cloudflare tunnel cleanup: %w", e))
 			return
 		}
@@ -100,7 +108,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, 200, MachineTunnelResult{Hostname: n})
+		writeJSON(w, 200, MachineTunnelResult{Hostname: n, Trace: trace})
 		return
 	}
 	if err := h.preflightMachineTunnel(r.Context(), n, token, z.CloudflareZoneID); err != nil {
@@ -112,7 +120,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusConflict, err)
 		return
 	}
-	run, e := provisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n, q.Port)
+	run, e := provisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n, q.Port, tracef)
 	if e != nil {
 		if claimed {
 			if releaseErr := ReleaseMachineTunnelPublication(r.Context(), h.db, publication); releaseErr != nil {
@@ -123,7 +131,7 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, 502, fmt.Errorf("Cloudflare tunnel setup: %w", e))
 		return
 	}
-	writeJSON(w, 200, MachineTunnelResult{Hostname: n, Token: run, Port: q.Port})
+	writeJSON(w, 200, MachineTunnelResult{Hostname: n, Token: run, Port: q.Port, Trace: trace})
 }
 
 // preflightMachineTunnel completes every non-mutating ownership check before
@@ -151,8 +159,8 @@ func (h handler) preflightMachineTunnel(ctx context.Context, hostname, token, zo
 	return (cf{token: token, baseURL: h.cloudflareBaseURL}).tunnelDNSPreflight(ctx, zoneID, hostname)
 }
 
-func provisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, port int) (string, error) {
-	c := cf{token: token, baseURL: baseURL}
+func provisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, port int, trace func(string, ...any)) (string, error) {
+	c := cf{token: token, baseURL: baseURL, trace: trace}
 	account, e := c.account(ctx, zoneID)
 	if e != nil {
 		return "", e
@@ -175,8 +183,8 @@ func provisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, p
 // unprovisionTunnel removes a Machine Tunnel only after removing the CNAME
 // that proves this tunnel owns the hostname. Other records are deliberately
 // left alone: unpublish must never turn into a hostname replacement operation.
-func unprovisionTunnel(ctx context.Context, token, baseURL, zoneID, host string) error {
-	c := cf{token: token, baseURL: baseURL}
+func unprovisionTunnel(ctx context.Context, token, baseURL, zoneID, host string, trace func(string, ...any)) error {
+	c := cf{token: token, baseURL: baseURL, trace: trace}
 	account, err := c.account(ctx, zoneID)
 	if err != nil {
 		return err
@@ -187,9 +195,13 @@ func unprovisionTunnel(ctx context.Context, token, baseURL, zoneID, host string)
 type cf struct {
 	token   string
 	baseURL string // test seam; production uses Cloudflare's v4 endpoint.
+	trace   func(string, ...any)
 }
 
 func (c cf) do(x context.Context, m, p string, b, out any) error {
+	if c.trace != nil {
+		c.trace("cloudflare api: %s %s", m, p)
+	}
 	var r io.Reader
 	if b != nil {
 		v, _ := json.Marshal(b)
@@ -210,6 +222,9 @@ func (c cf) do(x context.Context, m, p string, b, out any) error {
 		return e
 	}
 	defer z.Body.Close()
+	if c.trace != nil {
+		c.trace("cloudflare api: %s %s -> HTTP %d", m, p, z.StatusCode)
+	}
 	d, _ := io.ReadAll(z.Body)
 	var v struct {
 		Success bool            `json:"success"`
@@ -367,6 +382,9 @@ func (c DeviceClient) ProvisionMachineTunnel(x context.Context, q MachineTunnelR
 	}
 	r.Header.Set("Authorization", "Bearer "+c.AuthToken)
 	r.Header.Set("Content-Type", "application/json")
+	if os.Getenv("VERBOSE") == "1" {
+		r.Header.Set("X-Sandcastle-Verbose", "1")
+	}
 	v, e := c.client().Do(r)
 	if e != nil {
 		return MachineTunnelResult{}, e
@@ -391,6 +409,9 @@ func (c DeviceClient) UnprovisionMachineTunnel(x context.Context, q MachineTunne
 	}
 	r.Header.Set("Authorization", "Bearer "+c.AuthToken)
 	r.Header.Set("Content-Type", "application/json")
+	if os.Getenv("VERBOSE") == "1" {
+		r.Header.Set("X-Sandcastle-Verbose", "1")
+	}
 	v, e := c.client().Do(r)
 	if e != nil {
 		return MachineTunnelResult{}, e

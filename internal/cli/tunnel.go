@@ -57,10 +57,19 @@ func newTunnelPublishCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if err != nil {
 				return err
 			}
-			if err := installMachineTunnel(cmd.Context(), config, summary.V2IncusProjectName(project), machine, runTokenResult.Token, name); err != nil {
-				return err
+			for _, line := range runTokenResult.Trace {
+				verboseCLI(config, "%s", line)
 			}
-			if err := recordMachineTunnelHostname(cmd.Context(), config, summary, project, machine, name, true, false); err != nil {
+			// Claim-before-install is intentional: after Cloudflare creates the
+			// tunnel, the Machine record is the recovery handle if its connector
+			// cannot be installed. A repeated publish resumes this pending entry.
+			if err := recordMachineTunnelPublication(cmd.Context(), config, summary, project, machine, name, true, true, false); err != nil {
+				return fmt.Errorf("record pending Machine Tunnel after Cloudflare provisioning: %w", err)
+			}
+			if err := installMachineTunnel(cmd.Context(), config, summary.V2IncusProjectName(project), machine, runTokenResult.Token, name); err != nil {
+				return fmt.Errorf("%w (Tunnel remains recorded as pending; retry this publish or run `sc tunnel unpublish %s:%s --hostname %s`)", err, project, machine, name)
+			}
+			if err := recordMachineTunnelPublication(cmd.Context(), config, summary, project, machine, name, true, false, false); err != nil {
 				return err
 			}
 			payload := map[string]any{"project": project, "machine": machine, "hostname": name, "port": port, "status": "pending"}
@@ -147,17 +156,25 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 				return err
 			}
 			client := authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken}
-			if _, err := client.UnprovisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name}); err != nil {
+			result, err := client.UnprovisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
+			if err != nil {
 				return err
+			}
+			for _, line := range result.Trace {
+				verboseCLI(bound, "%s", line)
 			}
 			legacy, err := machineTunnelLegacyHostname(cmd.Context(), bound, summary, project, machine)
 			if err != nil {
+				if machineTunnelMachineGone(err) {
+					payload := map[string]any{"project": project, "machine": machine, "hostname": name, "status": "unpublished-machine-gone"}
+					return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tunnel unpublished: https://%s (Machine no longer exists)", name), payload)
+				}
 				return err
 			}
 			if err := uninstallMachineTunnel(cmd.Context(), bound, summary.V2IncusProjectName(project), machine, name, legacy == name); err != nil {
 				return err
 			}
-			if err := recordMachineTunnelHostname(cmd.Context(), bound, summary, project, machine, name, false, legacy == name); err != nil {
+			if err := recordMachineTunnelPublication(cmd.Context(), bound, summary, project, machine, name, false, false, legacy == name); err != nil {
 				return err
 			}
 			payload := map[string]any{"project": project, "machine": machine, "hostname": name, "status": "unpublished"}
@@ -166,6 +183,14 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 	}
 	command.Flags().StringVar(&hostname, "hostname", "", "public hostname or wildcard to remove (default: all on this Machine)")
 	return command
+}
+
+// machineTunnelMachineGone recognizes Incus's stable missing-instance wording
+// after the Auth App has already removed Cloudflare ownership. It is narrowly
+// scoped to this cleanup path: treating any other Incus failure as success
+// would hide a live connector that still needs local cleanup.
+func machineTunnelMachineGone(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "instance not found")
 }
 
 // unpublishMachineTunnels removes every selected, Machine-owned connector.
@@ -188,9 +213,13 @@ func unpublishMachineTunnels(ctx context.Context, config commandConfig, opts *ro
 	client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
 	var failed []string
 	for _, name := range selected {
-		if _, err := client.UnprovisionMachineTunnel(ctx, authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name}); err != nil {
+		result, err := client.UnprovisionMachineTunnel(ctx, authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
+		if err != nil {
 			failed = append(failed, name+": "+err.Error())
 			continue
+		}
+		for _, line := range result.Trace {
+			verboseCLI(config, "%s", line)
 		}
 		legacy, err := machineTunnelLegacyHostname(ctx, config, summary, project, machine)
 		if err != nil {
@@ -201,7 +230,7 @@ func unpublishMachineTunnels(ctx context.Context, config commandConfig, opts *ro
 			failed = append(failed, name+": "+err.Error())
 			continue
 		}
-		if err := recordMachineTunnelHostname(ctx, config, summary, project, machine, name, false, legacy == name); err != nil {
+		if err := recordMachineTunnelPublication(ctx, config, summary, project, machine, name, false, false, legacy == name); err != nil {
 			failed = append(failed, name+": "+err.Error())
 			continue
 		}
@@ -265,7 +294,7 @@ func machineTunnelLegacyHostname(ctx context.Context, config commandConfig, summ
 	return names[0], nil
 }
 
-func recordMachineTunnelHostname(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string, add, clearLegacy bool) error {
+func recordMachineTunnelPublication(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string, add, pending, clearLegacy bool) error {
 	names, err := readMachineTunnelHostnames(ctx, config, summary, project, machine)
 	if err != nil {
 		return err
@@ -280,6 +309,20 @@ func recordMachineTunnelHostname(ctx context.Context, config commandConfig, summ
 		want = append(want, hostname)
 	}
 	sort.Strings(want)
+	pendingNames, err := readMachineTunnelMetadata(ctx, config, summary, project, machine, meta.KeyV2MachineTunnelPendingHostnames)
+	if err != nil {
+		return err
+	}
+	wantPending := make([]string, 0, len(pendingNames)+1)
+	for _, name := range pendingNames {
+		if name != hostname {
+			wantPending = append(wantPending, name)
+		}
+	}
+	if add && pending {
+		wantPending = append(wantPending, hostname)
+	}
+	sort.Strings(wantPending)
 	incusDir := resolveIncusDir(config.adminConfig.Remote)
 	if incusDir == "" {
 		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
@@ -289,7 +332,7 @@ func recordMachineTunnelHostname(ctx context.Context, config commandConfig, summ
 		runner = runIncusCLI
 	}
 	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
-	args := []string{"config", "set", machine, meta.KeyV2MachineTunnelHostnames + "=" + strings.Join(want, ",")}
+	args := []string{"config", "set", machine, meta.KeyV2MachineTunnelHostnames + "=" + strings.Join(want, ","), meta.KeyV2MachineTunnelPendingHostnames + "=" + strings.Join(wantPending, ",")}
 	if clearLegacy {
 		args = append(args, meta.KeyV2MachineTunnelHostname+"=")
 	}
@@ -297,6 +340,23 @@ func recordMachineTunnelHostname(ctx context.Context, config commandConfig, summ
 		return fmt.Errorf("record Machine Tunnel collection: %w", err)
 	}
 	return nil
+}
+
+func readMachineTunnelMetadata(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, key string) ([]string, error) {
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return nil, fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
+	}
+	runner := config.incusRunner
+	if runner == nil {
+		runner = runIncusCLI
+	}
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	var out bytes.Buffer
+	if err := runner(ctx, []string{"config", "get", machine, key}, env, config.stdin, &out, config.stderr); err != nil {
+		return nil, fmt.Errorf("read Machine Tunnel metadata: %w", err)
+	}
+	return meta.ParsePublicHostnames(out.String()), nil
 }
 
 func matchPublicationHostname(pattern, hostname string) (bool, error) {
