@@ -97,7 +97,11 @@ func (h handler) machineTunnelsAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if e := unprovisionTunnel(r.Context(), token, h.cloudflareBaseURL, z.CloudflareZoneID, n, tracef); e != nil {
-			writeAPIError(w, 502, fmt.Errorf("Cloudflare tunnel cleanup: %w", e))
+			// A 502 is rewritten by an outer Cloudflare Tunnel into its generic
+			// HTML page, losing the provider reason needed to recover a durable
+			// pending publication. Keep this a control-plane 500 so the CLI gets
+			// our JSON diagnostic (including the Cloudflare operation).
+			writeAPIError(w, http.StatusInternalServerError, fmt.Errorf("Cloudflare tunnel cleanup: %w", e))
 			return
 		}
 		if err := ReleaseMachineTunnelPublication(r.Context(), h.db, publication); err != nil {
