@@ -333,6 +333,15 @@ always query live.
 
 ## Appliance-side
 
+For Machine Tunnel DNS, `dig @1.1.1.1 A <hostname>` should return Cloudflare
+edge addresses. Inspect the proxied CNAME through Cloudflare's dashboard/API;
+it is not exposed as a CNAME by public DNS. Compare the public resolver with
+the client's configured resolver when curl reports NXDOMAIN. A working public
+answer plus a failing local answer requires checking the local upstream/cache.
+Use `sc ls project:machine` to inspect a publication outside the current project.
+Tailnet and Tunnel publications cannot share a hostname, even on the same
+Machine; explicitly unpublish and wait for propagation before reusing it.
+
 ```bash
 sc-adm update --check      # appliance and sidecar versions vs the release
 sc-adm tenant status <tenant>

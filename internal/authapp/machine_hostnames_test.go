@@ -21,6 +21,26 @@ func claimHostname(t *testing.T, db *sql.DB, hostname, tenant, project, machine 
 	return row
 }
 
+func TestClaimMachineHostnameRejectsMachineTunnel(t *testing.T) {
+	ctx := context.Background()
+	db := newClaimsTestDB(t)
+	addZone(t, db, "tc42.uk")
+	_, _, err := ClaimMachineTunnelPublication(ctx, db, MachineTunnelPublication{Hostname: "deep.app.tc42.uk", Tenant: "acme", Project: "web", Machine: "app", Port: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"deep.app.tc42.uk", "app.tc42.uk"} {
+		_, err := ClaimMachineHostname(ctx, db, ClaimMachineHostnameRequest{Hostname: name, Tenant: "acme", Project: "web", Machine: "app"})
+		if err == nil {
+			t.Fatalf("accepted Machine Public Hostname %s over a Machine Tunnel", name)
+		}
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM machine_hostnames").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("hostname mutation: count=%d err=%v", count, err)
+	}
+}
+
 // ── validation ───────────────────────────────────────────────────────────────
 
 func TestClaimMachineHostname_ValidatesZoneApexAndLength(t *testing.T) {

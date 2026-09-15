@@ -129,19 +129,13 @@ incus launch "$vm_image" "$vm_name" --vm \
 wait_for_vm
 
 log "install VM packages"
-vm_sh "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y ca-certificates curl git make gcc pkg-config tar xz-utils uidmap iproute2 dnsutils sudo incus"
+vm_sh "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y ca-certificates curl git make gcc pkg-config tar xz-utils uidmap iproute2 dnsutils sudo"
 
 log "install Go $go_version"
 vm_sh "curl -fsSL 'https://go.dev/dl/go${go_version}.linux-${go_arch}.tar.gz' -o /tmp/go.tgz; rm -rf /usr/local/go; tar -C /usr/local -xzf /tmp/go.tgz; ln -sf /usr/local/go/bin/go /usr/local/bin/go; ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt"
 
 log "install mise"
 vm_sh "curl -fsSL https://mise.run | sh"
-
-log "initialize nested Incus"
-vm_sh "systemctl enable --now incus >/dev/null 2>&1 || true; incus admin waitready --timeout=120 || true; incus storage show default >/dev/null 2>&1 || incus admin init --minimal"
-
-log "start root user service manager"
-vm_sh "loginctl enable-linger root; systemctl start user@0.service; for _ in \$(seq 1 30); do test -S /run/user/0/bus && exit 0; sleep 1; done; echo 'error: root user service bus did not become ready' >&2; exit 1"
 
 log "copy checkout"
 vm_sh "rm -rf /root/sandcastle-incus; mkdir -p /root/sandcastle-incus"
@@ -151,6 +145,12 @@ tar \
   --exclude='*.test' \
   --exclude=bin \
   -C "$repo_root" -czf - . | incus exec "$vm_name" -- tar -xzf - -C /root/sandcastle-incus
+
+log "install supported nested Incus"
+vm_sh "cd /root/sandcastle-incus; /usr/local/go/bin/go build -o /usr/local/bin/sandcastle ./cmd/sandcastle; ln -sf sandcastle /usr/local/bin/sc-adm; sc-adm install-incus; incus admin waitready --timeout=120"
+
+log "start root user service manager"
+vm_sh "loginctl enable-linger root; systemctl start user@0.service; for _ in \$(seq 1 30); do test -S /run/user/0/bus && exit 0; sleep 1; done; echo 'error: root user service bus did not become ready' >&2; exit 1"
 
 seed_image_alias "$base_source" "sandcastle/base:latest" "base"
 seed_image_alias "$ai_source" "sandcastle/ai:latest" "ai"

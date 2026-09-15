@@ -226,6 +226,17 @@ func ClaimMachineHostname(ctx context.Context, db *sql.DB, req ClaimMachineHostn
 		CreatedAt: timeNow().UTC().Format(time.RFC3339),
 	}
 	err = withReservationLock(ctx, db, "claim machine hostname", req.DryRun, func(ctx context.Context, conn *sql.Conn) error {
+		// A Machine Public Hostname also reserves its wildcard subtree.
+		// Check dedicated tunnels under the same write lock as the claim so
+		// their CNAME cannot be replaced by the hostname reconciler's A record.
+		var tunnel string
+		err := conn.QueryRowContext(ctx, `SELECT hostname FROM machine_tunnel_publications WHERE hostname = ? OR hostname LIKE ? LIMIT 1`, norm, "%."+norm).Scan(&tunnel)
+		if err == nil {
+			return &HostnameClaimError{Hostname: norm, Existing: tunnel, Class: HostnameClaimConflictExact}
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check machine tunnel reservation: %w", err)
+		}
 		reg, err := loadInstallReservations(ctx, conn, req.AuthHostname, req.RouteBaseDomain)
 		if err != nil {
 			return err

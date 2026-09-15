@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/netip"
@@ -25,6 +26,20 @@ func installV2Prefix(prefix string) string {
 		return naming.V2IncusProjectPrefix
 	}
 	return prefix
+}
+
+// applianceBridgeName returns the default, per-install bridge name. Linux
+// network-interface names are limited to 15 characters; retain the familiar
+// <prefix>-net form when it fits and use a stable, collision-resistant name
+// for longer install prefixes.
+func applianceBridgeName(prefix string) string {
+	const maxInterfaceNameLength = 15
+	candidate := prefix + "-net"
+	if len(candidate) <= maxInterfaceNameLength {
+		return candidate
+	}
+	digest := sha256.Sum256([]byte(prefix))
+	return fmt.Sprintf("sc-%x-net", digest[:4])
 }
 
 // newAdminInstallCommand implements `sc-adm install`: the ONE command that puts
@@ -150,7 +165,7 @@ func newAdminInstallCommand(config commandConfig) *cobra.Command {
 			// bridge.
 			applianceBridge := strings.TrimSpace(bridge)
 			if applianceBridge == "" {
-				applianceBridge = v2Prefix + "-net"
+				applianceBridge = applianceBridgeName(v2Prefix)
 				fmt.Fprintf(config.stdout, "[0/2] creating appliance bridge %s (own, NATed)...\n", applianceBridge)
 				if err := creator.EnsureApplianceBridge(cmd.Context(), applianceBridge, v2Prefix); err != nil {
 					return fmt.Errorf("create appliance bridge %s: %w", applianceBridge, err)

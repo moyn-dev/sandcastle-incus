@@ -162,7 +162,8 @@ demand), copying the **running binary** (`os.Executable()`) into it:
   fronted by caddy + cloudflared *inside the same container* (no host ports)
 
 > **The install owns its own appliance bridge.** By default `sc-adm install`
-> creates a NATed bridge `<prefix>-net` (e.g. `sc2-net`) with an auto-picked
+> creates a NATed bridge `<prefix>-net` (e.g. `sc2-net`; long prefixes use a
+> stable `sc-<8-hex>-net` name to fit Linux's 15-character limit) with an auto-picked
 > subnet and puts the appliances on it — so an install shares **no** network
 > object with v1 or with other installs (the only thing shared is the Incus
 > daemon). Appliances need only outbound (image pulls, cloudflared, tailscale);

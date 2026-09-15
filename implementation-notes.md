@@ -5,6 +5,58 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-15 — Fresh publication E2E requires supported Incus and bounded bridge names
+
+Validation: isolated run `e2e-pubfix4` completed with `ALL PASS: Machine
+publication lifecycle` on a fresh Debian container inside the dedicated nested
+Incus VM, accessed from a separate Tailnet client with simulated GitHub login.
+Both public tunnels served the port-3000 response. Direct Tailnet HTTPS served
+the response with the issued Let's Encrypt staging hostname/wildcard
+certificate. Both conflict directions, repeated publish/unpublish, selective
+wildcards, omitted-hostname removal, listing, platform launchers, provider DNS
+identity/removal, and credential-free verbose Cloudflare traces passed. A
+separate admin inspection confirmed no legacy Sidecar publication artifacts.
+Production ACME issuance and legacy migration are separate gates, not claimed
+by this fresh staging run.
+
+The cross-kind E2E found a missing reverse ownership check: Tailnet publish
+accepted a hostname already held by a Machine Tunnel, then the reconciler
+attempted an A record over its CNAME. Machine Public Hostname claims now check
+active tunnel reservations under their existing SQLite write lock, including
+tunnels in the candidate's reserved subtree. A regression reproduces the
+conflict through the actual claim function and verifies no hostname is stored.
+The fresh suite now covers two publications per Machine, selective wildcard
+removal, omitted-hostname removal, and conflicts in both directions.
+
+The publication harness now checks the proxied CNAME through Cloudflare's API
+and public edge addresses through DNS. Public DNS flattens the proxied record,
+so requiring a visible CNAME was an invalid assertion. The isolated driver's
+Incus gateway returned NXDOMAIN while `1.1.1.1` returned working edge addresses;
+changing that driver's upstream restored ordinary curl. Transport probes use
+the configured public resolver and preserve HTTPS hostname validation. API
+record identity is compared across repeated publish and checked after removal.
+Certificate checks return a retryable failure during asynchronous issuance.
+
+Disposable project suffixes are bounded because the install and tenant names
+are added to the Incus project name. Launcher assertions resolve the Incus
+project explicitly: `sc incus` forwards native Incus syntax, so a Sandcastle
+`project:machine` reference otherwise means an Incus remote. These changes fix
+the test harness rather than changing established command semantics.
+
+The first isolated Machine-publication run found two host-bootstrap boundaries
+that unit tests could not expose. Debian 13's stock Incus 6.0.4 lacks the
+storage-volume file API used to seed the shared `/.sc/platform` payload, so a
+fresh E2E VM must run `sc-adm install-incus` (Zabbly stable) before it creates
+the Auth App or a tenant. `scripts/e2e-local-vm.sh` now follows that production
+bootstrap rather than installing Debian's `incus` package directly.
+
+The same run used a timestamped install prefix; its default `<prefix>-net`
+bridge exceeded Linux's 15-character network-interface limit. New installs
+keep the established readable name when it fits; longer prefixes receive a
+stable SHA-256-derived `sc-<8-hex>-net` bridge name. This only affects new,
+long-prefix installs and avoids an error after Cloudflare ingress has already
+been provisioned.
+
 ## 2026-09-14 — Machine Tunnel publish is idempotent for its own CNAME
 
 Cloudflare rejects a second POST for an existing CNAME. Publishing the same

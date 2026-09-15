@@ -120,7 +120,9 @@ Suffix. Validated **from scratch** (purged host → `install-incus` → two
   check:** on a host with a v1 `sc-<user>` tenant, first login by the same
   user to any v2 install provisions on a fresh `/24`.
 - **Own appliance bridge:** each install creates and owns a NATed bridge
-  `<prefix>-net` (`sc2-net`, `id-net`) with an Incus auto-picked subnet and puts
+  `<prefix>-net` (`sc2-net`, `id-net`) when that fits Linux's 15-character
+  interface-name limit; longer prefixes use a stable hashed `sc-<hash>-net`
+  name. It has an Incus auto-picked subnet and puts
   its auth-app/broker on it — so the appliances share **no** network object with
   v1 or with another install (only the Incus daemon is shared). `--bridge`
   overrides to an existing bridge (e.g. `incusbr0`). Per-tenant bridges are
@@ -3010,9 +3012,12 @@ not migrated in place.
 
 ## Machine publication lifecycle: fresh nested-Incus E2E
 
-Run this phase only in a new VM with a new Incus installation. Install the Auth
-App with `--ingress cloudflare` and `--simulate-github-token`; GitHub OAuth,
-browser approval, and GitHub client credentials are prohibited. The nested VM
+Run this phase only in a new VM with a new **supported** Incus installation:
+bootstrap it with `sc-adm install-incus`, not Debian's older Incus package.
+The shared `/.sc/platform` payload uses the storage-volume file API available
+in the supported Zabbly release. Install the Auth App with `--ingress
+cloudflare` and `--simulate-github-token`; GitHub OAuth, browser approval, and
+GitHub client credentials are prohibited. The nested VM
 uses Tailscale for control-plane access only and keeps `tailscale set
 --accept-routes=false`; a separate enrolled Tailnet client accepts the Tenant
 subnet route.
@@ -3036,6 +3041,21 @@ HTTPS returns the Machine response. An identical publish preserves that CNAME,
 mutation, and repeated `sc tunnel unpublish` is safe while removing the
 connector and CNAME. The gate exercises wildcard and omitted-hostname
 unpublish; both inspect only that Machine's recorded publication, not zone DNS.
+Publish two tunnels and verify a selective wildcard removes only its match;
+omitting the hostname must then remove the remaining tunnel. Exercise the same
+sequence for two Tailnet names. Both tunnel-over-Tailnet and Tailnet-over-tunnel
+claims must fail before altering the existing publication or DNS.
+Check the proxied CNAME's ID and target through the Cloudflare API: public DNS
+returns Cloudflare edge A/AAAA records rather than the proxied CNAME itself.
+Resolve transport probes through `SANDCASTLE_E2E_PDZ_RESOLVER` (default
+`1.1.1.1`), then connect to the returned edge with the original HTTPS hostname.
+Also check ordinary client resolution; if it differs, inspect the client's
+upstream resolver before attributing NXDOMAIN to record creation. The isolated
+driver's Incus gateway has been observed returning NXDOMAIN for records that
+already resolve at the public resolver. Configure a working upstream on that
+test client and verify ordinary curl as well. DNS removal must be checked at
+the API and after recursive-cache expiry; absence of a public CNAME alone is
+insufficient. Certificate readiness checks retry while issuance is pending.
 Assert that the generated systemd unit starts `/.sc/platform/sbin/cloudflared`
 (rather than a Machine-private `/usr/local` binary). No Machine receives the Cloudflare API token and the VM has no
 inbound public service port.
