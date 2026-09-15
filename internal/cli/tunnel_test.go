@@ -13,7 +13,7 @@ import (
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
-func TestUninstallMachineTunnelRemovesOnlySandcastleConnectorAndMetadata(t *testing.T) {
+func TestUninstallMachineTunnelRemovesOnlyNamedSandcastleConnector(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	remote := "tunnel-test"
 	incusDir := scconfig.RemoteIncusDir(remote)
@@ -31,21 +31,18 @@ func TestUninstallMachineTunnelRemovesOnlySandcastleConnectorAndMetadata(t *test
 			return nil
 		},
 	}
-	if err := uninstallMachineTunnel(context.Background(), config, "sc-acme-web", "web"); err != nil {
+	if err := uninstallMachineTunnel(context.Background(), config, "sc-acme-web", "web", "app.tc42.uk", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("calls = %v, want stop/remove and metadata clear", calls)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %v, want named connector cleanup", calls)
 	}
-	if got := strings.Join(calls[0], " "); !strings.Contains(got, "systemctl disable --now sandcastle-cloudflared.service") || !strings.Contains(got, "rm -f /etc/default/sandcastle-cloudflared /etc/systemd/system/sandcastle-cloudflared.service") {
+	if got := strings.Join(calls[0], " "); !strings.Contains(got, "systemctl disable --now sandcastle-cloudflared-app-tc42-uk.service") || !strings.Contains(got, "rm -f /etc/default/sandcastle-cloudflared-app-tc42-uk") {
 		t.Fatalf("cleanup command = %q", got)
-	}
-	if got, want := strings.Join(calls[1], " "), "config set web "+meta.KeyV2MachineTunnelHostname+"="; got != want {
-		t.Fatalf("metadata command = %q, want %q", got, want)
 	}
 }
 
-func TestReadMachineTunnelHostnameUsesOnlyTheMachineRecord(t *testing.T) {
+func TestReadMachineTunnelHostnamesUnionsLegacyAndCollectionRecords(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	remote := "tunnel-record"
 	incusDir := scconfig.RemoteIncusDir(remote)
@@ -58,18 +55,22 @@ func TestReadMachineTunnelHostnameUsesOnlyTheMachineRecord(t *testing.T) {
 	config := commandConfig{
 		adminConfig: scconfig.Admin{Remote: remote},
 		incusRunner: func(_ context.Context, args []string, _ []string, _ io.Reader, output io.Writer, _ io.Writer) error {
-			if got, want := strings.Join(args, " "), "config get web "+meta.KeyV2MachineTunnelHostname; got != want {
-				t.Fatalf("args = %q, want %q", got, want)
+			switch got := strings.Join(args, " "); got {
+			case "config get web " + meta.KeyV2MachineTunnelHostnames:
+				_, _ = io.WriteString(output, "api.tc42.uk,App.TC42.uk.\n")
+			case "config get web " + meta.KeyV2MachineTunnelHostname:
+				_, _ = io.WriteString(output, "app.tc42.uk\n")
+			default:
+				t.Fatalf("unexpected args = %q", got)
 			}
-			_, _ = io.WriteString(output, "App.TC42.uk.\n")
 			return nil
 		},
 	}
-	name, err := readMachineTunnelHostname(context.Background(), config, tenant.Summary{Tenant: "demo"}, "zp", "web")
+	names, err := readMachineTunnelHostnames(context.Background(), config, tenant.Summary{Tenant: "demo"}, "zp", "web")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := name, "app.tc42.uk"; got != want {
-		t.Fatalf("name = %q, want %q", got, want)
+	if got, want := strings.Join(names, ","), "api.tc42.uk,app.tc42.uk"; got != want {
+		t.Fatalf("names = %q, want %q", got, want)
 	}
 }

@@ -98,10 +98,15 @@ const (
 	// installed ones; empty until one is installed. Reconciler-written,
 	// Machines with a public name only.
 	KeyV2CertNotAfter = Prefix + "v2.cert-not-after"
-	// KeyV2MachineTunnelHostname and KeyV2TailnetPublications are opt-in
-	// publication summaries rendered by `sc ls`.
-	KeyV2MachineTunnelHostname = Prefix + "v2.machine-tunnel-hostname"
-	KeyV2TailnetPublications   = Prefix + "v2.tailnet-publications"
+	// KeyV2MachineTunnelHostname is the legacy, single Machine Tunnel record.
+	// KeyV2MachineTunnelHostnames is its additive replacement: a comma-separated
+	// set, allowing one Machine to run a dedicated Cloudflare connector per
+	// hostname. Readers union both while existing Machines are migrated lazily.
+	// Both it and KeyV2TailnetPublications are publication summaries rendered by
+	// `sc ls`.
+	KeyV2MachineTunnelHostname  = Prefix + "v2.machine-tunnel-hostname"
+	KeyV2MachineTunnelHostnames = Prefix + "v2.machine-tunnel-hostnames"
+	KeyV2TailnetPublications    = Prefix + "v2.tailnet-publications"
 	// KeyBinaryVersion records the release version (vX.Y.Z) of the sandcastle
 	// binary last pushed into an instance (#124 §7) — auth-app, broker, tenant
 	// sidecars. Written on every binary push; missing means "unknown" and is
@@ -233,13 +238,14 @@ type Machine struct {
 	// its CERT column. CertNotAfter mirrors KeyV2CertNotAfter: the earliest
 	// expiry among the machine's installed certificates. All are only read
 	// when the machine has at least one public name.
-	PublicHostname        string            `json:"publicHostname,omitempty"`
-	PublicHostnames       []string          `json:"publicHostnames,omitempty"`
-	CertState             string            `json:"certState,omitempty"`
-	CertStates            map[string]string `json:"certStates,omitempty"`
-	CertNotAfter          string            `json:"certNotAfter,omitempty"`
-	MachineTunnelHostname string            `json:"machineTunnelHostname,omitempty"`
-	TailnetPublications   []string          `json:"tailnetPublications,omitempty"`
+	PublicHostname         string            `json:"publicHostname,omitempty"`
+	PublicHostnames        []string          `json:"publicHostnames,omitempty"`
+	CertState              string            `json:"certState,omitempty"`
+	CertStates             map[string]string `json:"certStates,omitempty"`
+	CertNotAfter           string            `json:"certNotAfter,omitempty"`
+	MachineTunnelHostname  string            `json:"machineTunnelHostname,omitempty"`
+	MachineTunnelHostnames []string          `json:"machineTunnelHostnames,omitempty"`
+	TailnetPublications    []string          `json:"tailnetPublications,omitempty"`
 }
 
 // PublicNames returns the machine's public-name set, tolerating a payload
@@ -337,7 +343,12 @@ func FormatPublicHostnames(names []string) string {
 func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.PublicHostnames = PublicHostnamesFromConfig(config)
 	machine.PublicHostname = ""
-	machine.MachineTunnelHostname = strings.TrimSpace(config[KeyV2MachineTunnelHostname])
+	machine.MachineTunnelHostnames = MachineTunnelHostnamesFromConfig(config)
+	machine.MachineTunnelHostname = ""
+	if len(machine.MachineTunnelHostnames) > 0 {
+		// Keep the historical scalar for API consumers through the transition.
+		machine.MachineTunnelHostname = machine.MachineTunnelHostnames[0]
+	}
 	machine.TailnetPublications = ParsePublicHostnames(config[KeyV2TailnetPublications])
 	if len(machine.PublicHostnames) == 0 {
 		machine.CertState = ""
@@ -350,6 +361,17 @@ func DecodeMachine(config map[string]string, machine Machine) Machine {
 	machine.CertState = WorstCertState(machine.CertStates, machine.PublicHostnames)
 	machine.CertNotAfter = strings.TrimSpace(config[KeyV2CertNotAfter])
 	return machine
+}
+
+// MachineTunnelHostnamesFromConfig returns the normalized union of the new
+// multi-tunnel key and the legacy singleton. New writers maintain only the
+// list; accepting the old key keeps pre-collection Machines manageable.
+func MachineTunnelHostnamesFromConfig(config map[string]string) []string {
+	names := ParsePublicHostnames(config[KeyV2MachineTunnelHostnames])
+	if legacy := strings.TrimSpace(config[KeyV2MachineTunnelHostname]); legacy != "" {
+		names = append(names, legacy)
+	}
+	return ParsePublicHostnames(strings.Join(names, ","))
 }
 
 // CertStateOf returns the mirrored state of one of the machine's public

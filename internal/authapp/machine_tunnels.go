@@ -218,8 +218,21 @@ func (c cf) do(x context.Context, m, p string, b, out any) error {
 			Message string `json:"message"`
 		}
 	}
-	if json.Unmarshal(d, &v) != nil || !v.Success {
-		return fmt.Errorf("Cloudflare request failed")
+	if err := json.Unmarshal(d, &v); err != nil {
+		return fmt.Errorf("Cloudflare %s %s returned HTTP %d with an invalid response", m, p, z.StatusCode)
+	}
+	if !v.Success {
+		messages := make([]string, 0, len(v.Errors))
+		for _, problem := range v.Errors {
+			if message := strings.TrimSpace(problem.Message); message != "" {
+				messages = append(messages, message)
+			}
+		}
+		detail := strings.Join(messages, "; ")
+		if detail == "" {
+			detail = "request rejected"
+		}
+		return fmt.Errorf("Cloudflare %s %s returned HTTP %d: %s", m, p, z.StatusCode, detail)
 	}
 	if out != nil {
 		return json.Unmarshal(v.Result, out)

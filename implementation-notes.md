@@ -5943,3 +5943,13 @@ and writes the current managed authorized-key block through restricted Incus
 exec on the selected Machine. It must not assume project-wide `/home`: that is
 an opt-in mount, so a local-home sibling needs its own repair. New Machine
 creation performs the same targeted reconciliation before its first SSH dial.
+
+## 2026-09-15 — Machine Tunnel connectors are hostname-scoped
+
+A Machine Tunnel is one Cloudflare Tunnel and one connector token per hostname,
+not one mutable tunnel per Machine. Multiple hostnames can therefore use
+different local ports without a token/configuration collision. The Machine
+records a normalized hostname collection and creates a namespaced systemd unit
+per member. The former singleton metadata and unit remain readable and are
+removed only when that exact legacy hostname is unpublished; this keeps old
+Machines operable without silently interrupting their connector.

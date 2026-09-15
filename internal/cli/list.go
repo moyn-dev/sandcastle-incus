@@ -756,7 +756,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 				machineTypeCell(machine),
 				machineFQDN(result.Tenant, machine),
 				machineCertCell(machine),
-				displayValue(machine.MachineTunnelHostname),
+				machineTunnelCell(machine),
 				displayValue(strings.Join(machine.TailnetPublications, ",")),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
@@ -803,6 +803,23 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 		formatImagesSection(&builder, result.Images)
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+// machineTunnelCell folds a Machine's connector collection like its FQDN
+// public-name cell: the first stable name plus a count for further tunnels.
+// The scalar fallback keeps cache responses from older Auth Apps readable.
+func machineTunnelCell(machine meta.Machine) string {
+	names := machine.MachineTunnelHostnames
+	if len(names) == 0 && strings.TrimSpace(machine.MachineTunnelHostname) != "" {
+		names = []string{machine.MachineTunnelHostname}
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return fmt.Sprintf("%s (+%d)", names[0], len(names)-1)
 }
 
 // The resource-type sections below are appended only when their flag was
