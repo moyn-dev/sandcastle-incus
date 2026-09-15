@@ -59,18 +59,45 @@ func (r MachineSSHKeyReconciler) ReconcileUserSSHKey(ctx context.Context, summar
 	return r.reconcileV2(ctx, server, summary, userKey, publicKey, machines)
 }
 
+// ReconcileMachineUserSSHKey applies the current User SSH Public Key to one
+// Machine. It is the narrow repair used before a CLI connection: a stale
+// project profile must never lock the user out of the Machine it just created.
+func (r MachineSSHKeyReconciler) ReconcileMachineUserSSHKey(ctx context.Context, summary tenant.Summary, project, machine, userKey, publicKey string) error {
+	if strings.TrimSpace(publicKey) == "" {
+		return fmt.Errorf("User SSH Public Key is required")
+	}
+	store := r.Store
+	if store == nil {
+		return fmt.Errorf("machine store is not configured")
+	}
+	machines, err := store.ListMachines(ctx, summary)
+	if err != nil {
+		return err
+	}
+	project = strings.TrimSpace(project)
+	filtered := machines[:0]
+	for _, managed := range machines {
+		name := strings.TrimSpace(managed.Project)
+		if name == "" {
+			name = naming.DefaultProjectName
+		}
+		if name == project && managed.Name == strings.TrimSpace(machine) {
+			filtered = append(filtered, managed)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	server, err := r.server()
+	if err != nil {
+		return err
+	}
+	return r.reconcileV2(ctx, server, summary, userKey, publicKey, filtered)
+}
+
 // reconcileV2 writes the rotated key into each v2 project's shared /home.
-//
-// A v2 project's machines all mount ONE home volume, so authorized_keys is a
-// single file per project: reconciling any one running machine fixes every
-// machine in that project, including stopped ones (they read the same file when
-// they next boot). Machines that cannot be exec'd right now — stopped, or a VM
-// whose incus-agent is not up — are therefore skipped rather than failed, and we
-// only need one success per project.
-//
-// Without this, rotating the login key locked the user out of every EXISTING
-// machine: the key is baked in once by cloud-init at create, the profile update
-// only reaches machines created afterwards, and nothing rewrote authorized_keys.
+// It uses one available Machine per project; broad login reconciliation is
+// best-effort, while targeted repairs use ReconcileMachineUserSSHKey above.
 func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server MachineSSHKeyServer, summary tenant.Summary, userKey string, publicKey string, machines []meta.Machine) error {
 	byProject := map[string][]meta.Machine{}
 	order := []string{}
@@ -90,15 +117,9 @@ func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server Machine
 		var lastErr error
 		reconciled := false
 		for _, managed := range byProject[project] {
-			// Exec needs a running instance; a stopped one shares the same home
-			// volume and will see the key when it next boots.
 			if !managed.Running {
 				continue
 			}
-			// v2 instances carry the bare machine name; the project is the Incus
-			// project, not a prefix on the instance name. The login user comes
-			// from the tenant (user.sandcastle.v2.user), not from the GitHub key
-			// name — v2 machine listings carry no LinuxUser.
 			if err := r.reconcileMachine(ctx, projectServer, managed.Name, managed, v2LoginUser(summary, managed, userKey), publicKey); err != nil {
 				lastErr = err
 				continue
@@ -107,12 +128,6 @@ func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server Machine
 			break
 		}
 		if !reconciled && lastErr != nil {
-			// Nothing in this project could be written, and it was not simply
-			// that everything is stopped: record the failure and KEEP GOING.
-			// Returning here skipped every remaining project, so one machine
-			// without the login user (e.g. a hand-made stock-image machine)
-			// blocked key distribution tenant-wide — every project ordered
-			// after the broken one silently never got the rotated key.
 			failures = append(failures, lastErr)
 		}
 	}

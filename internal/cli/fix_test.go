@@ -35,6 +35,9 @@ func TestMachineFixupsAreComplete(t *testing.T) {
 		if f.name == "" || f.summary == "" {
 			t.Fatalf("fixup %+v missing name/summary", f)
 		}
+		if f.central != nil {
+			continue
+		}
 		if f.apply == nil || f.check == nil {
 			t.Fatalf("fixup %q missing apply/check script", f.name)
 		}

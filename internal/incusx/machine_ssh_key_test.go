@@ -121,6 +121,27 @@ func TestMachineSSHKeyReconcilerV2UsesBareNamesAndPerProjectIncusProjects(t *tes
 	}
 }
 
+func TestMachineSSHKeyReconcilerScopesConnectionRepairToOneMachine(t *testing.T) {
+	resource := &fakeMachineSSHKeyResource{}
+	server := &fakeMachineSSHKeyServer{resource: resource}
+	reconciler := MachineSSHKeyReconciler{
+		Store: fakeMachineSSHKeyStore{machines: []meta.Machine{
+			{Tenant: "alice", Project: "default", Name: "web", Running: true},
+			{Tenant: "alice", Project: "wordpress", Name: "test", Running: true},
+		}},
+		Server: server,
+	}
+	if err := reconciler.ReconcileMachineUserSSHKey(context.Background(), v2Summary(), "wordpress", "test", "alice", "ssh-ed25519 current"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(server.resources, ","), "sc2-alice-wordpress"; got != want {
+		t.Fatalf("projects = %q, want %q", got, want)
+	}
+	if len(resource.execs) != 1 || resource.execs[0].instance != "test" {
+		t.Fatalf("execs = %#v, want only wordpress:test", resource.execs)
+	}
+}
+
 // A v2 project's machines share ONE home volume, so authorized_keys is a single
 // file per project: one running machine is enough, and stopped machines are not
 // even exec'd (they read the same file when they next boot).

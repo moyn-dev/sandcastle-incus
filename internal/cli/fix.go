@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
@@ -19,6 +20,9 @@ type machineFixup struct {
 	summary string
 	apply   func() string
 	check   func() string
+	// central runs through the Machine's restricted Incus API rather than SSH.
+	// It is used for bootstrap repairs that must work when SSH is the failure.
+	central func(context.Context, commandConfig, tenant.Summary, string, bool) error
 	// requiresPayload: this fixup's scripts consume the shared /.sc platform
 	// payload, so `sc fix` converges it (via the Incus API, once per project)
 	// before the per-machine script runs.
@@ -42,6 +46,11 @@ func anyFixupRequiresPayload(fixups []machineFixup) bool {
 // sc-platform volume via the tenant's own Incus API — once per project, so the
 // per-machine script only has to install the stable shims.
 var machineFixups = []machineFixup{
+	{
+		name:    "ssh-key",
+		summary: "reconcile the current CLI SSH key through Incus (works when SSH is locked out)",
+		central: reconcileMachineSSHKeyFix,
+	},
 	{
 		name:            "agent-forwarding",
 		summary:         "forwarded SSH agent survives herdr/tmux panes (stable /.sc shims + shared payload)",
@@ -78,6 +87,7 @@ the machine's login user via sudo. With --check it only reports status and
 changes nothing; --only limits it to the named fixup(s).
 
 Fixups:
+  ssh-key              reconcile the current CLI SSH key through Incus
   agent-forwarding     forwarded SSH agent survives herdr/tmux panes
   caddy-publications   refresh Caddy readiness for Tailnet/public certificates
   cloudflared          restore an already-installed Cloudflare connector`,
@@ -129,6 +139,28 @@ func knownFixupNames() string {
 // runFixV2 dials the machine and runs each selected fixup's script as root via
 // `sudo sh -s`, feeding the script on stdin so there is nothing to shell-quote.
 func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary, reference string, fixups []machineFixup, checkOnly bool) error {
+	var central, sshFixups []machineFixup
+	for _, fixup := range fixups {
+		if fixup.central != nil {
+			central = append(central, fixup)
+		} else {
+			sshFixups = append(sshFixups, fixup)
+		}
+	}
+	var failed []string
+	for _, fixup := range central {
+		fmt.Fprintf(config.stdout, "\n[%s] %s\n", fixup.name, fixup.summary)
+		if err := fixup.central(ctx, config, summary, reference, checkOnly); err != nil {
+			failed = append(failed, fixup.name)
+			fmt.Fprintln(config.stderr, err)
+		}
+	}
+	if len(sshFixups) == 0 {
+		if len(failed) > 0 {
+			return fmt.Errorf("fixup(s) failed: %s", strings.Join(failed, ", "))
+		}
+		return nil
+	}
 	dialed, err := dialV2Machine(ctx, config, summary, reference, launchV2Options{})
 	if err != nil {
 		return err
@@ -145,11 +177,10 @@ func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary,
 	}
 	fmt.Fprintf(config.stdout, "%s %s (%s@%s)\n", verb, dialed.machine, dialed.loginUser, dialed.privateIP)
 
-	var failed []string
 	// Central half first (ADR-0022): the payload lives on the project's shared
 	// /.sc volume, so it is converged once over the Incus API — the per-machine
 	// scripts below only install the stable shims that source it.
-	if anyFixupRequiresPayload(fixups) {
+	if anyFixupRequiresPayload(sshFixups) {
 		status, err := config.tenantCreator.EnsureProjectPlatformPayload(ctx, summary.V2IncusProjectName(dialed.project), checkOnly)
 		if err != nil {
 			// --check stays report-only: surface the problem, keep checking.
@@ -161,7 +192,7 @@ func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary,
 			fmt.Fprintf(config.stdout, "/.sc payload: %s\n", formatSCPayloadStatus(status))
 		}
 	}
-	for _, f := range fixups {
+	for _, f := range sshFixups {
 		script := f.apply()
 		if checkOnly {
 			script = f.check()
@@ -182,5 +213,34 @@ func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary,
 	if len(failed) > 0 {
 		return fmt.Errorf("fixup(s) failed: %s", strings.Join(failed, ", "))
 	}
+	return nil
+}
+
+func reconcileMachineSSHKeyFix(ctx context.Context, config commandConfig, summary tenant.Summary, reference string, checkOnly bool) error {
+	key, err := prepareLoginSSHKey(loginSSHKeyRequest{})
+	if err != nil {
+		return err
+	}
+	project, machine, err := resolveV2MachineReference(summary, reference, config.adminConfig.Project)
+	if err != nil {
+		return err
+	}
+	if checkOnly {
+		fmt.Fprintf(config.stdout, "  current CLI key: %s\nssh-key: READY (run without --check to reconcile %s)\n", key.Fingerprint, project)
+		return nil
+	}
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
+	}
+	reconciler := incusx.MachineSSHKeyReconciler{
+		Remote:     config.adminConfig.Remote,
+		ConfigPath: incusDir + "/config.yml",
+		Store:      config.machineStore,
+	}
+	if err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machine, defaultLocalUnixUsername(), key.PublicKey); err != nil {
+		return err
+	}
+	fmt.Fprintf(config.stdout, "  reconciled %s for project %s\nssh-key: installed\n", key.Fingerprint, project)
 	return nil
 }

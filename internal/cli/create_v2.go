@@ -579,6 +579,25 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	if err != nil {
 		return dialedV2Machine{}, err
 	}
+	// A project's profile can carry the SSH key from an earlier login. A newly
+	// created Machine must receive the key this CLI will actually offer before
+	// the first connection, otherwise creation succeeds but `sc connect` is
+	// immediately locked out. Existing Machines are repaired explicitly by
+	// `sc fix --only ssh-key`.
+	if ensured.Created {
+		incusDir := resolveIncusDir(config.adminConfig.Remote)
+		if incusDir == "" {
+			return dialedV2Machine{}, fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
+		}
+		reconciler := incusx.MachineSSHKeyReconciler{
+			Remote:     config.adminConfig.Remote,
+			ConfigPath: incusDir + "/config.yml",
+			Store:      config.machineStore,
+		}
+		if err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machineName, defaultLocalUnixUsername(), sshKey.PublicKey); err != nil {
+			return dialedV2Machine{}, fmt.Errorf("reconcile current SSH key for new machine %s: %w", machineName, err)
+		}
+	}
 	privateKeyPath := strings.TrimSuffix(sshKey.PublicKeyPath, ".pub")
 	// Record the machine's authoritative host key under the names it answers
 	// at, then dial its IP but check the key against the name (HostKeyAlias).

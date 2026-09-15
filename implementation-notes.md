@@ -5934,3 +5934,12 @@ hostname. `cloudflared` similarly restarts only a connector that already has
 its Sandcastle token and service files; a missing connector requires the
 explicit tunnel publication lifecycle. This makes `sc fix` safe for legacy
 Machines without turning a repair command into a publication command.
+
+## 2026-09-15 — SSH lockout repair is Machine-scoped through Incus
+
+A project profile can retain an SSH key from an earlier login, while the CLI
+offers its current local key. `sc fix --only ssh-key` therefore bypasses SSH
+and writes the current managed authorized-key block through restricted Incus
+exec on the selected Machine. It must not assume project-wide `/home`: that is
+an opt-in mount, so a local-home sibling needs its own repair. New Machine
+creation performs the same targeted reconciliation before its first SSH dial.
