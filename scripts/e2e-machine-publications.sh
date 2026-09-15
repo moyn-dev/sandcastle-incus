@@ -92,8 +92,8 @@ sc tunnel publish "$REF" --port 3000 --hostname "$TUNNEL" >/dev/null
 [[ "$(dig_cname "$TUNNEL")" == "$FIRST_CNAME" ]] || fail "idempotent tunnel publish changed CNAME"
 sc ls | grep -F "$TUNNEL" >/dev/null || fail "sc ls does not render TUNNEL hostname"
 expect_fail "already" sc tailnet publish "$REF" --hostname "$TUNNEL"
-sc tunnel unpublish "$REF" --hostname "$TUNNEL"
-sc tunnel unpublish "$REF" --hostname "$TUNNEL"
+sc tunnel unpublish "$REF" --hostname "tunnel-*.$ZONE"
+sc tunnel unpublish "$REF"
 wait_for "$DNS_TIMEOUT" "tunnel CNAME removal" bash -c '[[ -z "$(dig +short CNAME "$1" "@$2")" ]]' "$TUNNEL" "$RESOLVER"
 pass "Machine Tunnel lifecycle"
 
@@ -112,8 +112,8 @@ curl -k --fail --connect-timeout 10 --resolve "$TAILNET:443:$PRIVATE_IP" "https:
 sc tailnet publish "$REF" --hostname "$TAILNET" >/dev/null
 [[ "$(dig_a "$TAILNET")" == "$PRIVATE_IP" ]] || fail "idempotent Tailnet publish changed direct Machine target"
 sc ls | grep -F "$TAILNET" >/dev/null || fail "sc ls does not render TAILNET hostname"
-sc tailnet unpublish "$REF" --hostname "$TAILNET"
-sc tailnet unpublish "$REF" --hostname "$TAILNET"
+sc tailnet unpublish "$REF" --hostname "tailnet-*.$ZONE"
+sc tailnet unpublish "$REF"
 wait_for "$DNS_TIMEOUT" "Tailnet A record removal" tailnet_records_gone
 pass "direct-Machine Tailnet lifecycle"
 

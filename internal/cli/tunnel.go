@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
+	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 // Machine Tunnels are deliberately separate from Machine Public Hostnames and
@@ -106,10 +109,6 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 		Short: "Remove a machine's dedicated Cloudflare Tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := authapp.NormalizeMachineHostname(hostname)
-			if err != nil {
-				return err
-			}
 			bound, reference, restore, err := rebindForReference(config, args[0])
 			if err != nil {
 				return err
@@ -122,6 +121,30 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 			if !projectAuthAppAvailable(bound, "") {
 				return fmt.Errorf("Machine Tunnels require sc login to an Auth App")
 			}
+			// A Machine owns at most one dedicated connector.  Selection is
+			// deliberately against its recorded value, never a zone-wide DNS
+			// search, so an omitted hostname cannot affect another Machine.
+			if hostname == "" || strings.ContainsAny(hostname, "*?[") {
+				recorded, err := readMachineTunnelHostname(cmd.Context(), bound, summary, project, machine)
+				if err != nil {
+					return err
+				}
+				if recorded == "" {
+					return nil
+				}
+				matched, err := filepath.Match(allHostnamePattern(hostname), recorded)
+				if err != nil {
+					return err
+				}
+				if !matched {
+					return nil
+				}
+				hostname = recorded
+			}
+			name, err := authapp.NormalizeMachineHostname(hostname)
+			if err != nil {
+				return err
+			}
 			client := authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken}
 			if _, err := client.UnprovisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name}); err != nil {
 				return err
@@ -133,9 +156,29 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 			return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tunnel unpublished: https://%s", name), payload)
 		},
 	}
-	command.Flags().StringVar(&hostname, "hostname", "", "public Cloudflare hostname to remove (required)")
-	_ = command.MarkFlagRequired("hostname")
+	command.Flags().StringVar(&hostname, "hostname", "", "public hostname or wildcard to remove (default: all on this Machine)")
 	return command
+}
+
+func readMachineTunnelHostname(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine string) (string, error) {
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return "", fmt.Errorf("no Sandcastle-managed Incus config found for remote %q; add one with: sc remote add", config.adminConfig.Remote)
+	}
+	runner := config.incusRunner
+	if runner == nil {
+		runner = runIncusCLI
+	}
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	var current bytes.Buffer
+	if err := runner(ctx, []string{"config", "get", machine, meta.KeyV2MachineTunnelHostname}, env, config.stdin, &current, config.stderr); err != nil {
+		return "", fmt.Errorf("read Machine Tunnel metadata: %w", err)
+	}
+	name := strings.TrimSpace(current.String())
+	if name == "" {
+		return "", nil
+	}
+	return authapp.NormalizeMachineHostname(name)
 }
 
 // uninstallMachineTunnel removes only the files Sandcastle owns. The binary is

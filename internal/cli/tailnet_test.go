@@ -146,6 +146,60 @@ func TestTailnetUnpublishMigratesMarkedLegacySidecarPublication(t *testing.T) {
 	}
 }
 
+func TestTailnetUnpublishWildcardAndOmittedHostnameSelectOnlyRecordedNames(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		hostArg string
+		want    string
+	}{
+		{name: "wildcard", hostArg: "internal-one*.tc42.uk", want: "internal-one.tc42.uk"},
+		{name: "all", want: "internal-one.tc42.uk,internal-two.tc42.uk,other.tc42.uk"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &stubAuthHostnames{held: map[string][]string{"zp:web": {"internal-one.tc42.uk", "internal-two.tc42.uk", "other.tc42.uk"}}}
+			config, _ := hostnameTestConfig(t, stub)
+			config.adminConfig.Remote = "sandcastle-demo"
+			incusDir := scconfig.RemoteIncusDir(config.adminConfig.Remote)
+			if err := os.MkdirAll(incusDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(incusDir, "config.yml"), []byte("remotes: {}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			publicationValue := "internal-one.tc42.uk,internal-two.tc42.uk,other.tc42.uk"
+			config.incusRunner = func(_ context.Context, args []string, _ []string, _ io.Reader, output io.Writer, _ io.Writer) error {
+				switch args[1] {
+				case "get":
+					_, _ = io.WriteString(output, publicationValue+"\n")
+				case "set":
+					publicationValue = args[4]
+				case "unset":
+					publicationValue = ""
+				}
+				return nil
+			}
+			command := newTailnetCommand(config, &rootOptions{output: outputText})
+			args := []string{"unpublish", "zp:web"}
+			if test.hostArg != "" {
+				args = append(args, "--hostname", test.hostArg)
+			}
+			command.SetArgs(args)
+			if err := command.Execute(); err != nil {
+				t.Fatalf("unpublish: %v", err)
+			}
+			var removed []string
+			for _, call := range stub.calls {
+				if strings.HasPrefix(call, "remove ") {
+					removed = append(removed, strings.Fields(call)[3])
+				}
+			}
+			if got := strings.Join(removed, ","); got != test.want {
+				t.Fatalf("removed = %q, want %q (calls %v)", got, test.want, stub.calls)
+			}
+		})
+	}
+}
+
 func TestTailnetVerbsRequireAuthApp(t *testing.T) {
 	stub := &stubAuthHostnames{}
 	config, _ := hostnameTestConfig(t, stub)

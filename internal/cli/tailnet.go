@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -88,16 +89,36 @@ func newTailnetUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.
 		Short: "Remove a machine HTTPS publication from its Tenant Tailnet",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := authapp.NormalizeMachineHostname(hostname)
-			if err != nil {
-				return err
-			}
 			bound, reference, restore, err := rebindForReference(config, args[0])
 			if err != nil {
 				return err
 			}
 			defer restore()
 			summary, project, machine, err := hostnameTarget(cmd.Context(), bound, reference)
+			if err != nil {
+				return err
+			}
+			if hostname == "" || strings.ContainsAny(hostname, "*?[") {
+				names, err := readTailnetPublicationMetadata(cmd.Context(), bound, summary, project, machine)
+				if err != nil {
+					return err
+				}
+				for _, candidate := range names {
+					matched, matchErr := filepath.Match(allHostnamePattern(hostname), candidate)
+					if matchErr != nil {
+						return matchErr
+					}
+					if matched {
+						child := newTailnetUnpublishCommand(bound, opts)
+						child.SetArgs([]string{args[0], "--hostname", candidate})
+						if err := child.ExecuteContext(cmd.Context()); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			}
+			name, err := authapp.NormalizeMachineHostname(hostname)
 			if err != nil {
 				return err
 			}
@@ -145,9 +166,15 @@ func newTailnetUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.
 			return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tailnet HTTPS unpublished: https://%s", result.Released), result)
 		},
 	}
-	command.Flags().StringVar(&hostname, "hostname", "", "DNS-only public hostname to remove (required)")
-	_ = command.MarkFlagRequired("hostname")
+	command.Flags().StringVar(&hostname, "hostname", "", "public hostname or wildcard to remove (default: all on this Machine)")
 	return command
+}
+
+func allHostnamePattern(pattern string) string {
+	if pattern == "" {
+		return "*"
+	}
+	return pattern
 }
 
 func tailnetPublicationMarked(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string) (bool, error) {

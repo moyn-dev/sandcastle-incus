@@ -3034,8 +3034,10 @@ SANDCASTLE_E2E=1 \
 HTTPS returns the Machine response. An identical publish preserves that CNAME,
 `sc ls` renders it in `TUNNEL`, an occupied hostname is refused without
 mutation, and repeated `sc tunnel unpublish` is safe while removing the
-connector and CNAME. No Machine receives the Cloudflare API token and the VM
-has no inbound public service port.
+connector and CNAME. The gate exercises wildcard and omitted-hostname
+unpublish; both inspect only that Machine's recorded publication, not zone DNS.
+No Machine receives the Cloudflare API token and the VM has no
+inbound public service port.
 
 **Direct-Machine Tailnet PASS:** `sc tailnet publish` creates the existing
 Machine Public Hostname lifecycle: DNS-only direct A record(s) to the Machine's
@@ -3045,7 +3047,9 @@ From the Tailnet client HTTPS reaches the Machine and serves its certificate;
 the Machine holds the certificate/key but neither it nor the Sidecar holds the
 Cloudflare API token. Repeating publish is idempotent; `sc ls` renders the
 requested view in `TAILNET`; repeated `sc tailnet unpublish` safely removes DNS
-and the Machine-Caddy site according to Machine Public Hostname cleanup.
+and the Machine-Caddy site according to Machine Public Hostname cleanup. The
+gate also verifies a shell-quoted hostname wildcard and an omitted hostname
+select only Tailnet publications recorded on that Machine.
 
 Run `VERBOSE=1` for both paths. It must show immediate progress before a long
 wait and Cloudflare method/path/status/duration traces, with credentials

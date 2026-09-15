@@ -5915,3 +5915,12 @@ in that Machine's Caddy. `sc tailnet unpublish` reverses that same resource
 lifecycle. Existing Sidecar-backed publications are deliberately preserved until
 an operator explicitly unpublishes and republishes them; changing their target
 automatically is unsafe because DNS changes are not instantaneous.
+
+## 2026-09-15 — Wildcard publication removal is Machine-scoped
+
+`sc tunnel unpublish` and `sc tailnet unpublish` accept an optional hostname.
+Without it they remove the publication records owned by the selected Machine;
+a shell-quoted Go-style wildcard selects a subset of those records. They do not
+list a DNS zone to discover removal targets. That deliberately keeps the
+convenient bulk operation scoped to durable Machine ownership and prevents a
+pattern from removing another Machine's hostname during DNS propagation.
