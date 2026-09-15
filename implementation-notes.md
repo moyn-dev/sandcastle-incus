@@ -5970,3 +5970,12 @@ DNS, certificate and Caddy reconciliation. In verbose mode the CLI reads the
 selected Machine only to show the intended DNS-only A-record target and calls
 out asynchronous convergence. Listing failure is deliberately non-fatal so a
 diagnostic cannot block a legitimate publication.
+
+## 2026-09-15 — Stop a Machine Tunnel connector before deleting its Cloudflare Tunnel
+
+Cloudflare rejects deletion while a `cloudflared` replica is connected. Tunnel
+unpublish therefore stops/removes the Machine-side connector first, retains the
+publication record if provider cleanup fails, and retries the documented short
+connection-drain window. This ordering makes a retry safe: publish can restore
+the connector from the retained Cloudflare token, while unpublish can finish
+the external cleanup without an orphaned ownership record.

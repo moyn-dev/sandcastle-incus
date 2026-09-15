@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
@@ -155,23 +156,21 @@ func newTunnelUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.C
 			if err != nil {
 				return err
 			}
-			client := authapp.DeviceClient{BaseURL: commandAuthHostname(bound, ""), AuthToken: bound.adminConfig.AuthToken}
-			result, err := client.UnprovisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
-			if err != nil {
-				return err
-			}
-			for _, line := range result.Trace {
-				verboseCLI(bound, "%s", line)
-			}
 			legacy, err := machineTunnelLegacyHostname(cmd.Context(), bound, summary, project, machine)
 			if err != nil {
 				if machineTunnelMachineGone(err) {
+					if _, err := unprovisionMachineTunnelWithRetry(cmd.Context(), bound, summary, project, machine, name); err != nil {
+						return err
+					}
 					payload := map[string]any{"project": project, "machine": machine, "hostname": name, "status": "unpublished-machine-gone"}
 					return writeOutput(bound.stdout, opts.output, fmt.Sprintf("Tunnel unpublished: https://%s (Machine no longer exists)", name), payload)
 				}
 				return err
 			}
 			if err := uninstallMachineTunnel(cmd.Context(), bound, summary.V2IncusProjectName(project), machine, name, legacy == name); err != nil {
+				return err
+			}
+			if _, err := unprovisionMachineTunnelWithRetry(cmd.Context(), bound, summary, project, machine, name); err != nil {
 				return err
 			}
 			if err := recordMachineTunnelPublication(cmd.Context(), bound, summary, project, machine, name, false, false, legacy == name); err != nil {
@@ -210,24 +209,24 @@ func unpublishMachineTunnels(ctx context.Context, config commandConfig, opts *ro
 	if len(selected) == 0 {
 		return nil
 	}
-	client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
 	var failed []string
 	for _, name := range selected {
-		result, err := client.UnprovisionMachineTunnel(ctx, authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name})
-		if err != nil {
-			failed = append(failed, name+": "+err.Error())
-			continue
-		}
-		for _, line := range result.Trace {
-			verboseCLI(config, "%s", line)
-		}
 		legacy, err := machineTunnelLegacyHostname(ctx, config, summary, project, machine)
-		if err != nil {
+		if err != nil && !machineTunnelMachineGone(err) {
 			failed = append(failed, name+": "+err.Error())
 			continue
 		}
-		if err := uninstallMachineTunnel(ctx, config, summary.V2IncusProjectName(project), machine, name, legacy == name); err != nil {
+		if err == nil {
+			if stopErr := uninstallMachineTunnel(ctx, config, summary.V2IncusProjectName(project), machine, name, legacy == name); stopErr != nil {
+				failed = append(failed, name+": "+stopErr.Error())
+				continue
+			}
+		}
+		if _, err := unprovisionMachineTunnelWithRetry(ctx, config, summary, project, machine, name); err != nil {
 			failed = append(failed, name+": "+err.Error())
+			continue
+		}
+		if machineTunnelMachineGone(err) {
 			continue
 		}
 		if err := recordMachineTunnelPublication(ctx, config, summary, project, machine, name, false, false, legacy == name); err != nil {
@@ -242,6 +241,31 @@ func unpublishMachineTunnels(ctx context.Context, config commandConfig, opts *ro
 		return fmt.Errorf("%d tunnel(s) could not be unpublished: %s", len(failed), strings.Join(failed, "; "))
 	}
 	return nil
+}
+
+func unprovisionMachineTunnelWithRetry(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string) (authapp.MachineTunnelResult, error) {
+	client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
+	var last error
+	for attempt := 1; attempt <= 4; attempt++ {
+		result, err := client.UnprovisionMachineTunnel(ctx, authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: hostname})
+		if err == nil {
+			for _, line := range result.Trace {
+				verboseCLI(config, "%s", line)
+			}
+			return result, nil
+		}
+		last = err
+		if !strings.Contains(strings.ToLower(err.Error()), "active connections") || attempt == 4 {
+			break
+		}
+		verboseCLI(config, "cloudflare tunnel %s is draining; retrying cleanup (%d/4)", hostname, attempt)
+		select {
+		case <-ctx.Done():
+			return authapp.MachineTunnelResult{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return authapp.MachineTunnelResult{}, last
 }
 
 func readMachineTunnelHostnames(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine string) ([]string, error) {
