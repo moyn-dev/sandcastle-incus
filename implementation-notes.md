@@ -5962,3 +5962,11 @@ Cloudflare run token is returned, then clears that state only after systemd has
 started the connector. This prefers a visible, retryable reservation over a
 best-effort rollback: the latter can fail independently and leaves a hostname
 claimed with no CLI recovery path.
+
+## 2026-09-15 — Tailnet publication diagnostics show the routed private IP
+
+Tailnet publication remains a hostname claim; the Auth App owns the actual
+DNS, certificate and Caddy reconciliation. In verbose mode the CLI reads the
+selected Machine only to show the intended DNS-only A-record target and calls
+out asynchronous convergence. Listing failure is deliberately non-fatal so a
+diagnostic cannot block a legitimate publication.

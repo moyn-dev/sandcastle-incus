@@ -66,7 +66,11 @@ func newTailnetPublishCommand(config commandConfig, opts *rootOptions) *cobra.Co
 			if !ok {
 				return errors.New("Tailnet publication requires sc login to an Auth App")
 			}
-			verboseCLI(bound, "tailnet: claiming Machine Public Hostname; the Auth App will converge direct-Machine DNS, certificate, and Caddy")
+			if ip := tailnetPublicationTargetIP(cmd.Context(), bound, summary, project, machine); ip != "" {
+				verboseCLI(bound, "tailnet: DNS-only A record %s → %s (Tenant Tailnet subnet route); certificate and Machine Caddy converge asynchronously", name, ip)
+			} else {
+				verboseCLI(bound, "tailnet: claiming DNS-only Machine Public Hostname; the Auth App will converge its Tenant Tailnet route address, certificate, and Caddy asynchronously")
+			}
 			result, err := client.AddMachineHostname(cmd.Context(), authapp.MachineHostnameRequest{Tenant: summary.Tenant, Hostname: name}, project, machine)
 			if err != nil {
 				return err
@@ -80,6 +84,25 @@ func newTailnetPublishCommand(config commandConfig, opts *rootOptions) *cobra.Co
 	command.Flags().StringVar(&hostname, "hostname", "", "DNS-only public hostname for Tailnet access (required)")
 	_ = command.MarkFlagRequired("hostname")
 	return command
+}
+
+// tailnetPublicationTargetIP is diagnostic-only: publication itself remains
+// the Auth App's hostname claim. A listing failure must never make a valid
+// claim fail merely because VERBOSE asked for more context.
+func tailnetPublicationTargetIP(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine string) string {
+	if config.machineStore == nil {
+		return ""
+	}
+	machines, err := listMachinesScoped(ctx, config.machineStore, summary, project)
+	if err != nil {
+		return ""
+	}
+	for _, candidate := range machines {
+		if candidate.Project == project && candidate.Name == machine {
+			return candidate.PrivateIP
+		}
+	}
+	return ""
 }
 
 func newTailnetUnpublishCommand(config commandConfig, opts *rootOptions) *cobra.Command {
