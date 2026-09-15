@@ -92,6 +92,42 @@ dig +short <machine>.<suffix>          @<tenant-cidr>.3
 - Nothing resolves at all → the sidecar or its tailnet route is down. Check
   `sc tailscale status`.
 
+## A newly published public hostname does not resolve yet
+
+`sc tailnet publish` claims a Machine Public Hostname; the Auth App then
+asynchronously converges its DNS-only Cloudflare A record. Check the public
+record before changing anything else:
+
+```bash
+dig @1.1.1.1 <hostname> A +short
+```
+
+If that returns the Machine private IP, Cloudflare has the record. A prior
+NXDOMAIN is likely cached by the client; flush the local cache and retry:
+
+```bash
+# Linux (systemd-resolved)
+resolvectl flush-caches
+
+# Linux (nscd, if installed instead)
+sudo nscd -i hosts
+
+# macOS
+sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
+
+# Windows PowerShell (or use `ipconfig /flushdns` in Command Prompt)
+Clear-DnsClientCache
+```
+
+Then compare the public and local views. If they differ, inspect the DNS
+resolver and Secure DNS setting used by the application (browsers can bypass
+the operating-system resolver):
+
+```bash
+dig @1.1.1.1 <hostname> A +short
+getent ahostsv4 <hostname>       # Linux local resolver
+```
+
 ## A machine with a public name shows `CERT pending`, Caddy is inactive, or HTTPS refuses
 
 A machine with Machine Public Hostnames — the derived `<m>.<domain>` of a
