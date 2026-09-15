@@ -822,3 +822,24 @@ func TestV2ProfileUserDataDomainWithoutIdentity(t *testing.T) {
 		t.Fatalf("no-identity profile:\n%s", data)
 	}
 }
+
+func TestPublicationFixupsRepairOnlyMachineLocalState(t *testing.T) {
+	caddyApply := CaddyPublicationsBackfillScript()
+	caddyCheck := CaddyPublicationsCheckScript()
+	cloudflaredApply := CloudflaredBackfillScript()
+	cloudflaredCheck := CloudflaredCheckScript()
+	for name, script := range map[string]string{
+		"caddy apply": caddyApply, "caddy check": caddyCheck,
+		"cloudflared apply": cloudflaredApply, "cloudflared check": cloudflaredCheck,
+	} {
+		if strings.Contains(script, "curl ") || strings.Contains(script, "cloudflared tunnel") {
+			t.Fatalf("%s must not create a publication or obtain credentials:\n%s", name, script)
+		}
+	}
+	if !strings.Contains(caddyApply, "sandcastle-caddy-setup --refresh") || !strings.Contains(caddyCheck, "caddy.ready") {
+		t.Fatalf("caddy publication fixup does not repair/read the Caddy readiness contract")
+	}
+	if !strings.Contains(cloudflaredApply, "systemctl enable --now sandcastle-cloudflared.service") || !strings.Contains(cloudflaredCheck, "sandcastle-cloudflared.service") {
+		t.Fatalf("cloudflared fixup does not repair/read the local connector")
+	}
+}

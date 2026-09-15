@@ -13,12 +13,12 @@ func TestSelectFixupsDefaultsToAll(t *testing.T) {
 }
 
 func TestSelectFixupsFiltersByName(t *testing.T) {
-	got, err := selectFixups([]string{"agent-forwarding"})
+	got, err := selectFixups([]string{"caddy-publications", "cloudflared"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].name != "agent-forwarding" {
-		t.Fatalf("selectFixups([agent-forwarding]) = %+v, want the one fixup", got)
+	if len(got) != 2 || got[0].name != "caddy-publications" || got[1].name != "cloudflared" {
+		t.Fatalf("selectFixups(caddy-publications, cloudflared) = %+v, want both requested fixups", got)
 	}
 }
 

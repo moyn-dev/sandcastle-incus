@@ -49,6 +49,19 @@ var machineFixups = []machineFixup{
 		check:           tenant.SSHAgentForwardCheckScript,
 		requiresPayload: true,
 	},
+	{
+		name:            "caddy-publications",
+		summary:         "refresh Machine Caddy readiness for Tailnet and public-hostname certificates",
+		apply:           tenant.CaddyPublicationsBackfillScript,
+		check:           tenant.CaddyPublicationsCheckScript,
+		requiresPayload: true,
+	},
+	{
+		name:    "cloudflared",
+		summary: "restore an already-installed Machine Cloudflare Tunnel connector",
+		apply:   tenant.CloudflaredBackfillScript,
+		check:   tenant.CloudflaredCheckScript,
+	},
 }
 
 func newFixCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -65,7 +78,9 @@ the machine's login user via sudo. With --check it only reports status and
 changes nothing; --only limits it to the named fixup(s).
 
 Fixups:
-  agent-forwarding  forwarded SSH agent survives herdr/tmux panes`,
+  agent-forwarding     forwarded SSH agent survives herdr/tmux panes
+  caddy-publications   refresh Caddy readiness for Tailnet/public certificates
+  cloudflared          restore an already-installed Cloudflare connector`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected, err := selectFixups(only)

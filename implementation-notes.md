@@ -5924,3 +5924,13 @@ a shell-quoted Go-style wildcard selects a subset of those records. They do not
 list a DNS zone to discover removal targets. That deliberately keeps the
 convenient bulk operation scoped to durable Machine ownership and prevents a
 pattern from removing another Machine's hostname during DNS propagation.
+
+## 2026-09-15 — `sc fix` repairs Machine-side publication contracts only
+
+`caddy-publications` refreshes the local Caddy setup and writes the per-name
+readiness marker needed by the Auth App's existing certificate delivery loop.
+It intentionally does not claim DNS, order a certificate, or retarget a
+hostname. `cloudflared` similarly restarts only a connector that already has
+its Sandcastle token and service files; a missing connector requires the
+explicit tunnel publication lifecycle. This makes `sc fix` safe for legacy
+Machines without turning a repair command into a publication command.

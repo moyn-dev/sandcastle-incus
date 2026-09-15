@@ -424,6 +424,84 @@ if [ "$need" = 0 ]; then echo "agent-forwarding: OK"; else echo "agent-forwardin
 `
 }
 
+// CaddyPublicationsBackfillScript refreshes the Machine-owned Caddy contract.
+// It never creates DNS records or certificates: the Auth App remains the
+// authority for both. A refreshed per-name marker lets the normal reconciler
+// safely deliver any already-issued Machine Public Hostname certificate.
+func CaddyPublicationsBackfillScript() string {
+	return `set -eu
+if [ ! -x /usr/local/sbin/sandcastle-caddy-setup ]; then
+  echo "caddy-publications: NEEDS RECREATE (caddy setup shim is absent)"
+  exit 1
+fi
+/usr/local/sbin/sandcastle-caddy-setup --refresh
+if [ -r /etc/sandcastle/caddy.ready ]; then
+  echo "caddy-publications: refreshed ($(tr '\n' ' ' < /etc/sandcastle/caddy.ready))"
+else
+  echo "caddy-publications: refresh did not write the readiness marker"
+  exit 1
+fi
+`
+}
+
+// CaddyPublicationsCheckScript is the non-mutating counterpart used by
+// `sc fix --check`. A missing marker is the precise legacy state that blocks
+// Auth App certificate delivery.
+func CaddyPublicationsCheckScript() string {
+	return `set -u
+need=0
+if [ -x /usr/local/sbin/sandcastle-caddy-setup ]; then
+  echo "  ok  caddy setup shim is present"
+else
+  echo "  MISSING  /usr/local/sbin/sandcastle-caddy-setup"; need=1
+fi
+if [ -r /etc/sandcastle/caddy.ready ] && grep -q '^PRIVATE=' /etc/sandcastle/caddy.ready; then
+  echo "  ok  caddy readiness marker is present"
+else
+  echo "  MISSING  /etc/sandcastle/caddy.ready (public certificates cannot be delivered)"; need=1
+fi
+if systemctl is-active --quiet caddy; then
+  echo "  ok  caddy is active on the Machine"
+else
+  echo "  INACTIVE  caddy"; need=1
+fi
+if [ "$need" = 0 ]; then echo "caddy-publications: OK"; else echo "caddy-publications: NEEDS FIX"; fi
+`
+}
+
+// CloudflaredBackfillScript restores the local service only when a Machine
+// Tunnel was already installed. It deliberately cannot create a connector or
+// fetch a token: those remain the explicit `sc tunnel publish` lifecycle.
+func CloudflaredBackfillScript() string {
+	return `set -eu
+if [ ! -r /etc/default/sandcastle-cloudflared ]; then
+  echo "cloudflared: not configured on this Machine"
+  exit 0
+fi
+if [ ! -x /usr/local/bin/cloudflared ] || [ ! -f /etc/systemd/system/sandcastle-cloudflared.service ]; then
+  echo "cloudflared: NEEDS REPUBLISH (connector files are incomplete)"
+  exit 1
+fi
+systemctl daemon-reload
+systemctl enable --now sandcastle-cloudflared.service
+echo "cloudflared: active"
+`
+}
+
+func CloudflaredCheckScript() string {
+	return `set -u
+if [ ! -r /etc/default/sandcastle-cloudflared ]; then
+  echo "cloudflared: not configured on this Machine"
+  exit 0
+fi
+need=0
+if [ -x /usr/local/bin/cloudflared ]; then echo "  ok  cloudflared binary is present"; else echo "  MISSING  cloudflared binary"; need=1; fi
+if [ -f /etc/systemd/system/sandcastle-cloudflared.service ]; then echo "  ok  cloudflared service unit is present"; else echo "  MISSING  cloudflared service unit"; need=1; fi
+if systemctl is-active --quiet sandcastle-cloudflared.service; then echo "  ok  cloudflared connector is active"; else echo "  INACTIVE  cloudflared connector"; need=1; fi
+if [ "$need" = 0 ]; then echo "cloudflared: OK"; else echo "cloudflared: NEEDS FIX"; fi
+`
+}
+
 // machineGeneralizeScript freshens per-instance identity so a machine launched
 // from an `sc image save` base image does NOT inherit the source machine's SSH
 // host keys, machine-id, or stale TLS leaf. It runs once per instance (cloud-init
