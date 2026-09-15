@@ -36,6 +36,14 @@ func TestPlatformPayloadFilesAndVersion(t *testing.T) {
 		t.Fatalf("payload shell rc must be the shared consume snippet, got:\n%s", shellRC.Content)
 	}
 
+	cloudflared, ok := byPath[SCPayloadCloudflaredPath]
+	if !ok {
+		t.Fatalf("payload missing %s: %v", SCPayloadCloudflaredPath, files)
+	}
+	if cloudflared.Mode != 0o755 || !strings.Contains(cloudflared.Content, "cloudflared-linux-") {
+		t.Fatalf("cloudflared payload launcher is not executable/download-capable: %#v", cloudflared)
+	}
+
 	if version == "" {
 		t.Fatal("payload version is empty")
 	}

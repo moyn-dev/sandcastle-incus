@@ -3036,7 +3036,8 @@ HTTPS returns the Machine response. An identical publish preserves that CNAME,
 mutation, and repeated `sc tunnel unpublish` is safe while removing the
 connector and CNAME. The gate exercises wildcard and omitted-hostname
 unpublish; both inspect only that Machine's recorded publication, not zone DNS.
-No Machine receives the Cloudflare API token and the VM has no
+Assert that the generated systemd unit starts `/.sc/platform/sbin/cloudflared`
+(rather than a Machine-private `/usr/local` binary). No Machine receives the Cloudflare API token and the VM has no
 inbound public service port.
 
 **Direct-Machine Tailnet PASS:** `sc tailnet publish` creates the existing

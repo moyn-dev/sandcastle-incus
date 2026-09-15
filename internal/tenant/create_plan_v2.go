@@ -474,16 +474,21 @@ if [ "$need" = 0 ]; then echo "caddy-publications: OK"; else echo "caddy-publica
 // fetch a token: those remain the explicit `sc tunnel publish` lifecycle.
 func CloudflaredBackfillScript() string {
 	return `set -eu
-if [ ! -r /etc/default/sandcastle-cloudflared ]; then
+if ! ls /etc/default/sandcastle-cloudflared* >/dev/null 2>&1; then
   echo "cloudflared: not configured on this Machine"
   exit 0
 fi
-if [ ! -x /usr/local/bin/cloudflared ] || [ ! -f /etc/systemd/system/sandcastle-cloudflared.service ]; then
+if [ ! -x /.sc/platform/sbin/cloudflared ]; then
+  echo "cloudflared: NEEDS PAYLOAD SYNC (/.sc/platform connector launcher is absent)"
+  exit 1
+fi
+if ! ls /etc/systemd/system/sandcastle-cloudflared*.service >/dev/null 2>&1; then
   echo "cloudflared: NEEDS REPUBLISH (connector files are incomplete)"
   exit 1
 fi
+sed -i 's#ExecStart=/usr/local/bin/cloudflared#ExecStart=/.sc/platform/sbin/cloudflared#g' /etc/systemd/system/sandcastle-cloudflared*.service
 systemctl daemon-reload
-systemctl enable --now sandcastle-cloudflared.service
+for unit in /etc/systemd/system/sandcastle-cloudflared*.service; do systemctl enable --now "$(basename "$unit")"; done
 echo "cloudflared: active"
 `
 }
@@ -495,12 +500,36 @@ if [ ! -r /etc/default/sandcastle-cloudflared ]; then
   exit 0
 fi
 need=0
-if [ -x /usr/local/bin/cloudflared ]; then echo "  ok  cloudflared binary is present"; else echo "  MISSING  cloudflared binary"; need=1; fi
-if [ -f /etc/systemd/system/sandcastle-cloudflared.service ]; then echo "  ok  cloudflared service unit is present"; else echo "  MISSING  cloudflared service unit"; need=1; fi
-if systemctl is-active --quiet sandcastle-cloudflared.service; then echo "  ok  cloudflared connector is active"; else echo "  INACTIVE  cloudflared connector"; need=1; fi
+if [ -x /.sc/platform/sbin/cloudflared ]; then echo "  ok  cloudflared launcher is in /.sc/platform"; else echo "  MISSING  /.sc/platform/sbin/cloudflared"; need=1; fi
+if ls /etc/systemd/system/sandcastle-cloudflared*.service >/dev/null 2>&1; then echo "  ok  cloudflared service unit is present"; else echo "  MISSING  cloudflared service unit"; need=1; fi
+if systemctl --no-legend --state=active list-units 'sandcastle-cloudflared*.service' | grep -q .; then echo "  ok  cloudflared connector is active"; else echo "  INACTIVE  cloudflared connector"; need=1; fi
 if [ "$need" = 0 ]; then echo "cloudflared: OK"; else echo "cloudflared: NEEDS FIX"; fi
 `
 }
+
+// cloudflaredPlatformLauncher is deliberately a platform payload entry, so a
+// Machine Tunnel's unit always starts from /.sc/platform. The actual release
+// executable is cached outside the read-only mount; only first use needs the
+// public Cloudflare download and later starts are fully local.
+const cloudflaredPlatformLauncher = `#!/bin/sh
+set -eu
+cache=/var/lib/sandcastle/cloudflared/cloudflared
+if [ ! -x "$cache" ]; then
+  case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+    amd64|x86_64) arch=amd64 ;;
+    arm64|aarch64) arch=arm64 ;;
+    *) echo "cloudflared: unsupported architecture" >&2; exit 1 ;;
+  esac
+  mkdir -p "$(dirname "$cache")"
+  tmp="$cache.tmp.$$"
+  trap 'rm -f "$tmp"' EXIT
+  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch" -o "$tmp"
+  chmod 0755 "$tmp"
+  mv "$tmp" "$cache"
+  trap - EXIT
+fi
+exec "$cache" "$@"
+`
 
 // machineGeneralizeScript freshens per-instance identity so a machine launched
 // from an `sc image save` base image does NOT inherit the source machine's SSH

@@ -105,11 +105,11 @@ func installMachineTunnel(ctx context.Context, config commandConfig, incusProjec
 	if err := run([]string{"file", "push", "-", machine + defaultsPath}, strings.NewReader("TUNNEL_TOKEN="+token+"\n")); err != nil {
 		return fmt.Errorf("install machine tunnel token: %w", err)
 	}
-	unit := "[Unit]\nDescription=Sandcastle Machine Cloudflare Tunnel (" + hostname + ")\nAfter=network-online.target\n\n[Service]\nEnvironmentFile=" + defaultsPath + "\nExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"
+	unit := "[Unit]\nDescription=Sandcastle Machine Cloudflare Tunnel (" + hostname + ")\nAfter=network-online.target\n\n[Service]\nEnvironmentFile=" + defaultsPath + "\nExecStart=/.sc/platform/sbin/cloudflared tunnel --no-autoupdate run\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"
 	if err := run([]string{"file", "push", "-", machine + unitPath}, strings.NewReader(unit)); err != nil {
 		return fmt.Errorf("install machine tunnel service: %w", err)
 	}
-	script := "set -eu; if ! test -x /usr/local/bin/cloudflared; then case $(dpkg --print-architecture) in amd64) a=amd64;; arm64) a=arm64;; *) echo unsupported architecture >&2; exit 1;; esac; curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$a -o /usr/local/bin/cloudflared; chmod 755 /usr/local/bin/cloudflared; fi; systemctl daemon-reload; systemctl enable --now " + unitName + ".service"
+	script := "set -eu; test -x /.sc/platform/sbin/cloudflared; /.sc/platform/sbin/cloudflared --version; systemctl daemon-reload; systemctl enable --now " + unitName + ".service"
 	if err := run([]string{"exec", machine, "--", "sh", "-ceu", script}, nil); err != nil {
 		return fmt.Errorf("start machine tunnel: %w", err)
 	}

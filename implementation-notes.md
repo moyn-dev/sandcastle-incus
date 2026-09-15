@@ -5991,3 +5991,14 @@ that replaces the CLI proposes the payload update but asks for one rerun rather
 than writing the old payload under a new release label. `sc update` also skips
 passive version notices after its own status table, avoiding a false skew
 warning from the still-running pre-update process.
+
+## 2026-09-15 — Machine Tunnel units start the platform cloudflared launcher
+
+Machine Tunnel service units execute `/.sc/platform/sbin/cloudflared`, making
+their startup policy part of the centrally versioned shared payload instead of
+a per-Machine `/usr/local` binary. The provider executable remains a local
+runtime cache because the platform volume is mounted read-only inside Machines;
+the launcher populates that cache only on first use. This retains the existing
+no-provider-token-on-Machine boundary while allowing a payload sync to update
+the connector launcher for every Machine in a project. Old units are preserved
+until the user explicitly runs `sc fix --only cloudflared` after payload sync.

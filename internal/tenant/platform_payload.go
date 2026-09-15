@@ -36,6 +36,10 @@ const (
 	SCPayloadShellRCPath    = "shell/rc.sh"
 	SCPayloadGeneralizePath = "sbin/machine-generalize"
 	SCPayloadCaddySetupPath = "sbin/caddy-setup"
+	// SCPayloadCloudflaredPath is the Machine Tunnel connector launcher.  Its
+	// stable path lets systemd units follow centrally-synced platform behavior
+	// rather than carrying a private /usr/local binary per Machine.
+	SCPayloadCloudflaredPath = "sbin/cloudflared"
 )
 
 // PlatformPayload returns the versioned /.sc/platform payload: every platform
@@ -53,6 +57,7 @@ func PlatformPayload() ([]PlatformPayloadFile, string) {
 		{Path: SCPayloadShellRCPath, Mode: 0o644, Content: sshAgentConsumeSnippet},
 		{Path: SCPayloadGeneralizePath, Mode: 0o755, Content: machineGeneralizeScript},
 		{Path: SCPayloadCaddySetupPath, Mode: 0o755, Content: caddyIngressSetupScript},
+		{Path: SCPayloadCloudflaredPath, Mode: 0o755, Content: cloudflaredPlatformLauncher},
 	}
 	version := platformPayloadVersion(files)
 	files = append(files, PlatformPayloadFile{Path: PlatformPayloadVersionFile, Mode: 0o644, Content: version + "\n"})

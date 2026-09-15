@@ -839,7 +839,7 @@ func TestPublicationFixupsRepairOnlyMachineLocalState(t *testing.T) {
 	if !strings.Contains(caddyApply, "sandcastle-caddy-setup --refresh") || !strings.Contains(caddyCheck, "caddy.ready") {
 		t.Fatalf("caddy publication fixup does not repair/read the Caddy readiness contract")
 	}
-	if !strings.Contains(cloudflaredApply, "systemctl enable --now sandcastle-cloudflared.service") || !strings.Contains(cloudflaredCheck, "sandcastle-cloudflared.service") {
+	if !strings.Contains(cloudflaredApply, "/.sc/platform/sbin/cloudflared") || !strings.Contains(cloudflaredApply, "systemctl enable --now") || !strings.Contains(cloudflaredCheck, "cloudflared launcher is in /.sc/platform") {
 		t.Fatalf("cloudflared fixup does not repair/read the local connector")
 	}
 }
