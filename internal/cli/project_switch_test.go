@@ -24,10 +24,10 @@ func TestInfraFromPinnedProject(t *testing.T) {
 	}
 }
 
-// ADR-0021: `sc project switch` re-pins the active install's incus remote to the
-// new project so raw `incus <remote>:` follows the switch.
-func TestProjectSwitchRepinsRemote(t *testing.T) {
+// Directory switching must leave raw Incus defaults unchanged.
+func TestProjectSwitchLeavesIncusDefaultsUnchanged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	// Enroll remote "sc-acme" pinned to sc2-acme-first in the shared incus dir.
 	scconfig.AdoptNativeIncusDirIfChosen()
 	shared := scconfig.SharedIncusDir()
@@ -46,20 +46,21 @@ func TestProjectSwitchRepinsRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "Re-pinned remote") {
-		t.Fatalf("stdout missing re-pin line:\n%s", stdout)
+	if !strings.Contains(stdout, ".sandcastle") {
+		t.Fatalf("stdout missing selection path:\n%s", stdout)
 	}
 	data, err := os.ReadFile(incusCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "project: sc2-acme-web") {
-		t.Fatalf("remote pin not updated to sc2-acme-web:\n%s", string(data))
+	if string(data) != cfgYML {
+		t.Fatalf("Incus defaults changed:\n%s", data)
 	}
 }
 
 func TestProjectSwitchSetsCurrentProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig: scconfig.Admin{Tenant: "acme", Remote: "sc-acme"},
 		tenantStore: infoV2ProjectStore("sc2-acme-first", "sc2-acme-web"),
@@ -70,7 +71,7 @@ func TestProjectSwitchSetsCurrentProject(t *testing.T) {
 	if !strings.Contains(stdout, `Switched to project "web"`) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+	cfg, _, err := scconfig.LoadDirectoryConfig("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +82,7 @@ func TestProjectSwitchSetsCurrentProject(t *testing.T) {
 
 func TestProjectSwitchRejectsUnknownProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	_, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig: scconfig.Admin{Tenant: "acme", Remote: "sc-acme"},
 		tenantStore: infoV2ProjectStore("sc2-acme-first"),
@@ -92,6 +94,7 @@ func TestProjectSwitchRejectsUnknownProject(t *testing.T) {
 
 func TestProjectSwitchLocalOnlySkipsValidation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	// No tenantStore → a validated switch would fail; --local-only must not look.
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig: scconfig.Admin{Tenant: "acme", Remote: "sc-acme"},
@@ -102,7 +105,7 @@ func TestProjectSwitchLocalOnlySkipsValidation(t *testing.T) {
 	if !strings.Contains(stdout, `Switched to project "web"`) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+	cfg, _, err := scconfig.LoadDirectoryConfig("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +116,7 @@ func TestProjectSwitchLocalOnlySkipsValidation(t *testing.T) {
 
 func TestProjectListMarksCurrent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig: scconfig.Admin{Tenant: "acme", Project: "web", Remote: "sc-acme"},
 		tenantStore: infoV2ProjectStore("sc2-acme-first", "sc2-acme-web"),

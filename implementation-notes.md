@@ -6074,3 +6074,29 @@ which makes the destructive publication tier fail with the missing credential's
 actual name. This is intentionally a hard preflight error: a real Cloudflare
 publication E2E must not fall back to a fake credential or a production OAuth
 installation.
+
+## 2026-09-17 — Directory selection and local project history
+
+The user explicitly approved replacing switch-time global defaults with nearest-ancestor
+`.sandcastle` selection, keeping globals only as fallback. The agreed behavior is in
+`docs/spec/directory-selection.md`; the bounded decisions were settled directly, so no
+multi-session wayfinder map was needed. This supersedes ADR-0021's project re-pinning.
+
+Use a small YAML selection file (required remote/project, optional remote_projects),
+not the secret-bearing global config type. Store per-remote project history locally:
+reading only Incus pins would forget project switches now that those pins stay unchanged.
+A remote without local history starts from its existing Incus pin, then default.
+Invalid files stop lookup instead of silently targeting another install. Writes use
+atomic replacement; explicit global config edits and login/enrollment remain compatible.
+The global enrollment maps resolve tenant/auth/token/broker in memory on every local
+selection, reusing the existing cross-tenant ambiguity rules.
+
+Go was absent from PATH, so validation uses an isolated Go 1.25.6 toolchain under
+`/tmp/sandcastle-go`, matching go.mod, without installing system packages.
+
+`sc incus` now passes `INCUS_REMOTE` alongside `INCUS_PROJECT` to its child process,
+so local selection works without changing the shared Incus config. The matching
+Incus v6.23.0 client is built under `/tmp/sandcastle-go/bin` for validation only.
+
+Validation: `go test ./...` and `go vet ./...` pass with the temporary Go/Incus
+toolchain. No live gated Incus integration/E2E deployment was run.

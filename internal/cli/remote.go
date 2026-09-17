@@ -33,7 +33,7 @@ func newRemoteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 
 // newRemoteListCommand lists the enrolled Sandcastle installs (one incus remote
 // per install under ADR-0021), marking the active one. The active remote is the
-// shared incus dir's current-remote — the same knob `sc ls`/`sc c` resolve from
+// resolved directory/environment selection — the same value `sc ls`/`sc c` resolve from
 // (config.adminConfig.Remote) — so the `*` here always matches what sc operates on.
 func newRemoteListCommand(config commandConfig) *cobra.Command {
 	return &cobra.Command{
@@ -53,6 +53,7 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 			}
 			current := strings.TrimSpace(config.adminConfig.Remote)
 			rows := sandcastleRemoteRows(remotes, cfg)
+			fmt.Fprintln(config.stdout, selectionSource(config))
 			if len(rows) == 0 {
 				fmt.Fprintln(config.stdout, "No Sandcastle remotes enrolled. Run `sc login <auth-hostname>` to enroll one.")
 				return nil
@@ -63,6 +64,7 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 				marker := ""
 				if r.Name == current {
 					marker = "*"
+					r.Project = config.adminConfig.Project
 				}
 				fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", marker, r.Name, orDash(r.Project), orDash(r.AuthHostname))
 			}
@@ -71,10 +73,7 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 	}
 }
 
-// newRemoteSwitchCommand switches the active Sandcastle install. It writes BOTH
-// the shared incus dir's current-remote (what sc resolves from) and cfg.Remote,
-// and re-points the auth hostname/broker/token to the target install — the same
-// effects as `sc config set remote`, in one intent-named command.
+// newRemoteSwitchCommand persists only the directory's remote/project selection.
 func newRemoteSwitchCommand(config commandConfig) *cobra.Command {
 	return &cobra.Command{
 		Use:     "switch <name>",
@@ -91,33 +90,37 @@ func newRemoteSwitchCommand(config commandConfig) *cobra.Command {
 			// A typo silently pointing sc at a non-existent install is worse than a
 			// loud failure, so validate against the enrolled remotes first.
 			incusDir, _ := scconfig.SharedIncusDirExplained()
-			if remotes, err := readLocalRemotes(incusDir); err == nil {
-				if !remoteNameKnown(remotes, name) {
-					known := sandcastleRemoteNames(remotes, cfg)
-					hint := "run `sc remote list` to see enrolled installs, or `sc login <auth-hostname>` to enroll"
-					if len(known) > 0 {
-						hint = "enrolled remotes: " + strings.Join(known, ", ")
-					}
-					return fmt.Errorf("no enrolled Sandcastle remote %q; %s", name, hint)
+			remotes, err := readLocalRemotes(incusDir)
+			if err != nil {
+				return fmt.Errorf("read incus remotes from %s: %w", incusDir, err)
+			}
+			if !remoteNameKnown(remotes, name) {
+				known := sandcastleRemoteNames(remotes, cfg)
+				hint := "run `sc remote list` to see enrolled installs, or `sc login <auth-hostname>` to enroll"
+				if len(known) > 0 {
+					hint = "enrolled remotes: " + strings.Join(known, ", ")
 				}
+				return fmt.Errorf("no enrolled Sandcastle remote %q; %s", name, hint)
 			}
-			// Always apply (idempotent) rather than short-circuit on "already on":
-			// the active remote can be right while the project pin is stale, and
-			// re-running the switch is how you fix that.
-			fx := applyRemoteSwitch(&cfg, name)
-			project := repinProjectForRemote(&cfg, name)
-			if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
+			local, err := directorySelection(config)
+			if err != nil {
+				return err
 			}
-			if project != "" {
-				fmt.Fprintf(config.stdout, "Switched to remote %q (project %q).\n", name, project)
-			} else {
-				fmt.Fprintf(config.stdout, "Switched to remote %q.\n", name)
+			cfg.SelectRemote(name)
+			project := local.RemoteProjects[name]
+			if project == "" {
+				project = shortProjectName(scconfig.SharedIncusRemoteProject(name), cfg.Tenant)
 			}
-			printRemoteSwitchEffects(config.stdout, cfg, fx)
-			if err := scconfig.SetSharedIncusDefaultRemote(name); err != nil {
-				fmt.Fprintf(config.stdout, "Note: incus current remote not switched: %v\n", err)
+			if project == "" {
+				project = "default"
 			}
+			local.Remote, local.Project = name, project
+			local.RemoteProjects[name] = project
+			path, err := scconfig.SaveDirectoryConfig(local)
+			if err != nil {
+				return fmt.Errorf("save selection: %w", err)
+			}
+			fmt.Fprintf(config.stdout, "Switched to remote %q (project %q; saved in %s).\n", name, project, path)
 			return nil
 		},
 	}
@@ -208,68 +211,23 @@ type remoteSwitchEffects struct {
 // installs that share one tenant name (ADR-0021: the remote names the install).
 // The caller persists cfg and switches the shared incus current-remote.
 func applyRemoteSwitch(cfg *scconfig.SandcastleConfig, name string) remoteSwitchEffects {
-	cfg.Remote = name
-	var fx remoteSwitchEffects
-	host := cfg.AuthHostnameForRemote(name)
-	if host == "" {
-		return fx
+	before := *cfg
+	cfg.SelectRemote(name)
+	fx := remoteSwitchEffects{
+		BrokerCleared: before.Broker != "" && cfg.Broker == "",
+		TokenCleared:  before.AuthToken != "" && cfg.AuthToken == "",
+		TokenSynced:   cfg.AuthToken != "" && cfg.AuthToken != before.AuthToken,
 	}
-	// The tenant must follow the remote too: token-backed commands (`sc route`,
-	// `sc project create`) act on cfg.Tenant, and the right token with the
-	// wrong tenant is still a 403 (#112). Recorded per remote at login; an
-	// unrecorded remote (pre-migration login) leaves the tenant alone.
-	if tenant := cfg.TenantForRemote(name); tenant != "" && tenant != cfg.Tenant {
-		cfg.Tenant = tenant
-		fx.Tenant = tenant
+	if cfg.AuthHostname != before.AuthHostname {
+		fx.AuthHostname = cfg.AuthHostname
 	}
-	if host != cfg.AuthHostname {
-		cfg.AuthHostname = host
-		fx.AuthHostname = host
+	if cfg.Tenant != before.Tenant {
+		fx.Tenant = cfg.Tenant
 	}
-	// Prefer the per-remote records: two tenants of ONE install share the Auth
-	// Hostname, so the hostname-keyed maps hold only the LAST login's broker and
-	// token — the per-remote maps let the bearer identity follow the remote
-	// (#112). The hostname-keyed maps remain the fallback for logins predating
-	// them — but ONLY while the hostname maps to a single remote: with several
-	// remotes on one hostname the fallback would present the OTHER tenant's
-	// credential (the very bug), so the ambiguous case clears and fails loudly
-	// (re-login records the per-remote maps).
-	ambiguousHost := false
-	for other, otherHost := range cfg.Installs {
-		if other != name && normalizeAuthHostname(otherHost) == normalizeAuthHostname(host) {
-			ambiguousHost = true
-			break
-		}
+	if cfg.Broker != before.Broker {
+		fx.Broker = cfg.Broker
 	}
-	broker := cfg.BrokerForRemote(name)
-	if broker == "" && !ambiguousHost {
-		broker = cfg.BrokerForAuthHostname(host)
-	}
-	switch {
-	case broker != "" && broker != cfg.Broker:
-		cfg.Broker = broker
-		fx.Broker = broker
-	case broker == "" && cfg.Broker != "":
-		// Nothing recorded for this install (a login predating the brokers map).
-		// A stale broker is worse than none — it points broker-derived commands
-		// at the other install's tenant gateway.
-		cfg.Broker = ""
-		fx.BrokerCleared = true
-	}
-	token := cfg.AuthTokenForRemote(name)
-	if token == "" && !ambiguousHost {
-		token = cfg.AuthTokenForAuthHostname(host)
-	}
-	switch {
-	case token != "" && token != cfg.AuthToken:
-		cfg.AuthToken = token
-		fx.TokenSynced = true
-	case token == "" && cfg.AuthToken != "":
-		// A token minted by another install is rejected across the trust boundary
-		// (403 "user not found"); clear it so the next call fails loudly.
-		cfg.AuthToken = ""
-		fx.TokenCleared = true
-	}
+
 	return fx
 }
 

@@ -166,11 +166,10 @@ and silently operated on the *other* install's project.
   same GitHub user into BOTH from one client machine, choosing a different
   Tenant DNS Suffix per login (e.g. `sc login https://<host-a> --dns-suffix=tcA`,
   `sc login https://<host-b> --dns-suffix=tcB`). Switch installs with
-  `sc incus remote switch sc-<prefix>-<tenant>` (or plain `incus remote switch`
-  in the shared config dir): the incus current remote is the **single source of
-  truth** for which install `sc` targets — the whole CLI (remote, project pin,
-  tenant scoping) follows it. `sc config set remote …` writes through to the
-  same knob; `SANDCASTLE_REMOTE` still overrides for a single invocation.
+  `sc remote switch <suffix>`. **PASS:** the nearest `.sandcastle` selects the
+  remote and project; the CLI's tenant and bearer identity follow that selection
+  in memory. Global Sandcastle and Incus defaults are unchanged. Without a local
+  file, existing global defaults are fallback; environment overrides still win.
   **Bearer identity follows the remote (#112):** login also records the CLI
   token and Broker URL per REMOTE (`remote_auth_tokens`/`remote_brokers`), so
   switching between two tenants of ONE install (same Auth Hostname — the
@@ -347,8 +346,9 @@ Unit-tested, but the connect resolution deserves a live pass on `home`:
     scoped to the default project alone, and only certificates that lived
     through each `sc project create` had been extended project-by-project).
 13. **`sc project switch`.** With ≥2 projects, `sc project switch api` **PASS:**
-    prints `Switched to project "api"`, `sc config show` shows `file.project:
-    "api"`, and `sc project list` marks `* api`. `sc project switch ghost`
+    prints `Switched to project "api"` and the absolute `.sandcastle` path,
+    `sc config show` shows resolved `project: "api"`, and `sc project list`
+    reports the same file and marks `* api`. `sc project switch ghost`
     **PASS:** errors `project ghost not found in tenant … (projects: …)` unless
     `--local-only` is passed (`newProjectSwitchCommand`;
     `TestProjectSwitchSetsCurrentProject`, `TestProjectSwitchRejectsUnknownProject`,
@@ -371,19 +371,29 @@ both `big` and `home` enrolled):
 
 **One incus remote per install (ADR-0021).** The enrolled remote is named
 `<suffix>` (not `<suffix>-<project>`); the project is an orthogonal pin.
-`sc project switch` re-pins the active remote, and login lazily collapses a
-tenant's per-project/legacy remotes for this install to the single `<suffix>`
-(endpoint-scoped; never removes the current remote). Live check on `home`:
+`sc project switch` now selects the project locally; it leaves the raw Incus
+pin unchanged (directory selection supersedes ADR-0021's switch write-through).
+Login still collapses per-project remotes for the same install.
 
-15. **Remote is `<suffix>`, switch re-pins.** After `sc login https://<host>` (or
-    the lazy migration on re-login), `sc incus remote ls` shows one row named
-    `<suffix>` (e.g. `jules`), not `jules-first`, and any old `<suffix>-<project>`
-    remotes for this install are gone. `sc project switch h2` **PASS:** prints
-    `Re-pinned remote "<suffix>"`, and `sc incus ls` and raw `incus <suffix>: ls`
-    (via `INCUS_CONF`) both list `h2`'s machines — no divergence
-    (`repinCurrentRemoteProject`, `planRemoteMigration`;
-    `TestProjectSwitchRepinsRemote`, `TestPlanRemoteMigration`). `sc project
-    create x` no longer adds a per-project remote (default `--write-remote` off).
+15. **Directory selection and isolated checkouts.** In checkout A, run
+    `sc project switch h2`. **PASS:** it creates `.sandcastle` with remote and
+    project, prints its absolute path, and `sc incus ls` lists `h2`. Record the
+    global Sandcastle and Incus config bytes before switching; **PASS:** unchanged
+    afterward. Raw `incus` retains its existing project pin.
+    In A's nested `src` directory, switch project again; **PASS:** updates A's
+    file, creates no child file, and both list commands report A's path.
+    Switch to another remote, select a project there, then switch back and forth;
+    **PASS:** each remote's local project choice is restored and token-backed
+    commands use that remote's tenant credentials. No credentials appear locally.
+    In independent checkout B, **PASS:** A's selection has no effect; without a
+    file B uses global fallback and says so. Its first switch creates B's file.
+    Put an independent `.sandcastle` in A/src; **PASS:** only that file is read.
+    Export `SANDCASTLE_REMOTE`/`SANDCASTLE_PROJECT`; **PASS:** overrides win without
+    changing files. Invalid YAML or missing required fields in the nearest file
+    must fail with its path instead of using a parent/global fallback.
+    `sc project list --json` **PASS:** valid JSON with `config_path`.
+    Regression coverage: `TestDirectorySwitchesAreIsolatedAndRememberProjects`,
+    `TestDirectorySelectionWalkAndWrite`, `TestDirectorySelectionInvalidFileStopsLookup`.
 
 Keep CIDR pools distinct across installs sharing a tailnet. Robustness fixes the
 from-scratch run surfaced (all in `internal/incusx` + the auth-app): tolerate

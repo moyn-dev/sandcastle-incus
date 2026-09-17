@@ -52,14 +52,19 @@ func ExecuteAdmin(name string, args []string) int {
 
 	// activeInstall is the Sandcastle install the USER CLI is pointed at —
 	// resolved exactly the way `sc ls` resolves it (scconfig.LoadUser, which
-	// prefers the shared incus dir's current remote over config.yml). Admin
+	// prefers directory selection, with global defaults as fallback). Admin
 	// commands must act on that same install: `sc admin update` following a
 	// different deployment than `sc ls` lists is how an operator updates the
 	// wrong sandcastle without noticing. Skipped entirely when the operator
 	// named a remote explicitly — an explicit choice always wins.
 	activeInstall := ""
 	if !explicitRemote {
-		activeInstall = strings.TrimSpace(scconfig.LoadUser().Remote)
+		userConfig, err := scconfig.LoadUserWithError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		activeInstall = strings.TrimSpace(userConfig.Remote)
 	}
 
 	// Prefer explicit admin_remote; then cert/IP-based auto-detection; then the

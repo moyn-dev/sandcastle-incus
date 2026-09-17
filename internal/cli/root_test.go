@@ -1922,6 +1922,9 @@ func TestIncusCommandUsesActiveRemoteConfig(t *testing.T) {
 	if !envContains(gotEnv, "INCUS_CONF="+incusDir) {
 		t.Fatalf("env missing INCUS_CONF=%s", incusDir)
 	}
+	if !envContains(gotEnv, "INCUS_REMOTE=sandcastle-alice") {
+		t.Fatalf("env missing selected INCUS_REMOTE: %#v", gotEnv)
+	}
 	if !envContains(gotEnv, "INCUS_PROJECT=sc2-acme-default") {
 		t.Fatalf("env missing INCUS_PROJECT=sc2-acme-default: %#v", gotEnv)
 	}

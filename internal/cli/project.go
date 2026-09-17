@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -43,30 +42,28 @@ func newProjectListCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 			if err != nil {
 				return err
 			}
-			return writeOutput(config.stdout, opts.output, formatProjectNamespaceList(tenantSummary, currentProjectName(config, tenantSummary)), tenantSummary)
+			payload := struct {
+				tenant.Summary
+				ConfigPath string `json:"config_path"`
+			}{tenantSummary, config.adminConfig.DirectoryConfigPath}
+			return writeOutput(config.stdout, opts.output, selectionSource(config)+"\n"+formatProjectNamespaceList(tenantSummary, currentProjectName(config, tenantSummary)), payload)
 		},
 	}
 }
 
 type projectSwitchOutput struct {
-	Project        string `json:"project"`
-	LocalOnly      bool   `json:"local_only,omitempty"`
-	ConfigPath     string `json:"config_path"`
-	RemoteRepinned string `json:"remote_repinned,omitempty"`
+	Project    string `json:"project"`
+	LocalOnly  bool   `json:"local_only,omitempty"`
+	ConfigPath string `json:"config_path"`
 }
 
-// newProjectSwitchCommand selects the local current project, mirroring
-// `incus remote switch`. It validates the project exists in the current tenant
-// (skippable with --local-only), persists it to the user config, and re-pins the
-// active install's incus remote to the new project (ADR-0021: one remote per
-// install, the project is an orthogonal pin that follows the switch) so raw
-// `incus <remote>:` agrees with `sc`.
+// newProjectSwitchCommand validates and saves the nearest directory selection.
 func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var localOnly bool
 	command := &cobra.Command{
 		Use:   "switch name",
 		Short: "Select the local current project in the current tenant",
-		Long:  "Select the local current project (mirrors `incus remote switch`). By default this checks the project exists in the current tenant; use --local-only to update local config without the lookup. It also re-pins the active incus remote to the new project (ADR-0021).",
+		Long:  "Select the project in the nearest .sandcastle (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
@@ -76,7 +73,6 @@ func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if err := naming.ValidateProjectName(name); err != nil {
 				return err
 			}
-			incusProject := ""
 			if !localOnly {
 				summary, err := currentTenantSummary(cmd.Context(), config)
 				if err != nil {
@@ -89,64 +85,33 @@ func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Com
 					}
 					return fmt.Errorf("project %s not found in tenant %s (projects: %s); use --local-only to set it anyway", name, summary.Tenant, strings.Join(names, ", "))
 				}
-				incusProject = summary.V2IncusProjectName(name)
 			}
-			cfgPath := scconfig.DefaultConfigPath()
-			cfg, err := scconfig.LoadSandcastleConfig(cfgPath)
+			local, err := directorySelection(config)
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				return err
 			}
-			cfg.Project = name
-			if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
+			local.Project = name
+			local.RemoteProjects[local.Remote] = name
+			cfgPath, err := scconfig.SaveDirectoryConfig(local)
+			if err != nil {
+				return fmt.Errorf("save selection: %w", err)
 			}
+
 			result := projectSwitchOutput{
-				Project:        name,
-				LocalOnly:      localOnly,
-				ConfigPath:     cfgPath,
-				RemoteRepinned: repinCurrentRemoteProject(config.adminConfig.Remote, config.adminConfig.Tenant, name, incusProject),
+				Project:    name,
+				LocalOnly:  localOnly,
+				ConfigPath: cfgPath,
 			}
 			return writeOutput(config.stdout, opts.output, formatProjectSwitch(result), result)
 		},
 	}
-	command.Flags().BoolVar(&localOnly, "local-only", false, "update the local current project without checking it exists in the tenant or re-pinning the remote")
+	command.Flags().BoolVar(&localOnly, "local-only", false, "update the local current project without checking it exists in the tenant")
 	return command
 }
 
 func formatProjectSwitch(out projectSwitchOutput) string {
 	msg := fmt.Sprintf("Switched to project %q (saved in %s).", out.Project, out.ConfigPath)
-	if out.RemoteRepinned != "" {
-		msg += fmt.Sprintf("\nRe-pinned remote %q to the project.", out.RemoteRepinned)
-	}
 	return msg
-}
-
-// repinCurrentRemoteProject points the active install's incus remote at the new
-// project's Incus project (ADR-0021) so raw `incus <remote>:` follows a switch.
-// Best-effort: returns the remote name when it re-pinned, else "" (no remote, not
-// enrolled locally, an unresolvable project, or a write error — the switch still
-// succeeds; `sc` itself never depends on the pin). incusProject may be empty
-// (e.g. --local-only), in which case it is derived from the remote's current pin.
-func repinCurrentRemoteProject(remote, tenant, project, incusProject string) string {
-	remote = strings.TrimSpace(remote)
-	if remote == "" {
-		return ""
-	}
-	dir := scconfig.ResolveConfigPath(remote)
-	if dir == "" {
-		return ""
-	}
-	if strings.TrimSpace(incusProject) == "" {
-		infra := infraFromPinnedProject(scconfig.SharedIncusRemoteProject(remote), tenant)
-		if infra == "" {
-			return ""
-		}
-		incusProject = infra + "-" + project
-	}
-	if err := setRemoteProject(filepath.Join(dir, "config.yml"), remote, incusProject); err != nil {
-		return ""
-	}
-	return remote
 }
 
 // infraFromPinnedProject recovers the `<prefix>-<tenant>` stem from a pinned

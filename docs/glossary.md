@@ -4,6 +4,10 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
 
 ## Core nouns
 
+- **Directory Selection** — The remote and project selected for a working
+  directory and its descendants, unless a descendant selects its own context.
+  Separate directories may select different remotes and projects independently.
+
 - **Tenant** — The top-level ownership, identity, and infrastructure boundary.
   Its handle is the normalized GitHub username for login-provisioned tenants, or
   an admin-minted handle. Access, DNS, tailnet, storage, and the OIDC issuer are

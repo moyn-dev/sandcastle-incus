@@ -197,7 +197,11 @@ type rootOptions struct {
 // It uses the per-remote Sandcastle Incus config directory (restricted TLS certificate).
 // For admin operations use ExecuteAdmin (sandcastle-admin binary).
 func Execute(name string, args []string) int {
-	adminConfig := scconfig.LoadUser()
+	adminConfig, loadErr := scconfig.LoadUserWithError()
+	if loadErr != nil {
+		fmt.Fprintln(os.Stderr, loadErr)
+		return 1
+	}
 	verbose := os.Getenv("VERBOSE") == "1"
 	incusx.SetRunningBinaryVersion(version)
 	update.DefaultExchange.SetCLIVersion(version)
@@ -364,8 +368,9 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 	if config.tenantStore == nil {
 		config.tenantStore = tenant.MemoryStore{}
 	}
+	var loadErr error
 	if config.adminConfig.Remote == "" {
-		config.adminConfig = scconfig.LoadUser()
+		config.adminConfig, loadErr = scconfig.LoadUserWithError()
 	}
 
 	opts := &rootOptions{output: outputText}
@@ -376,6 +381,9 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if loadErr != nil {
+				return loadErr
+			}
 			if !jsonOutput {
 				return nil
 			}

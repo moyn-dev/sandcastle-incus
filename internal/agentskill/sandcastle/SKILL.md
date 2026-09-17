@@ -28,9 +28,12 @@ result rather than assuming: an install's project prefix, DNS suffix, and remote
 name are all operator-chosen and differ per deployment.
 
 Switch context with `sc remote switch <name>` (install), `sc tenant switch
-<name>`, `sc project switch <name>`. The active **incus remote is the single
-source of truth** for which install `sc` targets; `SANDCASTLE_REMOTE=<name>`
-overrides it for one invocation.
+<name>`, `sc project switch <name>`. Remote/project switches write the nearest `.sandcastle`, searching the
+current directory then parents; with none, they create it in the current directory.
+Switches report the path written; `sc remote list` and `sc project list` report
+the file read. Global defaults are fallback only, and raw Incus defaults remain
+unchanged. `SANDCASTLE_REMOTE` / `SANDCASTLE_PROJECT` override local selection
+for one invocation; credentials stay in the global enrollment store.
 
 ## The model
 

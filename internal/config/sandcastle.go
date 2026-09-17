@@ -271,19 +271,19 @@ func LoadAdmin() Admin {
 	return loadAdminFromFileAndEnv(cfg)
 }
 
-// LoadUser merges ~/.config/sandcastle/config.yml with exported SANDCASTLE_* env vars.
-// It intentionally ignores local .env files so repo-local admin defaults do not
-// redirect normal sc commands to the admin Incus remote/config.
+// LoadUser resolves directory selection and exported environment variables.
+// Commands use LoadUserWithError to report invalid local files. Like the legacy
+// loader, this convenience wrapper discards load errors. Local .env files are ignored.
 func LoadUser() Admin {
-	cfg, _ := LoadSandcastleConfig(DefaultConfigPath())
-	return loadUserFromFileAndEnv(cfg)
+	cfg, _ := LoadUserWithError()
+	return cfg
 }
 
 // SharedIncusDefaultRemote returns the shared incus config dir's current
 // remote when it names a Sandcastle enrollment ("sc-…"), else "". This makes
-// the incus current remote the single source of truth for which install the
-// user CLI targets — `incus remote switch sc-<prefix>-<tenant>` (or the
-// `sc incus` wrapper) moves sc along with it. Non-sandcastle remotes (local,
+// the incus current remote a legacy fallback when no .sandcastle exists.
+// Directory selection and explicit environment overrides take precedence.
+// Non-sandcastle remotes (local,
 // images, …) are ignored so raw-incus work doesn't hijack sc.
 func SharedIncusDefaultRemote() string {
 	data, err := os.ReadFile(filepath.Join(SharedIncusDir(), "config.yml"))
@@ -372,9 +372,8 @@ func loadAdminFromFileAndEnv(cfg SandcastleConfig) Admin {
 func loadUserFromFileAndEnv(cfg SandcastleConfig) Admin {
 	env := loadProcessEnv()
 	admin := adminFromConfigAndEnv(cfg, env)
-	// The shared incus dir's current remote is the source of truth for which
-	// install the user CLI targets (login switches it on enrollment; the user
-	// moves between installs with `incus remote switch`). Env still wins;
+	// Legacy global fallback resolution, without directory selection.
+	// The shared Incus default precedes the user config remote. Env still wins;
 	// config.yml's remote is the fallback when no sandcastle remote is current.
 	if getenvFrom(env, "SANDCASTLE_REMOTE", "") == "" {
 		if name := SharedIncusDefaultRemote(); name != "" {

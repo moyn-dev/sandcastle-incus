@@ -428,7 +428,7 @@ sc version</code></pre>
 
       <h3>2. Add the restricted remote</h3>
       <pre><code>sc remote add sandcastle-alice JOIN_TOKEN_FROM_ADMIN --tenant acme</code></pre>
-      <p>This accepts the join token, creates <code>~/.config/sandcastle/sandcastle-alice/incus/</code> with the restricted Incus TLS certs, and writes <code>~/.config/sandcastle/config.yml</code> with the remote and tenant set. No env var exports needed — all subsequent <code>sc</code> commands pick up the config automatically.</p>
+      <p>This accepts the join token, creates <code>~/.config/sandcastle/sandcastle-alice/incus/</code> with the restricted Incus TLS certs, and writes <code>~/.config/sandcastle/config.yml</code> with the remote and tenant set. These values provide the global fallback. <code>sc remote switch</code> and <code>sc project switch</code> save directory-local selection in the nearest <code>.sandcastle</code> (searching parents, or creating one in the current directory). Their output reports the written path; <code>sc remote list</code> and <code>sc project list</code> report the file read. Exported environment variables and explicit command options take precedence.</p>
 
       <h3>3. Check project visibility</h3>
       <pre><code>sc list

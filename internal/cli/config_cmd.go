@@ -30,6 +30,7 @@ func newConfigShowCommand(config commandConfig) *cobra.Command {
 				fmt.Fprintf(config.stderr, "warning: could not read %s: %v\n", cfgPath, err)
 			}
 			fmt.Fprintf(config.stdout, "config file:  %s\n", cfgPath)
+			fmt.Fprintln(config.stdout, selectionSource(config))
 			fmt.Fprintf(config.stdout, "  file.tenant:  %q\n", fileCfg.Tenant)
 			fmt.Fprintf(config.stdout, "  file.project: %q\n", fileCfg.Project)
 			fmt.Fprintf(config.stdout, "  file.remote:  %q\n", fileCfg.Remote)
@@ -72,7 +73,7 @@ func newConfigSetCommand(_ commandConfig) *cobra.Command {
 			// install (auth hostname/broker/token from the installs maps recorded
 			// at login), so the Incus remote and the Auth App never drift apart on
 			// a host running several installs sharing one tenant name. Shared with
-			// `sc remote switch`, which is the intent-named alias for this.
+			// the global fallback edit; `sc remote switch` now saves directory selection.
 			var fx remoteSwitchEffects
 			if key == "remote" {
 				fx = applyRemoteSwitch(&cfg, value)
@@ -87,9 +88,8 @@ func newConfigSetCommand(_ commandConfig) *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Set %s = %q in %s\n", key, value, cfgPath)
 			printRemoteSwitchEffects(cmd.OutOrStdout(), cfg, fx)
-			// The shared incus dir's current remote is the source of truth for
-			// the user CLI's remote — write through so `sc config set remote`
-			// and `incus remote switch` never disagree.
+			// This explicit global edit updates both fallback stores. A local
+			// .sandcastle selection still takes precedence over either one.
 			if key == "remote" {
 				if err := scconfig.SetSharedIncusDefaultRemote(value); err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Note: incus current remote not switched: %v\n", err)

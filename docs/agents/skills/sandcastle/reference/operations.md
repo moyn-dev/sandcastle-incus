@@ -46,7 +46,7 @@ remote's client certificate.
 ```bash
 sc project create backend     # broker scaffolds it and extends your certificate
 sc project list
-sc project switch backend     # also re-pins the active incus remote to the project
+sc project switch backend     # writes the nearest .sandcastle; leaves global Incus defaults alone
 sc project status backend
 sc project delete backend --yes
 ```

@@ -1,5 +1,10 @@
 # One Incus Remote per Install (named by DNS suffix); Project Is an Orthogonal Pin
 
+> **2026-09-17 amendment:** The project-switch write-through in decision 2 is
+> superseded by [Directory Selection](../spec/directory-selection.md).
+> Switches now persist the nearest `.sandcastle`, leaving global Incus pins
+> unchanged. The one-remote-per-install and enrollment decisions still apply.
+
 > Status: **proposed** (2026-07-15). **Supersedes ADR-0020 decision 1** (the remote name is `<dns-suffix>-<project>`, one remote per (install, project)). Keeps ADR-0020 decisions 2–6 (opaque labels, mandatory immutable suffix, uniqueness guards, unified `[[dns-suffix:]project:]machine` grammar). Builds on ADR-0016 (native Incus access).
 
 ## Context

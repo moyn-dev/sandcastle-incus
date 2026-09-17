@@ -56,8 +56,8 @@ func runIncusWithProject(cmd *cobra.Command, config commandConfig, args []string
 		return err
 	}
 	projectName := v2ProjectFn(summary)
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+projectName)
-	envOverrides := []string{"INCUS_CONF=" + incusDir, "INCUS_PROJECT=" + projectName}
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+projectName, "INCUS_REMOTE="+config.adminConfig.Remote)
+	envOverrides := []string{"INCUS_CONF=" + incusDir, "INCUS_PROJECT=" + projectName, "INCUS_REMOTE=" + config.adminConfig.Remote}
 	if os.Getenv("VERBOSE") == "1" {
 		fmt.Fprintf(config.stderr, "[verbose] sc incus env: %s\n", strings.Join(envOverrides, " "))
 		fmt.Fprintf(config.stderr, "[verbose] sc incus command: %s\n", shellCommandLine(append([]string{"incus"}, args...)))
