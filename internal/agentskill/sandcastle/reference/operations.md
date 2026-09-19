@@ -50,8 +50,10 @@ ssh line to compare against. The other fixups run `sudo sh -s` over SSH and
 need the login user's NOPASSWD rule (`/etc/sudoers.d/90-cloud-init-users`,
 written by cloud-init at first boot); on Ubuntu 25.10+ the machine's `sudo` is
 sudo-rs, whose refusal reads `I'm sorry <user>. I'm afraid I can't do that`
-— that is "no sudoers rule matches", not a wrong password. Restore the rule as
-root over `incus exec` (admin) and rerun.
+— that is "no sudoers rule matches", not a wrong password. The `sudo` fixup
+(central, over the Incus API, runs before the SSH ones) restores group
+membership and the rule and proves it with `sudo -n true`:
+`sc fix <m> --only sudo` (`--check` reports `sudo: OK` / `NEEDS FIX (…)`).
 
 ## Projects
 

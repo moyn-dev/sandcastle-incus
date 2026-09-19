@@ -1129,7 +1129,16 @@ created with `--home-share`.
 > IdentitiesOnly=yes -i … -o HostKeyAlias=<fqdn> … <user>@<ip> true` on stderr. The remaining fixups need the login user's NOPASSWD sudo rule; a
 > sudo-rs machine (Ubuntu 25.10+) without it prints
 > `sudo: I'm sorry <user>. I'm afraid I can't do that` and the fixup is reported
-> failed — `ssh-key` still succeeds because it never goes through SSH.
+> failed — `ssh-key` still succeeds because it never goes through SSH. The
+> `sudo` fixup repairs exactly that, over the Incus API. **PASS:** on a
+> machine, as root, `rm /etc/sudoers.d/90-cloud-init-users; gpasswd -d <user>
+> sudo`; `sc fix <m> --check` prints `sudo: NEEDS FIX (<user> is not in group
+> sudo; /etc/sudoers.d/90-cloud-init-users lacks '<user> ALL=(ALL)
+> NOPASSWD:ALL')`; `sc fix <m>` prints `sudo: installed (added <user> to group
+> sudo; wrote … )` and then every SSH fixup runs (no `I'm sorry` line);
+> `sc fix <m> --check` prints `sudo: OK`; the file is mode 0440, contains the
+> rule exactly once after a second run, and `sudo -n true` succeeds as the user
+> over `sc c <m> -- sudo -n true`.
 >
 > **Key reconcile is best-effort.** Writing the (re-)login key into EXISTING
 > machines can fail on a machine that lacks the tenant's Unix user (e.g. one

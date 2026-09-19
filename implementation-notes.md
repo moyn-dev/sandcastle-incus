@@ -6151,3 +6151,23 @@ atomically (tmp + rename, 0600), `--check` never writes. Alternatives: a separat
 `Include ~/.ssh/sandcastle.d/*` file (cleaner, but needs an `Include` line at the top of
 the user's config anyway, which is the same edit) and a global `Host 10.123.*` pattern
 (wrong across tenants/remotes that reuse the CIDR).
+
+## 2026-09-19 — `sc fix` gets a central `sudo` fixup
+
+Every SSH fixup runs `sudo sh -s`, so a machine that lost cloud-init's
+`/etc/sudoers.d/90-cloud-init-users` (seen on butler:thies, with the user also gone
+from group `sudo`; root cause unknown) could not be repaired by `sc fix` at all. The
+user asked for `sc fix` to fix sudo too.
+
+Decision: a central fixup (Incus API exec as root, like `ssh-key`, ordered right after
+it and before the SSH fixups) that restores group membership (`usermod -aG sudo`) and
+the `<user> ALL=(ALL) NOPASSWD:ALL` rule. The file is appended to, not rewritten, and
+`visudo -cf` validates the candidate before `mv` — a bad sudoers file locks root out of
+sudo for everyone, so the check is not optional where visudo exists (sudo-rs ships it).
+The script ends with `su -s /bin/sh <user> -c 'sudo -n true'`: the fixup reports what
+sudo actually does, not what the file says. It lives on `MachineSSHKeyReconciler`
+(reusing its store/server plumbing) rather than a new type; the name is now slightly
+too narrow, renaming it was not worth the churn. Alternative considered: making the SSH
+fixups tolerate a missing rule by falling back to Incus exec — rejected, the Incus path
+needs no sudo at all and one narrow root-level repair is easier to reason about than
+four fixups with two transports each.

@@ -54,6 +54,11 @@ var machineFixups = []machineFixup{
 		central: reconcileMachineSSHKeyFix,
 	},
 	{
+		name:    "sudo",
+		summary: "restore the login user's passwordless sudo through Incus (every SSH fixup needs it)",
+		central: reconcileMachineSudoFix,
+	},
+	{
 		name:            "agent-forwarding",
 		summary:         "forwarded SSH agent survives herdr/tmux panes (stable /.sc shims + shared payload)",
 		apply:           tenant.SSHAgentForwardBackfillScript,
@@ -90,6 +95,7 @@ changes nothing; --only limits it to the named fixup(s).
 
 Fixups:
   ssh-key              reconcile the current CLI SSH key through Incus
+  sudo                 restore the login user's NOPASSWD sudo rule through Incus
   agent-forwarding     forwarded SSH agent survives herdr/tmux panes
   caddy-publications   refresh Caddy readiness for Tailnet/public certificates
   cloudflared          restore an already-installed Cloudflare connector`,
@@ -266,6 +272,42 @@ func reconcileMachineSSHKeyFix(ctx context.Context, config commandConfig, summar
 		return err
 	}
 	fmt.Fprintf(config.stdout, "  ~/.ssh/config: %s\nssh-key: installed\n", status)
+	return nil
+}
+
+// reconcileMachineSudoFix restores the login user's passwordless sudo over the
+// Incus API. It runs as a central fixup — before any SSH fixup — because those
+// all run `sudo sh -s` and cannot repair the very thing they depend on.
+func reconcileMachineSudoFix(ctx context.Context, config commandConfig, summary tenant.Summary, reference string, checkOnly bool) error {
+	project, machine, err := resolveV2MachineReference(summary, reference, config.adminConfig.Project)
+	if err != nil {
+		return err
+	}
+	incusDir := resolveIncusDir(config.adminConfig.Remote)
+	if incusDir == "" {
+		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
+	}
+	reconciler := incusx.MachineSSHKeyReconciler{
+		Remote:     config.adminConfig.Remote,
+		ConfigPath: incusDir + "/config.yml",
+		Store:      config.machineStore,
+	}
+	status, err := reconciler.ReconcileMachineSudo(ctx, summary, project, machine, defaultLocalUnixUsername(), checkOnly)
+	if err != nil {
+		return err
+	}
+	detail := ""
+	if status.Detail != "" {
+		detail = " (" + status.Detail + ")"
+	}
+	switch status.State {
+	case "current":
+		fmt.Fprintf(config.stdout, "sudo: OK%s\n", detail)
+	case "updated":
+		fmt.Fprintf(config.stdout, "sudo: installed%s\n", detail)
+	default:
+		fmt.Fprintf(config.stdout, "sudo: NEEDS FIX%s\n", detail)
+	}
 	return nil
 }
 
