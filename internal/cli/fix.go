@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
@@ -202,6 +204,7 @@ func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary,
 		// so there is nothing to shell-quote. Command mode allocates no PTY, so
 		// stdin pipes cleanly.
 		sshArgs := append(append([]string{}, dialed.sshArgs...), "sudo", "sh", "-s")
+		logSSHCommand(config, sshArgs)
 		sshCmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 		sshCmd.Stdin = strings.NewReader(script)
 		sshCmd.Stdout = config.stdout
@@ -226,7 +229,12 @@ func reconcileMachineSSHKeyFix(ctx context.Context, config commandConfig, summar
 		return err
 	}
 	if checkOnly {
-		fmt.Fprintf(config.stdout, "  current CLI key: %s\nssh-key: READY (run without --check to reconcile %s)\n", key.Fingerprint, project)
+		fmt.Fprintf(config.stdout, "  current CLI key: %s\n", key.Fingerprint)
+		status, err := syncMachineSSHConfig(ctx, config, summary, project, machine, key, true)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(config.stdout, "  ~/.ssh/config: %s\nssh-key: READY (run without --check to reconcile %s)\n", status, project)
 		return nil
 	}
 	incusDir := resolveIncusDir(config.adminConfig.Remote)
@@ -253,6 +261,57 @@ func reconcileMachineSSHKeyFix(ctx context.Context, config commandConfig, summar
 			fmt.Fprintf(config.stdout, "    %s%s\n", line, marker)
 		}
 	}
-	fmt.Fprintln(config.stdout, "ssh-key: installed")
+	status, err := syncMachineSSHConfig(ctx, config, summary, project, machine, key, false)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(config.stdout, "  ~/.ssh/config: %s\nssh-key: installed\n", status)
 	return nil
+}
+
+// syncMachineSSHConfig maintains the machine's managed Host block in the local
+// ~/.ssh/config (see fix_ssh_config.go) and returns its status line. The
+// machine's names, private IP and login user come from the tenant's machine
+// store, the same source `sc connect` dials from.
+func syncMachineSSHConfig(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine string, key loginSSHKeyResult, checkOnly bool) (string, error) {
+	if config.machineStore == nil {
+		return "", fmt.Errorf("machine store is not configured")
+	}
+	machines, err := config.machineStore.ListMachines(ctx, summary)
+	if err != nil {
+		return "", err
+	}
+	var found *meta.Machine
+	for i := range machines {
+		name := strings.TrimSpace(machines[i].Project)
+		if name == "" {
+			name = naming.DefaultProjectName
+		}
+		if name == project && machines[i].Name == machine {
+			found = &machines[i]
+			break
+		}
+	}
+	if found == nil {
+		return "skipped (machine not found)", nil
+	}
+	if found.Bare {
+		return "skipped (bare machine has no sshd)", nil
+	}
+	loginUser := strings.TrimSpace(found.LinuxUser)
+	if loginUser == "" {
+		loginUser = strings.TrimSpace(summary.UnixUser)
+	}
+	if loginUser == "" {
+		loginUser = defaultLocalUnixUsername()
+	}
+	names := v2MachineNames(summary, project, machine, found.PublicHostnames)
+	tag := sshConfigBlockTag(config.adminConfig.Remote, project, machine)
+	block := renderSSHConfigBlock(tag, names, found.PrivateIP, loginUser, tildePath(strings.TrimSuffix(key.PublicKeyPath, ".pub")))
+	status, err := syncLocalSSHConfig(defaultSSHConfigPath(), tag, block, checkOnly)
+	if err != nil {
+		return "", err
+	}
+	patterns := append(append([]string{}, names...), found.PrivateIP)
+	return fmt.Sprintf("%s (Host %s -> %s@ with the CLI key)", status, strings.Join(patterns, " "), loginUser), nil
 }

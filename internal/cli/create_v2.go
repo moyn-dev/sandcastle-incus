@@ -434,11 +434,25 @@ func runSSHSession(ctx context.Context, config commandConfig, dialed dialedV2Mac
 		sshArgs = append(sshArgs, line)
 	}
 	fmt.Fprintf(config.stdout, "Connecting: ssh %s@%s\n", dialed.loginUser, dialed.privateIP)
+	logSSHCommand(config, sshArgs)
 	sshCmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 	sshCmd.Stdin = osStdinFor(config)
 	sshCmd.Stdout = config.stdout
 	sshCmd.Stderr = config.stderr
 	return sshCmd.Run()
+}
+
+// logSSHCommand prints the exact ssh command line about to run under
+// VERBOSE=1 — identity file, IdentitiesOnly, HostKeyAlias, the lot — so a
+// session that works through `sc` but not through a bare `ssh user@ip` can be
+// compared argument by argument (the usual difference: the CLI key is pinned
+// with -i, and plain ssh never offers it). It is the same `[verbose] … command:`
+// trace `sc incus` prints for the incus CLI.
+func logSSHCommand(config commandConfig, sshArgs []string) {
+	if os.Getenv("VERBOSE") != "1" {
+		return
+	}
+	fmt.Fprintf(config.stderr, "[verbose] ssh command: %s\n", shellCommandLine(append([]string{"ssh"}, sshArgs...)))
 }
 
 // connectV2Bare opens a session on a machine that has no sshd: `incus exec`

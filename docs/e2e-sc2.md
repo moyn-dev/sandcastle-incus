@@ -1118,7 +1118,15 @@ created with `--home-share`.
 > are still there, the current key appears exactly once, the output prints
 > `authorized_keys on <m>:` with one `ssh-keygen -l` line per key and
 > `<- current CLI key` on the CLI key, and the file is byte-identical between the
-> two runs. The remaining fixups need the login user's NOPASSWD sudo rule; a
+> two runs. The same run puts a `# sandcastle machine <remote>:<p>:<m> begin/end`
+> block at the top of the local `~/.ssh/config` (`Host <fqdn> <public names>
+> <ip>` with `User`, `IdentityFile` = the CLI key, `IdentitiesOnly yes`,
+> `HostKeyAlias <fqdn>`): a bare `ssh <fqdn> true` and `ssh <ip> true` succeed
+> with no password prompt, the user's own lines (e.g. a `Host *` with
+> `IdentityAgent`) are untouched, the second run reports `~/.ssh/config:
+> current` and `--check` reports `NEEDS FIX` only before the first apply.
+> `VERBOSE=1 sc c <m> -- true` prints `[verbose] ssh command: ssh -o
+> IdentitiesOnly=yes -i … -o HostKeyAlias=<fqdn> … <user>@<ip> true` on stderr. The remaining fixups need the login user's NOPASSWD sudo rule; a
 > sudo-rs machine (Ubuntu 25.10+) without it prints
 > `sudo: I'm sorry <user>. I'm afraid I can't do that` and the fixup is reported
 > failed — `ssh-key` still succeeds because it never goes through SSH.

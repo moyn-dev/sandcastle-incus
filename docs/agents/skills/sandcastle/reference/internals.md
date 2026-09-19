@@ -94,7 +94,7 @@ anywhere.
 | `SANDCASTLE_TENANT` / `SANDCASTLE_PROJECT` | override tenant / project |
 | `SANDCASTLE_AUTH_HOSTNAME` / `SANDCASTLE_AUTH_TOKEN` / `SANDCASTLE_BROKER` | override the auth plane |
 | `SANDCASTLE_ADMIN_REMOTE` | Incus remote for admin commands |
-| `VERBOSE=1` | print `[verbose]` diagnostics on stderr, including which resolution path was used |
+| `VERBOSE=1` | print `[verbose]` diagnostics on stderr, including which resolution path was used and the exact `ssh` command line (`[verbose] ssh command: …`) `sc connect`/`sc fix` run |
 | `SANDCASTLE_CONNECT_CACHE=0` | force `sc connect` onto the live path |
 | `SANDCASTLE_LS_CACHE_TIMEOUT` | budget for the `sc ls` cache request (default 5s) |
 | `SANDCASTLE_NO_UPDATE_NOTIFIER=1` | silence release and skew notices |

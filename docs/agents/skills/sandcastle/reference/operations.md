@@ -39,10 +39,14 @@ always resolves live; it exists to repair, not to be fast.
 The `ssh-key` fixup runs first and over the Incus API, not SSH, so it works
 when SSH is locked out. It is additive: it never removes or replaces a line of
 `authorized_keys`, only appends the current CLI key when missing, then lists
-every enrolled key (`ssh-keygen -l` lines, current key marked). Read that list
-before assuming a key problem — a plain `ssh user@ip` uses `~/.ssh/id_*`, not
-the CLI key at `~/.ssh/sandcastle_ed25519`, so it can prompt for a password
-while `sc connect` works fine. The other fixups run `sudo sh -s` over SSH and
+every enrolled key (`ssh-keygen -l` lines, current key marked). It also writes
+a marker-delimited `Host` block for the machine at the top of `~/.ssh/config`
+(fqdn, public hostnames, private IP → `User`, `IdentityFile` = CLI key,
+`IdentitiesOnly yes`, `HostKeyAlias` = fqdn), so a bare `ssh <fqdn>` or
+`ssh <ip>` logs in like `sc connect` does. Without that block plain ssh offers
+only `~/.ssh/id_*`, never `~/.ssh/sandcastle_ed25519`, and prompts for a
+password while `sc connect` works — `VERBOSE=1 sc c <m>` prints the exact
+ssh line to compare against. The other fixups run `sudo sh -s` over SSH and
 need the login user's NOPASSWD rule (`/etc/sudoers.d/90-cloud-init-users`,
 written by cloud-init at first boot); on Ubuntu 25.10+ the machine's `sudo` is
 sudo-rs, whose refusal reads `I'm sorry <user>. I'm afraid I can't do that`

@@ -6126,3 +6126,28 @@ Also recorded while debugging: on Ubuntu 25.10+ machines `sudo` is sudo-rs, whos
 — it is not a password failure. The SSH fixups rely on cloud-init's
 `/etc/sudoers.d/90-cloud-init-users`; when that file is gone they fail while `ssh-key`
 still works, because it goes over the Incus API.
+
+## 2026-09-19 — ssh-key fixup manages a `~/.ssh/config` block; VERBOSE prints the ssh line
+
+Why plain `ssh user@ip` prompted for a password while `sc connect` worked: connect
+pins the CLI key with `-i … -o IdentitiesOnly=yes`, plain ssh offers `~/.ssh/id_*`
+only. The user asked for two things: `VERBOSE=1` must print the full ssh command line,
+and the ssh-key fixup should teach the local ssh client about the machine.
+
+`logSSHCommand` prints `[verbose] ssh command: …` (shell-quoted via the existing
+`shellCommandLine`) on stderr from both `runSSHSession` and each `sc fix` SSH fixup —
+the same trace style `sc incus` already uses.
+
+The fixup now upserts one marker-delimited `Host` block per machine in `~/.ssh/config`:
+patterns = private fqdn + public hostnames + private IP; `User`, `IdentityFile` (tilde
+path of the CLI key), `IdentitiesOnly yes`, `HostKeyAlias <fqdn>`, `CheckHostIP no` —
+the exact argv connect builds, so the known_hosts line connect pinned is what plain ssh
+verifies. Decisions: the block goes at the TOP of the file (ssh takes the first value
+per option, so it must precede a user's `Host *`); only the block's own markers are
+rewritten and everything else is preserved byte-for-byte; the private IP is included
+although leases recycle — the block is refreshed on every fix and a reassigned IP fails
+closed on the HostKeyAlias mismatch rather than silently connecting elsewhere. Written
+atomically (tmp + rename, 0600), `--check` never writes. Alternatives: a separate
+`Include ~/.ssh/sandcastle.d/*` file (cleaner, but needs an `Include` line at the top of
+the user's config anyway, which is the same edit) and a global `Host 10.123.*` pattern
+(wrong across tenants/remotes that reuse the CIDR).
