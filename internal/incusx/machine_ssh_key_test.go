@@ -52,6 +52,7 @@ type fakeMachineSSHKeyResource struct {
 	failAt   int
 	failWith func(instanceName string) error
 	exitCode func(instanceName string) int
+	stdout   string
 }
 
 type fakeMachineSSHKeyExec struct {
@@ -73,6 +74,9 @@ func (r *fakeMachineSSHKeyResource) ExecInstance(instanceName string, exec api.I
 	}
 	if r.failAt > 0 && len(r.execs) == r.failAt {
 		return nil, errors.New("boom")
+	}
+	if args != nil && args.Stdout != nil && r.stdout != "" {
+		_, _ = args.Stdout.Write([]byte(r.stdout))
 	}
 	if args != nil && args.DataDone != nil {
 		go func() { args.DataDone <- true }()
@@ -131,7 +135,7 @@ func TestMachineSSHKeyReconcilerScopesConnectionRepairToOneMachine(t *testing.T)
 		}},
 		Server: server,
 	}
-	if err := reconciler.ReconcileMachineUserSSHKey(context.Background(), v2Summary(), "wordpress", "test", "alice", "ssh-ed25519 current"); err != nil {
+	if _, err := reconciler.ReconcileMachineUserSSHKey(context.Background(), v2Summary(), "wordpress", "test", "alice", "ssh-ed25519 current"); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(server.resources, ","), "sc2-alice-wordpress"; got != want {
@@ -139,6 +143,45 @@ func TestMachineSSHKeyReconcilerScopesConnectionRepairToOneMachine(t *testing.T)
 	}
 	if len(resource.execs) != 1 || resource.execs[0].instance != "test" {
 		t.Fatalf("execs = %#v, want only wordpress:test", resource.execs)
+	}
+}
+
+// The connection repair is ADDITIVE: it must never drop a key that is already
+// in authorized_keys — neither a hand-added one nor an older Sandcastle key —
+// and it reports every enrolled key so the operator can see what is there.
+func TestMachineSSHKeyReconcilerIsAdditiveAndListsEnrolledKeys(t *testing.T) {
+	resource := &fakeMachineSSHKeyResource{stdout: "256 SHA256:aaa no comment (ED25519)\n256 SHA256:bbb no comment (ED25519)\n\n"}
+	server := &fakeMachineSSHKeyServer{resource: resource}
+	reconciler := MachineSSHKeyReconciler{
+		Store: fakeMachineSSHKeyStore{machines: []meta.Machine{
+			{Tenant: "alice", Project: "wordpress", Name: "test", Running: true},
+		}},
+		Server: server,
+	}
+	enrolled, err := reconciler.ReconcileMachineUserSSHKey(context.Background(), v2Summary(), "wordpress", "test", "alice", "ssh-ed25519 current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(enrolled, "|"), "256 SHA256:aaa no comment (ED25519)|256 SHA256:bbb no comment (ED25519)"; got != want {
+		t.Fatalf("enrolled = %q, want %q", got, want)
+	}
+	if len(resource.execs) != 1 || len(resource.execs[0].command) != 3 {
+		t.Fatalf("execs = %#v", resource.execs)
+	}
+	script := resource.execs[0].command[2]
+	for _, want := range []string{
+		`grep -qxF "$key" "$auth"`,                // present anywhere → untouched
+		`'# sandcastle user ssh key end' "$auth"`, // otherwise inserted into the managed block
+		`ssh-keygen -lf "$auth"`,                  // and the whole file is listed
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script lacks %q:\n%s", want, script)
+		}
+	}
+	// The old script filtered the managed block out with awk before rewriting
+	// it; an additive script has no reason to skip any existing line.
+	if strings.Contains(script, "!skip") || strings.Contains(script, "skip=1") {
+		t.Fatalf("script still strips existing keys:\n%s", script)
 	}
 }
 

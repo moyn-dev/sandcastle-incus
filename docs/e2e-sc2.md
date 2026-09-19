@@ -1107,6 +1107,22 @@ created with `--home-share`.
 > (`root` and invalid names are skipped, not errors). Broker-created tenants
 > (`tenant create`) take `--ssh-key` explicitly and default to `dev`.
 >
+> **`sc fix <m> --only ssh-key` is additive and lists what is enrolled.** It
+> runs over the Incus API (works when SSH is locked out) and never removes or
+> replaces a line of the login user's `authorized_keys`: a hand-added key and an
+> older CLI key both survive; the current CLI key is appended only when missing,
+> inside the `# sandcastle user ssh key begin/end` block so an allowlist revoke
+> can still strip every Sandcastle-managed key. **PASS:** add a foreign line
+> `ssh-ed25519 AAAA… foreign` to `authorized_keys` on a machine, run
+> `sc fix <m> --only ssh-key` twice: the foreign line and every pre-existing key
+> are still there, the current key appears exactly once, the output prints
+> `authorized_keys on <m>:` with one `ssh-keygen -l` line per key and
+> `<- current CLI key` on the CLI key, and the file is byte-identical between the
+> two runs. The remaining fixups need the login user's NOPASSWD sudo rule; a
+> sudo-rs machine (Ubuntu 25.10+) without it prints
+> `sudo: I'm sorry <user>. I'm afraid I can't do that` and the fixup is reported
+> failed — `ssh-key` still succeeds because it never goes through SSH.
+>
 > **Key reconcile is best-effort.** Writing the (re-)login key into EXISTING
 > machines can fail on a machine that lacks the tenant's Unix user (e.g. one
 > launched from a stock `images:` image without the Sandcastle profile). That

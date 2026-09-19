@@ -238,9 +238,21 @@ func reconcileMachineSSHKeyFix(ctx context.Context, config commandConfig, summar
 		ConfigPath: incusDir + "/config.yml",
 		Store:      config.machineStore,
 	}
-	if err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machine, defaultLocalUnixUsername(), key.PublicKey); err != nil {
+	enrolled, err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machine, defaultLocalUnixUsername(), key.PublicKey)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(config.stdout, "  reconciled %s for project %s\nssh-key: installed\n", key.Fingerprint, project)
+	fmt.Fprintf(config.stdout, "  enrolled %s for project %s (additive: no existing key was removed)\n", key.Fingerprint, project)
+	if len(enrolled) > 0 {
+		fmt.Fprintf(config.stdout, "  authorized_keys on %s:\n", machine)
+		for _, line := range enrolled {
+			marker := ""
+			if strings.Contains(line, key.Fingerprint) {
+				marker = "   <- current CLI key"
+			}
+			fmt.Fprintf(config.stdout, "    %s%s\n", line, marker)
+		}
+	}
+	fmt.Fprintln(config.stdout, "ssh-key: installed")
 	return nil
 }

@@ -594,7 +594,7 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 			ConfigPath: incusDir + "/config.yml",
 			Store:      config.machineStore,
 		}
-		if err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machineName, defaultLocalUnixUsername(), sshKey.PublicKey); err != nil {
+		if _, err := reconciler.ReconcileMachineUserSSHKey(ctx, summary, project, machineName, defaultLocalUnixUsername(), sshKey.PublicKey); err != nil {
 			return dialedV2Machine{}, fmt.Errorf("reconcile current SSH key for new machine %s: %w", machineName, err)
 		}
 	}

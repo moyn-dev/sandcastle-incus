@@ -1,6 +1,7 @@
 package incusx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -56,23 +57,26 @@ func (r MachineSSHKeyReconciler) ReconcileUserSSHKey(ctx context.Context, summar
 	if err != nil {
 		return err
 	}
-	return r.reconcileV2(ctx, server, summary, userKey, publicKey, machines)
+	_, err = r.reconcileV2(ctx, server, summary, userKey, publicKey, machines)
+	return err
 }
 
-// ReconcileMachineUserSSHKey applies the current User SSH Public Key to one
-// Machine. It is the narrow repair used before a CLI connection: a stale
+// ReconcileMachineUserSSHKey enrols the current User SSH Public Key on one
+// Machine and returns the keys authorized_keys then holds (one `ssh-keygen -l`
+// line per key). It is the narrow repair used before a CLI connection: a stale
 // project profile must never lock the user out of the Machine it just created.
-func (r MachineSSHKeyReconciler) ReconcileMachineUserSSHKey(ctx context.Context, summary tenant.Summary, project, machine, userKey, publicKey string) error {
+// It is strictly additive — no key already in the file is removed or replaced.
+func (r MachineSSHKeyReconciler) ReconcileMachineUserSSHKey(ctx context.Context, summary tenant.Summary, project, machine, userKey, publicKey string) ([]string, error) {
 	if strings.TrimSpace(publicKey) == "" {
-		return fmt.Errorf("User SSH Public Key is required")
+		return nil, fmt.Errorf("User SSH Public Key is required")
 	}
 	store := r.Store
 	if store == nil {
-		return fmt.Errorf("machine store is not configured")
+		return nil, fmt.Errorf("machine store is not configured")
 	}
 	machines, err := store.ListMachines(ctx, summary)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	project = strings.TrimSpace(project)
 	filtered := machines[:0]
@@ -86,19 +90,20 @@ func (r MachineSSHKeyReconciler) ReconcileMachineUserSSHKey(ctx context.Context,
 		}
 	}
 	if len(filtered) == 0 {
-		return nil
+		return nil, nil
 	}
 	server, err := r.server()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return r.reconcileV2(ctx, server, summary, userKey, publicKey, filtered)
 }
 
-// reconcileV2 writes the rotated key into each v2 project's shared /home.
-// It uses one available Machine per project; broad login reconciliation is
-// best-effort, while targeted repairs use ReconcileMachineUserSSHKey above.
-func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server MachineSSHKeyServer, summary tenant.Summary, userKey string, publicKey string, machines []meta.Machine) error {
+// reconcileV2 adds the key to each v2 project's shared /home and returns the
+// enrolled-key listing of every project it reached. It uses one available
+// Machine per project; broad login reconciliation is best-effort, while
+// targeted repairs use ReconcileMachineUserSSHKey above.
+func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server MachineSSHKeyServer, summary tenant.Summary, userKey string, publicKey string, machines []meta.Machine) ([]string, error) {
 	byProject := map[string][]meta.Machine{}
 	order := []string{}
 	for _, managed := range machines {
@@ -112,6 +117,7 @@ func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server Machine
 		byProject[project] = append(byProject[project], managed)
 	}
 	var failures []error
+	var enrolled []string
 	for _, project := range order {
 		projectServer := server.UseProject(summary.V2IncusProjectName(project))
 		var lastErr error
@@ -120,10 +126,12 @@ func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server Machine
 			if !managed.Running {
 				continue
 			}
-			if err := r.reconcileMachine(ctx, projectServer, managed.Name, managed, v2LoginUser(summary, managed, userKey), publicKey); err != nil {
+			listing, err := r.reconcileMachine(ctx, projectServer, managed.Name, managed, v2LoginUser(summary, managed, userKey), publicKey)
+			if err != nil {
 				lastErr = err
 				continue
 			}
+			enrolled = append(enrolled, listing...)
 			reconciled = true
 			break
 		}
@@ -131,7 +139,7 @@ func (r MachineSSHKeyReconciler) reconcileV2(ctx context.Context, server Machine
 			failures = append(failures, lastErr)
 		}
 	}
-	return errors.Join(failures...)
+	return enrolled, errors.Join(failures...)
 }
 
 // v2LoginUser resolves the Unix account whose authorized_keys must carry the
@@ -148,7 +156,16 @@ func v2LoginUser(summary tenant.Summary, managed meta.Machine, userKey string) s
 	return userKey
 }
 
-func (r MachineSSHKeyReconciler) reconcileMachine(ctx context.Context, server MachineSSHKeyResourceServer, instanceName string, managed meta.Machine, userKey string, publicKey string) error {
+// reconcileMachine enrols the key on one machine and returns the resulting
+// authorized_keys listing. The script is ADDITIVE: it never strips a line —
+// not a hand-added key, not an older Sandcastle key. A key already present
+// anywhere in the file is left where it is; a missing one is inserted inside
+// the marker block (before its end marker, or as a new block at the end) so
+// RevokeUserSSHKey can still drop every Sandcastle-managed key at once. The
+// listing is `ssh-keygen -l` over the whole file (raw key lines when
+// ssh-keygen is missing), so the operator sees every enrolled key, not only
+// the one just written.
+func (r MachineSSHKeyReconciler) reconcileMachine(ctx context.Context, server MachineSSHKeyResourceServer, instanceName string, managed meta.Machine, userKey string, publicKey string) ([]string, error) {
 	linuxUser := managed.LinuxUser
 	if strings.TrimSpace(linuxUser) == "" {
 		linuxUser = userKey
@@ -163,12 +180,20 @@ func (r MachineSSHKeyReconciler) reconcileMachine(ctx context.Context, server Ma
 		`auth="$ssh_dir/authorized_keys"`,
 		`tmp="$auth.tmp"`,
 		`install -d -m 0700 -o "$user" -g "$user" "$ssh_dir"`,
-		`touch "$auth"`,
-		`awk '/^# sandcastle user ssh key begin$/ {skip=1; next} /^# sandcastle user ssh key end$/ {skip=0; next} !skip {print}' "$auth" > "$tmp"`,
-		`printf '%s\n%s\n%s\n' '# sandcastle user ssh key begin' "$key" '# sandcastle user ssh key end' >> "$tmp"`,
-		`install -m 0600 -o "$user" -g "$user" "$tmp" "$auth"`,
-		`rm -f "$tmp"`,
+		`if [ ! -f "$auth" ]; then install -m 0600 -o "$user" -g "$user" /dev/null "$auth"; fi`,
+		`if ! grep -qxF "$key" "$auth"; then`,
+		`  if grep -qxF '# sandcastle user ssh key end' "$auth"; then`,
+		`    awk -v key="$key" '$0 == "# sandcastle user ssh key end" { print key } { print }' "$auth" > "$tmp"`,
+		`  else`,
+		`    cat "$auth" > "$tmp"`,
+		`    printf '%s\n%s\n%s\n' '# sandcastle user ssh key begin' "$key" '# sandcastle user ssh key end' >> "$tmp"`,
+		`  fi`,
+		`  install -m 0600 -o "$user" -g "$user" "$tmp" "$auth"`,
+		`  rm -f "$tmp"`,
+		`fi`,
+		`if command -v ssh-keygen >/dev/null 2>&1; then ssh-keygen -lf "$auth"; else grep -v '^#' "$auth" | grep -v '^$'; fi`,
 	}, "\n")
+	var stdout, stderr bytes.Buffer
 	dataDone := make(chan bool)
 	op, err := server.ExecInstance(instanceName, api.InstanceExecPost{
 		Command: []string{"/bin/sh", "-c", script},
@@ -179,22 +204,34 @@ func (r MachineSSHKeyReconciler) reconcileMachine(ctx context.Context, server Ma
 		WaitForWS: true,
 	}, &incus.InstanceExecArgs{
 		Stdin:    strings.NewReader(""),
+		Stdout:   &stdout,
+		Stderr:   &stderr,
 		DataDone: dataDone,
 	})
 	if err != nil {
-		return fmt.Errorf("reconcile User SSH Public Key on machine %s: %w", instanceName, err)
+		return nil, fmt.Errorf("reconcile User SSH Public Key on machine %s: %w", instanceName, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("wait for User SSH Public Key reconciliation on machine %s: %w", instanceName, err)
+		return nil, fmt.Errorf("wait for User SSH Public Key reconciliation on machine %s: %w", instanceName, err)
 	}
 	<-dataDone
 	// op.Wait() only reports whether the exec could RUN; a non-zero script exit
 	// is reported in the operation metadata. Without this check a failed write
 	// (e.g. the target Unix user does not exist) looked like success.
 	if code := execReturnCode(op); code != 0 {
-		return fmt.Errorf("reconcile User SSH Public Key on machine %s: script exited %d", instanceName, code)
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return nil, fmt.Errorf("reconcile User SSH Public Key on machine %s: script exited %d: %s", instanceName, code, detail)
+		}
+		return nil, fmt.Errorf("reconcile User SSH Public Key on machine %s: script exited %d", instanceName, code)
 	}
-	return nil
+	var listing []string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			listing = append(listing, line)
+		}
+	}
+	return listing, nil
 }
 
 // execReturnCode reads the exit status an Incus exec operation records in its

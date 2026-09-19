@@ -36,6 +36,19 @@ changes that shipped in cloud-init after the machine was built and so never
 reached it. `--check` reports without changing; `--only <fixup>` narrows. It
 always resolves live; it exists to repair, not to be fast.
 
+The `ssh-key` fixup runs first and over the Incus API, not SSH, so it works
+when SSH is locked out. It is additive: it never removes or replaces a line of
+`authorized_keys`, only appends the current CLI key when missing, then lists
+every enrolled key (`ssh-keygen -l` lines, current key marked). Read that list
+before assuming a key problem — a plain `ssh user@ip` uses `~/.ssh/id_*`, not
+the CLI key at `~/.ssh/sandcastle_ed25519`, so it can prompt for a password
+while `sc connect` works fine. The other fixups run `sudo sh -s` over SSH and
+need the login user's NOPASSWD rule (`/etc/sudoers.d/90-cloud-init-users`,
+written by cloud-init at first boot); on Ubuntu 25.10+ the machine's `sudo` is
+sudo-rs, whose refusal reads `I'm sorry <user>. I'm afraid I can't do that`
+— that is "no sudoers rule matches", not a wrong password. Restore the rule as
+root over `incus exec` (admin) and rerun.
+
 ## Projects
 
 A project is a real Incus project with its own machines, profiles, and shared

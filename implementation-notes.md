@@ -6100,3 +6100,29 @@ Incus v6.23.0 client is built under `/tmp/sandcastle-go/bin` for validation only
 
 Validation: `go test ./...` and `go vet ./...` pass with the temporary Go/Incus
 toolchain. No live gated Incus integration/E2E deployment was run.
+
+## 2026-09-19 — `sc fix --only ssh-key` is additive and lists enrolled keys
+
+The ssh-key fixup (and the same reconciler `sc connect` runs on a freshly created
+machine) used to rewrite the `# sandcastle user ssh key begin/end` block of the login
+user's `authorized_keys`, replacing whatever key was inside with the current CLI key.
+Foreign lines outside the block were preserved, but an older CLI key was silently
+dropped. The user's rule: a fix must never remove anything from `authorized_keys` —
+only add, and show what is enrolled.
+
+Decision: the script is now append-only. A key present anywhere in the file is left
+where it is; a missing one is inserted before the block's end marker (or a new block is
+appended when there is none). The marker block is kept so `RevokeUserSSHKey` (allowlist
+removal in the Auth App) can still drop every Sandcastle-managed key in one pass — that
+path is an explicit revoke, not a fix, and was left untouched. The script then prints
+`ssh-keygen -lf authorized_keys` (raw key lines when ssh-keygen is missing); the
+reconciler captures stdout and `ReconcileMachineUserSSHKey` returns the lines, which
+`sc fix` prints with the current CLI key marked. Alternatives considered: dropping the
+markers entirely (simplest, but breaks revoke) and listing only the managed block
+(hides exactly the foreign keys an operator is usually looking for).
+
+Also recorded while debugging: on Ubuntu 25.10+ machines `sudo` is sudo-rs, whose
+"no sudoers rule matches" refusal reads `I'm sorry <user>. I'm afraid I can't do that`
+— it is not a password failure. The SSH fixups rely on cloud-init's
+`/etc/sudoers.d/90-cloud-init-users`; when that file is gone they fail while `ssh-key`
+still works, because it goes over the Incus API.
