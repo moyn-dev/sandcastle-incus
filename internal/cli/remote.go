@@ -115,6 +115,7 @@ func newRemoteSwitchCommand(config commandConfig) *cobra.Command {
 				project = "default"
 			}
 			local.Remote, local.Project = name, project
+			local.Tenant = strings.TrimSpace(cfg.Tenant)
 			local.RemoteProjects[name] = project
 			path, err := scconfig.SaveDirectoryConfig(local)
 			if err != nil {

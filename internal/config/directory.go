@@ -12,8 +12,11 @@ import (
 
 // DirectoryConfig is a directory's selection. Credentials remain in the user config.
 type DirectoryConfig struct {
-	Remote         string            `yaml:"remote"`
-	Project        string            `yaml:"project"`
+	Remote  string `yaml:"remote"`
+	Project string `yaml:"project"`
+	// Tenant is the directory's Current Tenant (a Shared Tenant or the
+	// user's own); empty means whatever the remote was enrolled for.
+	Tenant         string            `yaml:"tenant,omitempty"`
 	RemoteProjects map[string]string `yaml:"remote_projects,omitempty"`
 }
 
@@ -174,6 +177,12 @@ func LoadUserWithError() (Admin, error) {
 	}
 	if path != "" || remote != originalRemote {
 		cfg.SelectRemote(remote)
+	}
+	// The directory's tenant wins over the remote's enrolled tenant: a
+	// Shared Tenant's remote and its members' Personal Tenants are distinct
+	// selections that `sc tenant switch` records here.
+	if path != "" && strings.TrimSpace(local.Tenant) != "" && (remote == local.Remote || strings.TrimSpace(env["SANDCASTLE_REMOTE"]) == "") {
+		cfg.Tenant = strings.TrimSpace(local.Tenant)
 	}
 	admin := adminFromConfigAndEnv(cfg, env)
 	admin.DirectoryConfigPath = path

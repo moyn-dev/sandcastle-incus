@@ -1045,9 +1045,9 @@ func TestTenantListShowsAccessibleTenantsAndCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Tenant\tPersonal\tCurrent",
-		"acme\tyes\tyes",
-		"skorfman\tno\tno",
+		"  Tenant\tRole\tPersonal",
+		"* acme\towner\tyes",
+		"  skorfman\towner\tno",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
@@ -1063,6 +1063,7 @@ func TestTenantListShowsAccessibleTenantsAndCurrent(t *testing.T) {
 
 func TestTenantSwitchValidatesAccessAndPreservesProject(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{
 		Tenant:       "acme",
@@ -1103,6 +1104,7 @@ func TestTenantSwitchValidatesAccessAndPreservesProject(t *testing.T) {
 
 func TestTenantSwitchListsOnlyMissingLocalSetupActions(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	resolverDir := t.TempDir()
 	trustDir := t.TempDir()
 	t.Setenv("SANDCASTLE_RESOLVER_DIR", resolverDir)
@@ -1155,6 +1157,7 @@ func TestTenantSwitchListsOnlyMissingLocalSetupActions(t *testing.T) {
 
 func TestTenantSwitchRejectsInaccessibleTenant(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{Tenant: "acme", Project: "website"}); err != nil {
 		t.Fatal(err)
@@ -1182,6 +1185,7 @@ func TestTenantSwitchRejectsInaccessibleTenant(t *testing.T) {
 
 func TestTenantSwitchLocalOnlySkipsValidation(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{
 		Tenant:       "acme",

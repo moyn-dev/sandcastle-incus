@@ -18,6 +18,7 @@ func (f *fakeTenantRemoteInstaller) InstallTenantRemote(_ context.Context, reque
 
 func TestTenantSwitchEnrolsSharedTenantRemoteForMember(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{
 		Tenant:  "skorfmann",
@@ -71,6 +72,7 @@ func TestTenantSwitchEnrolsSharedTenantRemoteForMember(t *testing.T) {
 
 func TestTenantSwitchRefusesMemberWhenSidecarHasNoTailnetAddress(t *testing.T) {
 	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{Tenant: "skorfmann", AuthHostname: "https://auth.example.com", AuthToken: "stored-token"}); err != nil {
 		t.Fatal(err)
@@ -106,7 +108,7 @@ func TestTenantListShowsRoleColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Tenant\tPersonal\tCurrent\tRole", "skorfmann\tno\tno\towner", "moyn-dev\tno\tyes\tmember"} {
+	for _, want := range []string{"  Tenant\tRole\tPersonal", "  skorfmann\towner\tno", "* moyn-dev\tmember\tno"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
@@ -138,8 +140,41 @@ func TestTenantSwitchUpdatesTheDirectorySelectionForMember(t *testing.T) {
 	}
 	// The directory selection overrides the global remote, so the switch must
 	// re-point it or every command here would still address skorfmannsh.
-	if local.Remote != "moyn" || local.Project != "default" || local.RemoteProjects["moyn"] != "default" {
+	if local.Remote != "moyn" || local.Project != "default" || local.Tenant != "moyn-dev" || local.RemoteProjects["moyn"] != "default" {
 		t.Fatalf("selection = %#v", local)
+	}
+}
+
+func TestTenantSwitchCreatesTheDirectorySelectionWithTheTenant(t *testing.T) {
+	useLoginHomeForTest(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), scconfig.SandcastleConfig{
+		Tenant: "thieso2", Project: "default", Remote: "thieso2sh", AuthHostname: "https://auth.example.com", AuthToken: "stored-token",
+		Installs: map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
+		RemoteTenants: map[string]string{"thieso2sh": "thieso2", "moyn-dev": "moyn-dev"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "thieso2"}, {Tenant: "moyn-dev", Shared: true, Member: true}}}
+	admin := testAdminConfig()
+	admin.Tenant, admin.Remote, admin.AuthHostname, admin.AuthToken = "thieso2", "thieso2sh", "https://auth.example.com", "stored-token"
+	// The remote for moyn-dev is already enrolled (remote_tenants): the
+	// switch re-activates it and writes a NEW selection file here.
+	if _, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client}, "tenant", "switch", "moyn-dev"); err != nil {
+		t.Fatal(err)
+	}
+	local, path, err := scconfig.LoadDirectoryConfig(dir)
+	if err != nil || path == "" {
+		t.Fatalf("selection: %v (%q)", err, path)
+	}
+	if local.Tenant != "moyn-dev" || local.Remote != "moyn-dev" {
+		t.Fatalf("selection = %#v", local)
+	}
+	// And the resolved user config in this directory follows it.
+	resolved, err := scconfig.LoadUserWithError()
+	if err != nil || resolved.Tenant != "moyn-dev" || resolved.Remote != "moyn-dev" {
+		t.Fatalf("resolved = %+v, %v", resolved, err)
 	}
 }
 

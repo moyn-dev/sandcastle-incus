@@ -307,7 +307,7 @@ sc remote add <name> <join-token> --tenant <tenant>
 ## Shared tenants
 
 ```bash
-sc tenant list                                    # Role: owner | member
+sc tenant list                                    # "*" marks the active tenant; Role: owner | member
 sc tenant switch moyn-dev                         # member: enrols remote "<dns-suffix>" at the tenant
                                                   # sidecar's tailnet IP, pins its default project
 sc tenant switch thieso2                          # back to the personal tenant (re-activates its remote)
@@ -327,6 +327,9 @@ sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuse
   `tenant grant` refuse a user without a Personal Tenant.
 - Membership lives on the tenant's infra project (`user.sandcastle.v2.members`);
   the tenant's own keys are one per line in `user.sandcastle.v2.sshkey`.
+- `sc tenant switch` records remote, project and tenant in the nearest
+  `.sandcastle` selection file (created in the working directory when
+  missing, like `sc remote switch`), so the tenant is per directory.
 - After `sc tenant switch <shared>`, every `sc` command (machines, projects,
   hostnames, certificates, shares) acts on that tenant: the CLI sends the
   Current Tenant as `X-Sandcastle-Tenant` to the auth-app.

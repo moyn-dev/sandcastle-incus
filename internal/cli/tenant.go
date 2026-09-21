@@ -140,20 +140,32 @@ func newTenantSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Comm
 			if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
-			// A directory selection (`.sandcastle`, written by `sc remote switch`)
-			// overrides the global remote, so a switch that changed the remote
-			// must update the nearest selection too — otherwise every command in
-			// this directory would keep addressing the previous tenant's remote.
-			if switchedRemote != "" {
-				if local, path, err := scconfig.LoadDirectoryConfig(""); err == nil && path != "" {
-					if local.RemoteProjects == nil {
-						local.RemoteProjects = map[string]string{}
-					}
-					local.Remote, local.Project = switchedRemote, firstNonEmptyString(cfg.Project, "default")
-					local.RemoteProjects[switchedRemote] = local.Project
-					if _, err := scconfig.SaveDirectoryConfig(local); err != nil {
+			// The tenant is a directory selection like the remote (`.sandcastle`,
+			// the file `sc remote switch` writes): record remote, project AND
+			// tenant in the nearest selection, creating one here when none
+			// exists — otherwise the directory would keep addressing the
+			// previous tenant's remote, or the remote's enrolled tenant.
+			if !localOnly || switchedRemote != "" {
+				local, _, err := scconfig.LoadDirectoryConfig("")
+				if err != nil {
+					return err
+				}
+				if local.RemoteProjects == nil {
+					local.RemoteProjects = map[string]string{}
+				}
+				if local.Remote != "" && local.Project != "" {
+					local.RemoteProjects[local.Remote] = local.Project
+				}
+				local.Remote = firstNonEmptyString(switchedRemote, cfg.Remote, local.Remote)
+				local.Project = firstNonEmptyString(cfg.Project, local.RemoteProjects[local.Remote], "default")
+				local.Tenant = tenantName
+				local.RemoteProjects[local.Remote] = local.Project
+				if local.Remote != "" {
+					path, err := scconfig.SaveDirectoryConfig(local)
+					if err != nil {
 						return fmt.Errorf("save selection: %w", err)
 					}
+					fmt.Fprintf(config.stdout, "Selection saved in %s (remote %q, project %q, tenant %q).\n", path, local.Remote, local.Project, tenantName)
 				}
 			}
 			if enrolled != "" {
@@ -333,15 +345,18 @@ func formatTenantAccessList(output tenantListOutput) string {
 		return "No accessible tenants"
 	}
 	var builder strings.Builder
-	builder.WriteString("Tenant\tPersonal\tCurrent\tRole\n")
+	builder.WriteString("  Tenant\tRole\tPersonal\n")
 	for _, tenant := range output.Tenants {
+		if tenant.Current {
+			builder.WriteString("* ")
+		} else {
+			builder.WriteString("  ")
+		}
 		builder.WriteString(tenant.Tenant)
 		builder.WriteByte('\t')
-		builder.WriteString(yesNo(tenant.Personal))
-		builder.WriteByte('\t')
-		builder.WriteString(yesNo(tenant.Current))
-		builder.WriteByte('\t')
 		builder.WriteString(tenant.Role)
+		builder.WriteByte('\t')
+		builder.WriteString(yesNo(tenant.Personal))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimRight(builder.String(), "\n")

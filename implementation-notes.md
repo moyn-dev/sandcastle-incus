@@ -6354,3 +6354,14 @@ thieso2` then failed with `lookup auth.example.com`. The switch had recorded
 a placeholder an old login left behind, while the real hostname lives in
 `installs[<remote>]`. It now records what `commandAuthHostname` resolves —
 the same value every other command talks to.
+
+## 2026-09-21 — tenant is part of the directory selection; `*` in tenant list
+
+The Current Tenant now lives in `.sandcastle` next to remote and project:
+`sc tenant switch` writes (or creates) the nearest selection with all three,
+`sc remote switch` records the remote's enrolled tenant, and
+`LoadUserWithError` applies the selection's tenant over the remote-derived
+one. Without it a member's shared tenant was only in the global config while
+the directory selection kept the remote — two sources that could disagree.
+`sc tenant list` marks the active tenant with `*` (like project list) and
+drops the yes/no Current column.
