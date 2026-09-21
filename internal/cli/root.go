@@ -316,6 +316,12 @@ func newUserCommandConfig(name string, stdin io.Reader, stdout, stderr io.Writer
 // bare names are unaffected. A prefix naming the current remote is just stripped.
 func rebindForReference(base commandConfig, reference string) (commandConfig, string, func(), error) {
 	noop := func() {}
+	// A Sandcastle Path (/remote/tenant/project/machine) becomes its colon
+	// reference first, so the rest of the grammar is one code path.
+	reference, err := normalizeReference(base, reference)
+	if err != nil {
+		return base, reference, noop, err
+	}
 	first, rest, ok := strings.Cut(strings.TrimSpace(reference), ":")
 	if !ok {
 		return base, reference, noop, nil
@@ -419,6 +425,9 @@ func NewRootCommand(config commandConfig) *cobra.Command {
 	root.AddCommand(newVersionCommand(config, opts))
 	root.AddCommand(newUpdateCommand(config, opts))
 	root.AddCommand(newListCommand(config, opts))
+	root.AddCommand(newCdCommand(config, opts))
+	root.AddCommand(newPwdCommand(config, opts))
+	root.AddCommand(newMkdirCommand(config, opts))
 	root.AddCommand(newStatusCommand(config, opts))
 	root.AddCommand(newInfoCommand(config, opts))
 	root.AddCommand(newCreateCommand(config, opts))

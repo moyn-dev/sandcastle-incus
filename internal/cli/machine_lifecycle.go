@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	machine "github.com/thieso2/sandcastle-incus/internal/machine"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
 // machineActionResult is one machine's outcome in a lifecycle run. Remote is
@@ -49,7 +50,7 @@ var machineLifecycleAliases = map[string][]string{
 }
 
 func newMachineLifecycleCommand(config commandConfig, opts *rootOptions, use string, action machine.Action, requireYes bool) *cobra.Command {
-	var yes, dryRun bool
+	var yes, dryRun, recursive bool
 	command := &cobra.Command{
 		Use:     use + " [[remote:]project:]machine",
 		Aliases: machineLifecycleAliases[use],
@@ -63,8 +64,17 @@ can act on a set: "` + use + ` 'gbrain:*'" for every machine in project gbrain,
 installs needs all three parts spelled out. Quote the pattern so the shell does
 not expand it first. A wildcard that matches nothing is an error, and ` + use + `
 reports every machine it acted on.`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: pathCompletion(config, levelMachine),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if action == machine.ActionDelete && isPathReference(args[0]) {
+				// `sc rm /remote/tenant/project` removes a project; a machine
+				// path falls through to the machine grammar below.
+				handled, err := removeProjectPath(cmd.Context(), config, opts, args[0], recursive, yes, dryRun)
+				if handled || err != nil {
+					return err
+				}
+			}
 			config, reference, restore, err := rebindForReference(config, args[0])
 			if err != nil {
 				return err
@@ -79,8 +89,59 @@ reports every machine it acted on.`,
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "show targets and certificate decision without changing machines")
 	if requireYes {
 		command.Flags().BoolVar(&yes, "yes", false, "confirm machine deletion")
+		command.Flags().BoolVarP(&recursive, "recursive", "r", false, "with a project path: delete the project's machines first, then the project")
 	}
 	return command
+}
+
+// removeProjectPath is `sc rm` on a Sandcastle Path that names a project:
+// the project is deleted (its machines first with -r; an empty project is
+// required otherwise, as `sc project delete` requires). A path naming a
+// machine is not handled here (false, nil), a remote or tenant is an error.
+func removeProjectPath(ctx context.Context, config commandConfig, opts *rootOptions, arg string, recursive bool, yes bool, dryRun bool) (bool, error) {
+	segments, err := resolvePath(config, arg)
+	if err != nil {
+		return true, err
+	}
+	switch len(segments) {
+	case levelMachine:
+		return false, nil
+	case levelProject:
+	default:
+		return true, fmt.Errorf("%s is a %s: rm removes projects and machines; remotes and tenants are managed by sc remote, sc login and sc-adm", formatPath(segments), levelName(len(segments)))
+	}
+	remote, tenantName, project := segments[0], segments[1], segments[2]
+	if naming.IsPattern(remote) || naming.IsPattern(tenantName) || naming.IsPattern(project) {
+		return true, fmt.Errorf("rm needs one project, not the pattern %s", formatPath(segments))
+	}
+	bound, restore, err := configForPosition(config, remote, tenantName)
+	if err != nil {
+		return true, err
+	}
+	defer restore()
+	if recursive {
+		summary, err := requireV2Tenant(ctx, bound)
+		if err != nil {
+			return true, err
+		}
+		if _, ok := findProject(summary, project); !ok {
+			return true, unknownProjectError(summary, project, "")
+		}
+		selector, err := parseMachineSelector(project+":*", project)
+		if err != nil {
+			return true, err
+		}
+		machines, err := selectMachines(ctx, bound, summary, selector)
+		if err != nil {
+			return true, err
+		}
+		if len(machines) > 0 {
+			if err := runMachineLifecycle(ctx, bound, opts, defaultRemoteFanout(), project+":*", machine.ActionDelete, true, yes); err != nil {
+				return true, err
+			}
+		}
+	}
+	return true, runProjectDelete(ctx, bound, opts, project, yes, dryRun)
 }
 
 func runMachineLifecycle(ctx context.Context, config commandConfig, opts *rootOptions, fanout remoteFanout, reference string, action machine.Action, requireYes bool, yes bool) error {

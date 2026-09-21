@@ -82,50 +82,61 @@ func newRemoteSwitchCommand(config commandConfig) *cobra.Command {
 		Short:   "Switch the active Sandcastle remote (install)",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := strings.TrimSpace(args[0])
-			cfgPath := scconfig.DefaultConfigPath()
-			cfg, err := scconfig.LoadSandcastleConfig(cfgPath)
-			if err != nil {
-				return fmt.Errorf("load config: %w", err)
-			}
-			// A typo silently pointing sc at a non-existent install is worse than a
-			// loud failure, so validate against the enrolled remotes first.
-			incusDir, _ := scconfig.SharedIncusDirExplained()
-			remotes, err := readLocalRemotes(incusDir)
-			if err != nil {
-				return fmt.Errorf("read incus remotes from %s: %w", incusDir, err)
-			}
-			if !remoteNameKnown(remotes, name) {
-				known := sandcastleRemoteNames(remotes, cfg)
-				hint := "run `sc remote list` to see enrolled installs, or `sc login <auth-hostname>` to enroll"
-				if len(known) > 0 {
-					hint = "enrolled remotes: " + strings.Join(known, ", ")
-				}
-				return fmt.Errorf("no enrolled Sandcastle remote %q; %s", name, hint)
-			}
-			local, err := directorySelection(config)
+			name, project, path, err := switchRemoteSelection(config, strings.TrimSpace(args[0]))
 			if err != nil {
 				return err
-			}
-			cfg.SelectRemote(name)
-			project := local.RemoteProjects[name]
-			if project == "" {
-				project = shortProjectName(scconfig.SharedIncusRemoteProject(name), cfg.Tenant)
-			}
-			if project == "" {
-				project = "default"
-			}
-			local.Remote, local.Project = name, project
-			local.Tenant = strings.TrimSpace(cfg.Tenant)
-			local.RemoteProjects[name] = project
-			path, err := scconfig.SaveDirectoryConfig(local)
-			if err != nil {
-				return fmt.Errorf("save selection: %w", err)
 			}
 			fmt.Fprintf(config.stdout, "Switched to remote %q (project %q; saved in %s).\n", name, project, path)
 			return nil
 		},
 	}
+}
+
+// switchRemoteSelection is `sc remote switch` without the output: it validates
+// the remote is enrolled and records it (with its remembered project) in the
+// nearest .sandcastle. `sc cd` composes it with the other switches.
+func switchRemoteSelection(config commandConfig, name string) (remote string, project string, path string, err error) {
+	remote = name
+	cfgPath := scconfig.DefaultConfigPath()
+	cfg, err := scconfig.LoadSandcastleConfig(cfgPath)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load config: %w", err)
+	}
+	// A typo silently pointing sc at a non-existent install is worse than a
+	// loud failure, so validate against the enrolled remotes first.
+	incusDir, _ := scconfig.SharedIncusDirExplained()
+	remotes, err := readLocalRemotes(incusDir)
+	if err != nil {
+		return "", "", "", fmt.Errorf("read incus remotes from %s: %w", incusDir, err)
+	}
+	if !remoteNameKnown(remotes, name) {
+		known := sandcastleRemoteNames(remotes, cfg)
+		hint := "run `sc remote list` to see enrolled installs, or `sc login <auth-hostname>` to enroll"
+		if len(known) > 0 {
+			hint = "enrolled remotes: " + strings.Join(known, ", ")
+		}
+		return "", "", "", fmt.Errorf("no enrolled Sandcastle remote %q; %s", name, hint)
+	}
+	local, err := directorySelection(config)
+	if err != nil {
+		return "", "", "", err
+	}
+	cfg.SelectRemote(name)
+	project = local.RemoteProjects[name]
+	if project == "" {
+		project = shortProjectName(scconfig.SharedIncusRemoteProject(name), cfg.Tenant)
+	}
+	if project == "" {
+		project = "default"
+	}
+	local.Remote, local.Project = name, project
+	local.Tenant = strings.TrimSpace(cfg.Tenant)
+	local.RemoteProjects[name] = project
+	path, err = scconfig.SaveDirectoryConfig(local)
+	if err != nil {
+		return "", "", "", fmt.Errorf("save selection: %w", err)
+	}
+	return name, project, path, nil
 }
 
 // sandcastleRemoteRow is one row of `sc remote list`.

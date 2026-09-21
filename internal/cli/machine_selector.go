@@ -222,6 +222,10 @@ func resolveSingleMachineReference(ctx context.Context, config commandConfig, su
 // References that do not glob the install part pass through untouched, so
 // single-install addressing is not routed through the sweep.
 func narrowRemoteGlob(ctx context.Context, config commandConfig, fanout remoteFanout, reference string) (string, error) {
+	reference, err := normalizeReference(config, reference)
+	if err != nil {
+		return "", err
+	}
 	selector, err := parseMachineSelector(reference, config.adminConfig.Project)
 	if err != nil || !selector.HasRemotePattern() {
 		return reference, nil

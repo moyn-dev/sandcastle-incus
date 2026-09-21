@@ -138,12 +138,23 @@ type tenantResourcesPayload struct {
 func newListCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var allProjects bool
 	var showNetworks, showStoragePools, showStorageVolumes, showProfiles, showImages bool
+	var pathOpts pathListOptions
 	command := &cobra.Command{
-		Use:     "list [[remote:]project[:machine]]",
-		Aliases: []string{"ls"},
-		Short:   "List Sandcastle machines",
-		Args:    cobra.MaximumNArgs(1),
+		Use:               "list [[remote:]project[:machine] | path...]",
+		Aliases:           []string{"ls"},
+		Short:             "List Sandcastle machines, or the children of a Sandcastle Path",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: pathCompletion(config, levelMachine),
 		Long: `List Sandcastle machines in the current install's project.
+
+With a Sandcastle Path (/remote/tenant/project/machine, or a relative path
+such as .., ../*dev or ~), ls lists like a shell: the children of every
+directory the path matches — remotes under /, tenants under a remote,
+projects under a tenant, machines under a project — each under a "path:"
+header when there are several. -d prints the matching names instead of
+their contents, -l a table with the level's columns, -R recurses. With no
+argument ls lists the current project's machines as before, or the children
+of the Current Position when sc cd has moved it above a project.
 
 The argument may carry a "<remote>:" prefix to list another enrolled install
 without switching to it — e.g. "sc ls obelix:home" (project home on remote
@@ -163,6 +174,16 @@ Globbing installs needs all three parts spelled out: a two-part reference stays
 [remote:]project or project:machine. Quote the pattern so the shell does not
 expand it first.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if listInPathMode(config, args, pathOpts) {
+				payload, err := listPaths(cmd.Context(), config, args, pathOpts)
+				if err != nil {
+					return err
+				}
+				return writeOutput(config.stdout, opts.output, formatPathList(payload, pathOpts), payload)
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("several arguments need Sandcastle Paths (/remote/tenant/project/machine); the colon grammar takes one reference")
+			}
 			remoteOverride, project, machineName := splitListReference(optionalArg(args), localRemoteExists)
 			request := listMachinesRequest{
 				Project:     project,
@@ -204,12 +225,33 @@ expand it first.`,
 		},
 	}
 	command.Flags().BoolVarP(&allProjects, "all-projects", "a", false, "list machines across all projects")
+	command.Flags().BoolVarP(&pathOpts.Long, "long", "l", false, "path mode: long listing with the level's columns")
+	command.Flags().BoolVarP(&pathOpts.Directory, "directory", "d", false, "path mode: list the matching names, not their contents")
+	command.Flags().BoolVarP(&pathOpts.Recursive, "recursive", "R", false, "path mode: list subdirectories recursively")
 	command.Flags().BoolVar(&showNetworks, "networks", false, "also list networks (cache-backed only; no effect when falling back to the live query)")
 	command.Flags().BoolVar(&showStoragePools, "storage-pools", false, "also list storage pools (cache-backed only; no effect when falling back to the live query)")
 	command.Flags().BoolVar(&showStorageVolumes, "storage-volumes", false, "also list storage volumes (cache-backed only; no effect when falling back to the live query)")
 	command.Flags().BoolVar(&showProfiles, "profiles", false, "also list profiles (cache-backed only; no effect when falling back to the live query)")
 	command.Flags().BoolVar(&showImages, "images", false, "also list images (cache-backed only; no effect when falling back to the live query)")
 	return command
+}
+
+// listInPathMode decides between the two grammars of `sc ls`: any path
+// argument, any path-only flag, or a Current Position above the project
+// level selects the tree walk; otherwise the colon listing runs unchanged,
+// so `sc ls`, `sc ls gbrain:*` and `sc ls -a` inside a project are untouched.
+func listInPathMode(config commandConfig, args []string, options pathListOptions) bool {
+	if options.Long || options.Directory || options.Recursive {
+		return true
+	}
+	for _, arg := range args {
+		if isPathReference(arg) {
+			return true
+		}
+	}
+	// Above a project every name is a child of the position (a tenant's
+	// projects, a remote's tenants), so bare names are relative paths too.
+	return len(currentPosition(config)) < levelProject
 }
 
 // listMachinesViaCache attempts `sc ls`'s cache-first path: the t2

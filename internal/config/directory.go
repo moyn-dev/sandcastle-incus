@@ -18,6 +18,46 @@ type DirectoryConfig struct {
 	// user's own); empty means whatever the remote was enrolled for.
 	Tenant         string            `yaml:"tenant,omitempty"`
 	RemoteProjects map[string]string `yaml:"remote_projects,omitempty"`
+	// Level truncates the Current Position above the project: "root",
+	// "remote" or "tenant" (empty means the project level, the only level
+	// before path navigation existed). Remote and Project stay filled in so
+	// the credentials and the remembered project survive a `cd ..`.
+	Level string `yaml:"level,omitempty"`
+	// Previous is the absolute Sandcastle Path the directory stood at before
+	// the last `sc cd`, for `sc cd -`.
+	Previous string `yaml:"previous,omitempty"`
+}
+
+// Position levels of a directory selection, in tree order.
+const (
+	PositionRoot    = "root"
+	PositionRemote  = "remote"
+	PositionTenant  = "tenant"
+	PositionProject = "project"
+)
+
+// PositionLevel returns the selection's level with the project default made
+// explicit.
+func (c DirectoryConfig) PositionLevel() string {
+	if level := strings.TrimSpace(c.Level); level != "" {
+		return level
+	}
+	return PositionProject
+}
+
+// PositionDepth is the number of path segments the level keeps: 0 for root,
+// 3 for project.
+func PositionDepth(level string) int {
+	switch level {
+	case PositionRoot:
+		return 0
+	case PositionRemote:
+		return 1
+	case PositionTenant:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // LoadDirectoryConfig walks from start to the filesystem root. Only the nearest
@@ -67,6 +107,11 @@ func (c DirectoryConfig) validate() error {
 	}
 	if err := naming.ValidateProjectName(c.Project); err != nil {
 		return err
+	}
+	switch strings.TrimSpace(c.Level) {
+	case "", PositionRoot, PositionRemote, PositionTenant, PositionProject:
+	default:
+		return fmt.Errorf("invalid level %q", c.Level)
 	}
 	for _, project := range c.RemoteProjects {
 		if err := naming.ValidateProjectName(project); err != nil {
@@ -186,5 +231,14 @@ func LoadUserWithError() (Admin, error) {
 	}
 	admin := adminFromConfigAndEnv(cfg, env)
 	admin.DirectoryConfigPath = path
+	if path != "" {
+		// A position above the project level leaves the project unset, so
+		// commands see "not in a project" rather than a silent default. An
+		// explicit SANDCASTLE_PROJECT still wins, as everywhere else.
+		admin.PositionLevel = local.PositionLevel()
+		if PositionDepth(admin.PositionLevel) < PositionDepth(PositionProject) && strings.TrimSpace(env["SANDCASTLE_PROJECT"]) == "" {
+			admin.Project = ""
+		}
+	}
 	return admin, nil
 }

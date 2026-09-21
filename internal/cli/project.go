@@ -71,47 +71,55 @@ func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Com
 		Long:    "Select the project in the nearest .sandcastle (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := strings.TrimSpace(args[0])
-			if name == "" {
-				return fmt.Errorf("project is required")
-			}
-			if err := naming.ValidateProjectName(name); err != nil {
-				return err
-			}
-			if !localOnly {
-				summary, err := currentTenantSummary(cmd.Context(), config)
-				if err != nil {
-					return err
-				}
-				if _, ok := findProject(summary, name); !ok {
-					names := make([]string, 0, len(summary.Projects))
-					for _, p := range summary.Projects {
-						names = append(names, p.Name)
-					}
-					return fmt.Errorf("project %s not found in tenant %s (projects: %s); use --local-only to set it anyway", name, summary.Tenant, strings.Join(names, ", "))
-				}
-			}
-			local, err := directorySelection(config)
+			result, err := switchProjectSelection(cmd.Context(), config, strings.TrimSpace(args[0]), localOnly)
 			if err != nil {
 				return err
-			}
-			local.Project = name
-			local.RemoteProjects[local.Remote] = name
-			cfgPath, err := scconfig.SaveDirectoryConfig(local)
-			if err != nil {
-				return fmt.Errorf("save selection: %w", err)
-			}
-
-			result := projectSwitchOutput{
-				Project:    name,
-				LocalOnly:  localOnly,
-				ConfigPath: cfgPath,
 			}
 			return writeOutput(config.stdout, opts.output, formatProjectSwitch(result), result)
 		},
 	}
 	command.Flags().BoolVar(&localOnly, "local-only", false, "update the local current project without checking it exists in the tenant")
 	return command
+}
+
+// switchProjectSelection is `sc project switch` without the output: it checks
+// the project exists in the Current Tenant (unless localOnly) and records it
+// in the nearest .sandcastle. `sc cd` composes it with the other switches.
+func switchProjectSelection(ctx context.Context, config commandConfig, name string, localOnly bool) (projectSwitchOutput, error) {
+	if name == "" {
+		return projectSwitchOutput{}, fmt.Errorf("project is required")
+	}
+	if err := naming.ValidateProjectName(name); err != nil {
+		return projectSwitchOutput{}, err
+	}
+	if !localOnly {
+		summary, err := currentTenantSummary(ctx, config)
+		if err != nil {
+			return projectSwitchOutput{}, err
+		}
+		if _, ok := findProject(summary, name); !ok {
+			names := make([]string, 0, len(summary.Projects))
+			for _, p := range summary.Projects {
+				names = append(names, p.Name)
+			}
+			return projectSwitchOutput{}, fmt.Errorf("project %s not found in tenant %s (projects: %s); use --local-only to set it anyway", name, summary.Tenant, strings.Join(names, ", "))
+		}
+	}
+	local, err := directorySelection(config)
+	if err != nil {
+		return projectSwitchOutput{}, err
+	}
+	local.Project = name
+	local.RemoteProjects[local.Remote] = name
+	cfgPath, err := scconfig.SaveDirectoryConfig(local)
+	if err != nil {
+		return projectSwitchOutput{}, fmt.Errorf("save selection: %w", err)
+	}
+	return projectSwitchOutput{
+		Project:    name,
+		LocalOnly:  localOnly,
+		ConfigPath: cfgPath,
+	}, nil
 }
 
 func formatProjectSwitch(out projectSwitchOutput) string {
@@ -197,7 +205,7 @@ func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if err := naming.ValidateProjectName(args[0]); err != nil {
 				return err
 			}
-			tenantSummary, machines, err := currentTenantMachines(cmd, config)
+			tenantSummary, machines, err := currentTenantMachines(cmd.Context(), config)
 			if err != nil {
 				return err
 			}
@@ -398,66 +406,71 @@ func newProjectDeleteCommand(config commandConfig, opts *rootOptions) *cobra.Com
 		Short:   "Delete an empty project namespace from the current tenant",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !yes && !dryRun {
-				confirmed, err := confirmMissingYes(config, "Delete project "+args[0]+"?", "refusing to delete project without --yes")
-				if err != nil {
-					return err
-				}
-				if !confirmed {
-					return nil
-				}
-			}
-			tenantSummary, machines, err := currentTenantMachines(cmd, config)
-			if err != nil {
-				return err
-			}
-			plan, err := tenant.PlanDeleteProject(cmd.Context(), config.adminConfig, config.tenantStore, tenant.ProjectMutationRequest{
-				Name:     args[0],
-				Machines: machines,
-			})
-			if err != nil {
-				return err
-			}
-			plan.Tenant = tenantSummary
-			if projectAuthAppAvailable(config, "") {
-				// The tenant plane (ADR-0027 §3.2): DELETE /api/projects/<name>
-				// releases the Project Domain claim, then deletes the Incus
-				// project with admin credentials — a restricted tenant
-				// certificate cannot. Falls through to the direct path only
-				// when the deployment has no delete endpoint.
-				result, err := projectAuthClient(config).DeleteProject(cmd.Context(), args[0], dryRun)
-				if err == nil {
-					return writeOutput(config.stdout, opts.output, formatProjectDomainResult("delete", result), result)
-				}
-				if !strings.Contains(err.Error(), "not available on this deployment") {
-					return err
-				}
-			}
-			if !dryRun {
-				// Deleting the Incus project IS the deletion: a tenant's project
-				// list is derived from its Incus projects. This used to only
-				// rewrite a metadata file nothing read, so the project, its
-				// volumes and its machines all survived a "successful" delete.
-				if config.projectDeleter == nil {
-					return fmt.Errorf("project deleter is not configured")
-				}
-				if err := config.projectDeleter.DeleteProjectV2(cmd.Context(), tenantSummary.V2IncusProjectName(args[0]), config.adminConfig.StoragePool); err != nil {
-					// A tenant's restricted certificate may not delete an Incus
-					// project; without an Auth App login the tenant plane's
-					// delete endpoint is out of reach. Say so, rather than
-					// surfacing a bare "Certificate is restricted".
-					if strings.Contains(err.Error(), "restricted") || strings.Contains(err.Error(), "not authorized") {
-						return fmt.Errorf("deleting a project needs admin rights: your tenant certificate is restricted (run sc login so `sc project delete` can use the Auth App).\nOr ask an admin to run: sc-adm project delete %s %s --yes", tenantSummary.Tenant, args[0])
-					}
-					return err
-				}
-			}
-			return writeOutput(config.stdout, opts.output, formatProjectMutationPlan(plan), plan)
+			return runProjectDelete(cmd.Context(), config, opts, args[0], yes, dryRun)
 		},
 	}
 	command.Flags().BoolVar(&yes, "yes", false, "confirm project deletion")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "render the project metadata update without mutating resources")
 	return command
+}
+
+// runProjectDelete is `sc project delete`'s body, shared with `sc rm <path>`.
+func runProjectDelete(ctx context.Context, config commandConfig, opts *rootOptions, name string, yes bool, dryRun bool) error {
+	if !yes && !dryRun {
+		confirmed, err := confirmMissingYes(config, "Delete project "+name+"?", "refusing to delete project without --yes")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return nil
+		}
+	}
+	tenantSummary, machines, err := currentTenantMachines(ctx, config)
+	if err != nil {
+		return err
+	}
+	plan, err := tenant.PlanDeleteProject(ctx, config.adminConfig, config.tenantStore, tenant.ProjectMutationRequest{
+		Name:     name,
+		Machines: machines,
+	})
+	if err != nil {
+		return err
+	}
+	plan.Tenant = tenantSummary
+	if projectAuthAppAvailable(config, "") {
+		// The tenant plane (ADR-0027 §3.2): DELETE /api/projects/<name>
+		// releases the Project Domain claim, then deletes the Incus
+		// project with admin credentials — a restricted tenant
+		// certificate cannot. Falls through to the direct path only
+		// when the deployment has no delete endpoint.
+		result, err := projectAuthClient(config).DeleteProject(ctx, name, dryRun)
+		if err == nil {
+			return writeOutput(config.stdout, opts.output, formatProjectDomainResult("delete", result), result)
+		}
+		if !strings.Contains(err.Error(), "not available on this deployment") {
+			return err
+		}
+	}
+	if !dryRun {
+		// Deleting the Incus project IS the deletion: a tenant's project
+		// list is derived from its Incus projects. This used to only
+		// rewrite a metadata file nothing read, so the project, its
+		// volumes and its machines all survived a "successful" delete.
+		if config.projectDeleter == nil {
+			return fmt.Errorf("project deleter is not configured")
+		}
+		if err := config.projectDeleter.DeleteProjectV2(ctx, tenantSummary.V2IncusProjectName(name), config.adminConfig.StoragePool); err != nil {
+			// A tenant's restricted certificate may not delete an Incus
+			// project; without an Auth App login the tenant plane's
+			// delete endpoint is out of reach. Say so, rather than
+			// surfacing a bare "Certificate is restricted".
+			if strings.Contains(err.Error(), "restricted") || strings.Contains(err.Error(), "not authorized") {
+				return fmt.Errorf("deleting a project needs admin rights: your tenant certificate is restricted (run sc login so `sc project delete` can use the Auth App).\nOr ask an admin to run: sc-adm project delete %s %s --yes", tenantSummary.Tenant, name)
+			}
+			return err
+		}
+	}
+	return writeOutput(config.stdout, opts.output, formatProjectMutationPlan(plan), plan)
 }
 
 func newProjectSetCloudIdentityCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -583,8 +596,8 @@ func parseOnOff(value string) (bool, error) {
 	}
 }
 
-func currentTenantMachines(cmd *cobra.Command, config commandConfig) (tenant.Summary, []meta.Machine, error) {
-	result, err := listMachines(cmd.Context(), config, listMachinesRequest{AllProjects: true})
+func currentTenantMachines(ctx context.Context, config commandConfig) (tenant.Summary, []meta.Machine, error) {
+	result, err := listMachines(ctx, config, listMachinesRequest{AllProjects: true})
 	if err != nil {
 		return tenant.Summary{}, nil, err
 	}

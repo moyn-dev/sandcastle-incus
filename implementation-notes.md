@@ -5,6 +5,69 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — Path navigation: decisions taken while implementing map #190
+
+Wayfinder map #190 charted `sc cd`/`pwd`/`ls`/`mkdir`/`rm` over the tree
+`/remote/tenant/project/machine`; the user asked to implement before its
+decision tickets were worked, so these are the choices the tickets would
+have settled, made here with defaults:
+
+- **Grammar selection by shape, not by flag.** An argument is a Sandcastle
+  Path iff it starts with `/`, `./`, `../`, `~/` or is exactly `.`, `..`,
+  `~`, `-`. Everything else stays the colon grammar untouched, which is
+  what makes the feature additive: `web:dev`, `g*:d*`, `acme@obelix:web:dev`
+  never reach the path parser. Alternative considered: a `--path` flag or
+  accepting `a/b/c` without a leading marker — rejected because a bare
+  `dev` must keep meaning "machine dev in the current project".
+- **Paths become colon references at the two existing entry points**
+  (`rebindForReference`, `narrowRemoteGlob`) rather than teaching every
+  command a second parser. The tenant segment must be the tenant the remote
+  serves (ADR-0021: one remote per install and tenant); another tenant's
+  machines are reached by `sc cd` into that tenant, which enrols its remote
+  as `sc tenant switch` does. Printed form stays `tenant@remote:project:
+  machine`; `pwd` prints the slash form.
+- **Position storage stays in `.sandcastle`** with two optional fields,
+  `level` (only when above a project) and `previous` (for `cd -`). `remote`
+  and `project` remain mandatory and filled (the remembered project), so
+  the credentials and the way back down survive. Cost accepted: a binary
+  older than this feature reads `.sandcastle` with `UnmarshalStrict` and
+  rejects the new fields; `sc update` is the fix, and a `.sandcastle` that
+  never left project level and never ran `cd` is byte-identical to before.
+  Alternatives: a sibling file or a per-user history keyed by path —
+  rejected as two sources of truth for one position.
+- **Bare `cd <name>` from a project means the sibling project** (`../name`),
+  not the child: children of a project are machines, leaves a `cd` can
+  never enter, so the child reading could only ever fail. Above a project a
+  bare name is the child, as in a shell.
+- **`ls` prints a `path:` header for any globbed argument**, even with one
+  match, where a shell would print the contents bare. A glob that matched
+  one empty project would otherwise print nothing at all.
+- **`ls` above a project reads every bare argument as a relative path**
+  (`sc ls web api` at tenant level). Inside a project the colon listing is
+  byte-for-byte what it was, including `sc ls gbrain:*` and `-a`.
+- **`rm` extends `delete`** (its existing alias) instead of a new command:
+  a project path deletes the project (empty, or `-r` for its machines
+  first); a machine path falls through to the machine grammar. `mkdir`
+  creates projects only through the Auth App tenant plane; the broker and
+  certificate paths keep their flags on `sc project create`.
+- **Completion reuses cobra's default `completion` command** (it was already
+  registered, just undocumented) and adds `ValidArgsFunction` path
+  completion with a 3 s budget: children come from the same sources `ls`
+  uses (local incus config, Auth App, resource cache), no completion cache
+  of its own yet — the prior-art research (issue #191) found every surveyed
+  CLI but gsutil lives without one.
+- **`**` has two readings, by command.** In a listing it is globstar: zero
+  or more levels, expanded by walking the tree (unreadable subtrees warn).
+  In a machine reference it becomes as many `*` as reach a machine, the
+  first `**` absorbing all of them, so `/**/dev` is the existing `*:*:dev`
+  fan-out and a second `**` is redundant. A general "zero or more" in the
+  colon grammar would need the selector to match sets of varying depth,
+  which nothing downstream supports.
+- **`cd` reloads the config between switches** (`LoadUserWithError` after
+  each of remote/tenant/project) so each step sees exactly what the next
+  `sc` invocation would; simpler and safer than threading partial state
+  through three refactored switch bodies.
+
 ## 2026-09-15 — Fresh publication E2E requires supported Incus and bounded bridge names
 
 Validation: isolated run `e2e-pubfix4` completed with `ALL PASS: Machine

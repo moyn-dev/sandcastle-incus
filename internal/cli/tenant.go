@@ -92,98 +92,110 @@ func newTenantSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Comm
 		Long:    "Select the local Current Tenant. By default this validates Tenant Access through the Auth App; use --local-only to update local config without online validation.",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tenantName := strings.TrimSpace(args[0])
-			if tenantName == "" {
-				return fmt.Errorf("tenant is required")
-			}
-			var access authapp.TenantAccessSummary
-			if !localOnly {
-				var err error
-				if access, err = validateTenantAccessForSwitch(cmd.Context(), config, tenantName); err != nil {
-					return err
-				}
-			}
-			cfgPath := scconfig.DefaultConfigPath()
-			cfg, err := scconfig.LoadSandcastleConfig(cfgPath)
+			result, err := runTenantSwitch(cmd.Context(), config, strings.TrimSpace(args[0]), localOnly, config.stdout)
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				return err
 			}
-			// Shared Tenant, member side: the tenant's machines sit behind ITS
-			// sidecar (the Incus Reach), so the member needs an Incus remote at
-			// that sidecar's tailnet address, named after the tenant's DNS
-			// suffix (ADR-0021) and pinned to its default project. Enrolled once,
-			// certificate-based (the grant already extended this keypair), and
-			// recorded like a login's remote so `sc remote switch` round-trips.
-			enrolled := ""
-			switchedRemote := ""
-			if access.Member {
-				remoteName, err := ensureSharedTenantRemote(cmd.Context(), config, &cfg, tenantName, access)
-				if err != nil {
-					return err
-				}
-				enrolled = remoteName
-				switchedRemote = remoteName
-				cfg.Remote = remoteName
-				if access.DefaultProject != "" {
-					cfg.Project = access.DefaultProject
-				}
-				_ = scconfig.SetSharedIncusDefaultRemote(remoteName)
-			} else if remote := remoteForTenant(cfg, tenantName); remote != "" && remote != cfg.Remote {
-				// A remote already enrolled for this tenant (the owner's login,
-				// or an earlier switch): make it the active one so the Incus
-				// side follows the Current Tenant.
-				applyRemoteSwitch(&cfg, remote)
-				repinProjectForRemote(&cfg, remote)
-				_ = scconfig.SetSharedIncusDefaultRemote(remote)
-				switchedRemote = remote
-			}
-			cfg.Tenant = tenantName
-			if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
-			}
-			// The tenant is a directory selection like the remote (`.sandcastle`,
-			// the file `sc remote switch` writes): record remote, project AND
-			// tenant in the nearest selection, creating one here when none
-			// exists — otherwise the directory would keep addressing the
-			// previous tenant's remote, or the remote's enrolled tenant.
-			if !localOnly || switchedRemote != "" {
-				local, _, err := scconfig.LoadDirectoryConfig("")
-				if err != nil {
-					return err
-				}
-				if local.RemoteProjects == nil {
-					local.RemoteProjects = map[string]string{}
-				}
-				if local.Remote != "" && local.Project != "" {
-					local.RemoteProjects[local.Remote] = local.Project
-				}
-				local.Remote = firstNonEmptyString(switchedRemote, cfg.Remote, local.Remote)
-				local.Project = firstNonEmptyString(cfg.Project, local.RemoteProjects[local.Remote], "default")
-				local.Tenant = tenantName
-				local.RemoteProjects[local.Remote] = local.Project
-				if local.Remote != "" {
-					path, err := scconfig.SaveDirectoryConfig(local)
-					if err != nil {
-						return fmt.Errorf("save selection: %w", err)
-					}
-					fmt.Fprintf(config.stdout, "Selection saved in %s (remote %q, project %q, tenant %q).\n", path, local.Remote, local.Project, tenantName)
-				}
-			}
-			if enrolled != "" {
-				fmt.Fprintf(config.stdout, "Incus remote %q points at shared tenant %s (project %s).\n", enrolled, tenantName, cfg.Project)
-			}
-			result := tenantSwitchOutput{
-				Tenant:     tenantName,
-				LocalOnly:  localOnly,
-				ConfigPath: cfgPath,
-				Actions:    tenantSwitchSetupActions(cmd.Context(), config, tenantName, access.IncusRemoteAddress),
-			}
-			result.Message = tenantSwitchHint(localOnly, result.Actions)
 			return writeOutput(config.stdout, opts.output, formatTenantSwitch(result), result)
 		},
 	}
 	command.Flags().BoolVar(&localOnly, "local-only", false, "update local Current Tenant config without Auth App Tenant Access validation")
 	return command
+}
+
+// runTenantSwitch is `sc tenant switch` without the final output: it validates
+// Tenant Access (unless localOnly), enrolls a Shared Tenant's remote when
+// needed, and records the tenant in the global config and the nearest
+// .sandcastle. Progress notes go to notes. `sc cd` composes it with the other
+// switches.
+func runTenantSwitch(ctx context.Context, config commandConfig, tenantName string, localOnly bool, notes io.Writer) (tenantSwitchOutput, error) {
+	if tenantName == "" {
+		return tenantSwitchOutput{}, fmt.Errorf("tenant is required")
+	}
+	var access authapp.TenantAccessSummary
+	if !localOnly {
+		var err error
+		if access, err = validateTenantAccessForSwitch(ctx, config, tenantName); err != nil {
+			return tenantSwitchOutput{}, err
+		}
+	}
+	cfgPath := scconfig.DefaultConfigPath()
+	cfg, err := scconfig.LoadSandcastleConfig(cfgPath)
+	if err != nil {
+		return tenantSwitchOutput{}, fmt.Errorf("load config: %w", err)
+	}
+	// Shared Tenant, member side: the tenant's machines sit behind ITS
+	// sidecar (the Incus Reach), so the member needs an Incus remote at
+	// that sidecar's tailnet address, named after the tenant's DNS
+	// suffix (ADR-0021) and pinned to its default project. Enrolled once,
+	// certificate-based (the grant already extended this keypair), and
+	// recorded like a login's remote so `sc remote switch` round-trips.
+	enrolled := ""
+	switchedRemote := ""
+	if access.Member {
+		remoteName, err := ensureSharedTenantRemote(ctx, config, &cfg, tenantName, access)
+		if err != nil {
+			return tenantSwitchOutput{}, err
+		}
+		enrolled = remoteName
+		switchedRemote = remoteName
+		cfg.Remote = remoteName
+		if access.DefaultProject != "" {
+			cfg.Project = access.DefaultProject
+		}
+		_ = scconfig.SetSharedIncusDefaultRemote(remoteName)
+	} else if remote := remoteForTenant(cfg, tenantName); remote != "" && remote != cfg.Remote {
+		// A remote already enrolled for this tenant (the owner's login,
+		// or an earlier switch): make it the active one so the Incus
+		// side follows the Current Tenant.
+		applyRemoteSwitch(&cfg, remote)
+		repinProjectForRemote(&cfg, remote)
+		_ = scconfig.SetSharedIncusDefaultRemote(remote)
+		switchedRemote = remote
+	}
+	cfg.Tenant = tenantName
+	if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
+		return tenantSwitchOutput{}, fmt.Errorf("save config: %w", err)
+	}
+	// The tenant is a directory selection like the remote (`.sandcastle`,
+	// the file `sc remote switch` writes): record remote, project AND
+	// tenant in the nearest selection, creating one here when none
+	// exists — otherwise the directory would keep addressing the
+	// previous tenant's remote, or the remote's enrolled tenant.
+	if !localOnly || switchedRemote != "" {
+		local, _, err := scconfig.LoadDirectoryConfig("")
+		if err != nil {
+			return tenantSwitchOutput{}, err
+		}
+		if local.RemoteProjects == nil {
+			local.RemoteProjects = map[string]string{}
+		}
+		if local.Remote != "" && local.Project != "" {
+			local.RemoteProjects[local.Remote] = local.Project
+		}
+		local.Remote = firstNonEmptyString(switchedRemote, cfg.Remote, local.Remote)
+		local.Project = firstNonEmptyString(cfg.Project, local.RemoteProjects[local.Remote], "default")
+		local.Tenant = tenantName
+		local.RemoteProjects[local.Remote] = local.Project
+		if local.Remote != "" {
+			path, err := scconfig.SaveDirectoryConfig(local)
+			if err != nil {
+				return tenantSwitchOutput{}, fmt.Errorf("save selection: %w", err)
+			}
+			fmt.Fprintf(notes, "Selection saved in %s (remote %q, project %q, tenant %q).\n", path, local.Remote, local.Project, tenantName)
+		}
+	}
+	if enrolled != "" {
+		fmt.Fprintf(notes, "Incus remote %q points at shared tenant %s (project %s).\n", enrolled, tenantName, cfg.Project)
+	}
+	result := tenantSwitchOutput{
+		Tenant:     tenantName,
+		LocalOnly:  localOnly,
+		ConfigPath: cfgPath,
+		Actions:    tenantSwitchSetupActions(ctx, config, tenantName, access.IncusRemoteAddress),
+	}
+	result.Message = tenantSwitchHint(localOnly, result.Actions)
+	return result, nil
 }
 
 func tenantClient(config commandConfig) (authTenantClient, error) {

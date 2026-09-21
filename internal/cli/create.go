@@ -16,16 +16,20 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var hostnames []string
 	var aliases []string
 	command := &cobra.Command{
-		Use:     "create [[remote:]project:]machine",
-		Aliases: []string{"new"},
-		Short:   "Create a Sandcastle container machine",
-		Args:    cobra.ExactArgs(1),
+		Use:               "create [[remote:]project:]machine",
+		Aliases:           []string{"new"},
+		Short:             "Create a Sandcastle container machine",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: pathCompletion(config, levelMachine),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			config, reference, restore, err := rebindForReference(config, args[0])
 			if err != nil {
 				return err
 			}
 			defer restore()
+			if err := requireProjectPosition(config, reference, "create"); err != nil {
+				return err
+			}
 			summary, err := requireV2Tenant(cmd.Context(), config)
 			if err != nil {
 				return err

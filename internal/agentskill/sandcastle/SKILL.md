@@ -39,6 +39,33 @@ the file read. Global defaults are fallback only, and raw Incus defaults remain
 unchanged. `SANDCASTLE_REMOTE` / `SANDCASTLE_PROJECT` override local selection
 for one invocation; credentials stay in the global enrollment store.
 
+**Path navigation.** The same four levels form a tree you can walk with a
+second, slash grammar — a **Sandcastle Path** `/remote/tenant/project/machine`,
+absolute or relative to the **Current Position** (what `sc pwd` prints; the
+nearest `.sandcastle`). It is additive: the colon grammar and the switch
+commands are unchanged, and any command that takes a machine also takes a path.
+
+```bash
+sc pwd                      # /obelix/acme/web  (remote / tenant / project)
+sc cd backend               # sibling project (from a project, a bare name is ../name)
+sc cd ..                    # up to the tenant: sc ls now lists projects
+sc cd /obelix/acme/web      # absolute; sc cd -  goes back; sc cd  goes home (global config)
+sc ls ../*dev               # every sibling project matching *dev, each under a "path:" header
+sc ls -d ../*dev            # just their names;  -l a table per level;  -R recurse
+sc ls /                     # enrolled remotes; sc ls /obelix  its tenants
+sc ls -d '../**'            # ** matches across levels: every project and machine of the tenant
+sc stop '/**/dev'           # in a machine reference ** is as many * as reach a machine (= '*:*:dev')
+sc c ../api/dev             # any machine command takes a path
+sc mkdir ../api             # create a project;  sc mkdir -p ../api/dev  project then machine
+sc rm ../api                # delete an (empty) project;  sc rm -r ../api  its machines first
+sc completion zsh           # tab completion of paths (bash, zsh, fish, powershell)
+```
+
+Above a project, creating commands refuse a bare name (`not in a project`);
+reading and acting ones look the name up across the tenant. A machine is a
+leaf: `sc cd` into one is an error, `sc connect` enters it. `cd` validates
+like a shell (`--local-only` skips the lookups) and never enrolls a remote.
+
 ## The model
 
 ```
@@ -196,6 +223,7 @@ a TTY; `SANDCASTLE_NO_UPDATE_NOTIFIER=1` silences them.
 |---|---|
 | `sc info` / `sc status` / `sc version` | active context / tenant health / CLI version |
 | `sc ls`, `sc create`, `sc c`, `sc start\|stop\|restart\|delete`, `sc fix` | machine lifecycle |
+| `sc cd`, `sc pwd`, `sc ls <path>`, `sc mkdir`, `sc rm`, `sc completion` | path navigation over /remote/tenant/project/machine |
 | `sc project …` | create, delete, list, switch, per-project settings |
 | `sc tenant …` / `sc remote …` | select tenant (Personal or Shared; `*` marks the active one) / manage and switch installs |
 | `sc login` / `sc enroll` | device login and provisioning / enroll from a token |

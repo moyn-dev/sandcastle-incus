@@ -60,10 +60,11 @@ func newConnectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var homeShare bool
 	var assumeYes bool
 	command := &cobra.Command{
-		Use:     "connect [[remote:]project:]machine [-- command...]",
-		Aliases: []string{"c"},
-		Short:   "Connect to a Sandcastle machine",
-		Args:    cobra.MinimumNArgs(1),
+		Use:               "connect [[remote:]project:]machine [-- command...]",
+		Aliases:           []string{"c"},
+		Short:             "Connect to a Sandcastle machine",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: pathCompletion(config, levelMachine),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Cache-first happy path: the machine is cached running with an
 			// address and known_hosts already pins the identity its sshd

@@ -324,6 +324,14 @@ _Avoid_: Implicit project, projectless container bucket
 The tenant selected by local CLI configuration for unqualified user commands.
 _Avoid_: Owner, SANDCASTLE_OWNER, active account, logged-in tenant
 
+**Sandcastle Path**:
+The slash form of a reference, `/remote/tenant/project/machine`, absolute or relative to the Current Position, with `.`, `..`, `~` (home), `-` (previous) and shell globs in any segment. A second grammar beside the colon reference, selected by shape; a machine is its leaf.
+_Avoid_: Resource path, URL, colon path
+
+**Current Position**:
+The remote, tenant and project every unqualified user command acts in, recorded per directory tree in the nearest `.sandcastle` and shown by `sc pwd`. It may stand above a project (at the tenant, remote or root level) after `sc cd ..`; the switch commands and `sc cd` both move it.
+_Avoid_: Working directory, context, cwd, session position
+
 **Current Project**:
 The project selected by CLI input or local CLI configuration, defaulting to the Default Project.
 _Avoid_: Projectless mode

@@ -3223,3 +3223,24 @@ SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFI
 Live run 2026-09-21 (`big:sc-shared-e2e`, Incus 7.4, install prefix `sh`,
 Auth Hostname `https://sh-shared.tc42.uk`, client `big:e2e-pdz-client`):
 see `docs/e2e-runs/2026-09-21-phase13-shared-tenants.md`.
+
+## Phase 14 — Path navigation: `sc cd` / `pwd` / `ls <path>` / `mkdir` / `rm` (ADR-0030) 🚧 not yet run
+
+The four levels as a tree walked with a slash grammar, additive to the colon
+grammar. Run on the enrolled Tailnet **client** of a `--simulate-github-token`
+install with at least two projects (`default`, `web`) and one machine
+(`web:dev`); a second enrolled install (any) makes 14g meaningful. Unit
+coverage: `go test ./internal/cli -run 'TestCdPwdLs|TestPathToMachine|TestResolvePath'`.
+
+| Step | PASS criteria |
+|---|---|
+| **14a** pwd | inside a project directory `sc pwd` prints `/<remote>/<tenant>/<project>`; `sc pwd --json` carries `remote`, `tenant`, `project`, `level: project` |
+| **14b** cd | `sc cd web` (from `default`) prints `/<remote>/<tenant>/web`; `.sandcastle` has `project: web`, no `level`; `sc project list` marks `web`; `sc cd nope` fails with `project nope not found`; `sc cd web/dev` fails with `is a machine` |
+| **14c** up | `sc cd ..` prints `/<remote>/<tenant>`; `.sandcastle` has `level: tenant`, `previous: /<remote>/<tenant>/web`, `project: web` kept; `sc ls` lists the project names; `sc create x` is refused with `not in a project`; `sc connect dev -- true` still resolves `web:dev` through the tenant-wide lookup; `sc cd -` returns to `/<remote>/<tenant>/web` |
+| **14d** globs | from `web`: `sc ls '../*'` prints every project under a `path:` header; `sc ls -d '../*'` the paths only; `sc ls -l ..` a `PROJECT DOMAIN IMAGE` table; `sc ls -R ..` the machines of every project; `sc ls ../web/d*` prints `/<remote>/<tenant>/web/dev`; `sc ls -d '../**'` lists every project and machine of the tenant; `sc ls '/**/web/*'` the machines of project web; `sc stop /<remote>/<tenant>/web/dev`, `sc start ./dev` and `sc restart '/**/dev'` act on `web:dev` |
+| **14e** mkdir/rm | `sc mkdir ../api` creates project api (visible in `sc project list`); `sc mkdir -p ../api2/dev` creates project api2 and machine `api2:dev`; `sc rm ../api --yes` deletes the empty project; `sc rm -r ../api2 --yes` deletes `api2:dev` then api2; `sc mkdir /` and `sc rm ..` are refused with the remote/tenant guidance |
+| **14f** home/root | `sc cd /` prints `/`; `sc ls` lists the enrolled remotes and `sc ls -l /` shows `REMOTE TENANT PROJECT AUTH`; `sc ls /<remote>` lists the accessible tenants; `sc cd` (no argument) returns to the global config's `/<remote>/<tenant>/<project>` |
+| **14g** cross-remote | with a second enrolled install: `sc cd /<other>/<its tenant>/<its project>` switches remote (as `sc remote switch` does) and `sc ls` lists that install's machines; `sc cd /<other>/<wrong-tenant>` fails through Tenant Access validation; `sc c /<other>/<tenant>/<project>/<machine> -- true` from the first install runs without a durable switch (`sc pwd` unchanged) |
+| **14h** completion | `sc completion zsh` emits a script; `sc __complete cd ../` lists the sibling projects with a trailing `/`; `sc __complete connect ./` lists the project's machines; `sc __complete cd /` lists the remotes |
+| **14i** compatibility | with `.sandcastle` at project level, `sc ls`, `sc ls -a`, `sc ls 'gbrain:*'`, `sc c web:dev`, `sc remote switch`, `sc project switch`, `sc tenant switch` behave exactly as in Phases 7c/13 |
+

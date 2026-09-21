@@ -1,0 +1,478 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/naming"
+)
+
+// The tree behind `sc ls <path>`: every level's children, one data source per
+// level, so a path listing is a walk over them. Root lists enrolled remotes
+// (local incus config), a remote its accessible tenants (Auth App), a tenant
+// its projects (Auth App resource cache, live Incus fallback) and a project
+// its machines (`sc ls`'s own cache-first listing).
+
+// pathEntry is one child of a directory in the tree.
+type pathEntry struct {
+	Name string `json:"name"`
+	// Kind is the child's level: remote, tenant, project or machine.
+	Kind string `json:"kind"`
+	// Fields carries the long-format columns for the entry, in column order.
+	Fields []string `json:"fields,omitempty"`
+}
+
+// pathListing is one directory's listing.
+type pathListing struct {
+	Path    string      `json:"path"`
+	Level   string      `json:"level"`
+	Entries []pathEntry `json:"entries"`
+	// Machine is set when the path named a machine (a leaf) rather than a
+	// directory; Entries is then that one machine.
+	Machine bool `json:"machine,omitempty"`
+}
+
+// pathListPayload is what `sc ls <path…>` returns: one listing per matched
+// directory (or leaf), plus the directories that could not be read.
+type pathListPayload struct {
+	Listings []pathListing `json:"listings"`
+	Warnings []string      `json:"warnings,omitempty"`
+	// Headers asks the text form to print each listing under its path: set
+	// when several directories were listed, or when an argument globbed (a
+	// pattern that matched one empty project still says which one).
+	Headers bool `json:"-"`
+}
+
+// pathListOptions are `sc ls`'s path-mode flags.
+type pathListOptions struct {
+	Long      bool
+	Directory bool
+	Recursive bool
+}
+
+// longColumns are the long-format headers per directory level.
+func longColumns(depth int) []string {
+	switch depth {
+	case levelRoot:
+		return []string{"REMOTE", "TENANT", "PROJECT", "AUTH"}
+	case levelRemote:
+		return []string{"TENANT", "ROLE", "PERSONAL"}
+	case levelTenant:
+		return []string{"PROJECT", "DOMAIN", "IMAGE"}
+	default:
+		return []string{"MACHINE", "TYPE", "STATE", "IP", "CREATED"}
+	}
+}
+
+// configForPosition returns a command config bound to the remote and tenant
+// a path names. The current remote costs nothing; another enrolled remote is
+// bound like the "<remote>:" prefix binds it, carrying that install's own
+// login (the bare binding only carries its certificate). A tenant other than
+// the remote's is set as the Current Tenant of the returned config. The
+// returned func unbinds and MUST be called.
+func configForPosition(config commandConfig, remote string, tenant string) (commandConfig, func(), error) {
+	noop := func() {}
+	current := strings.TrimSpace(config.adminConfig.Remote)
+	if remote == "" || remote == current {
+		if tenant == "" || tenant == strings.TrimSpace(config.adminConfig.Tenant) {
+			return config, noop, nil
+		}
+		scoped := config
+		scoped.adminConfig.Tenant = tenant
+		return newUserCommandConfig(scoped.name, scoped.stdin, scoped.stdout, scoped.stderr, scoped.adminConfig), noop, nil
+	}
+	dir := scconfig.ResolveConfigPath(remote)
+	if dir == "" {
+		return config, noop, fmt.Errorf("no enrolled Sandcastle remote %q; run `sc remote list` to see installs", remote)
+	}
+	prev, had := os.LookupEnv("INCUS_CONF")
+	os.Setenv("INCUS_CONF", dir)
+	restore := func() {
+		if had {
+			os.Setenv("INCUS_CONF", prev)
+		} else {
+			os.Unsetenv("INCUS_CONF")
+		}
+	}
+	admin := config.adminConfig
+	admin.Remote = remote
+	admin.Project = ""
+	if cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath()); err == nil {
+		cfg.SelectRemote(remote)
+		admin.Tenant, admin.AuthHostname, admin.AuthToken, admin.Broker = cfg.Tenant, cfg.AuthHostname, cfg.AuthToken, cfg.Broker
+	}
+	if tenant != "" {
+		admin.Tenant = tenant
+	}
+	if short := shortProjectName(scconfig.SharedIncusRemoteProject(remote), admin.Tenant); short != "" {
+		admin.Project = short
+	}
+	return newUserCommandConfig(config.name, config.stdin, config.stdout, config.stderr, admin), restore, nil
+}
+
+// childrenOf lists the children of a directory in the tree.
+func childrenOf(ctx context.Context, config commandConfig, segments []string) ([]pathEntry, error) {
+	switch len(segments) {
+	case levelRoot:
+		return remoteEntries()
+	case levelRemote:
+		return tenantEntries(ctx, config, segments[0])
+	case levelTenant:
+		return projectEntries(ctx, config, segments[0], segments[1])
+	case levelProject:
+		return machineEntries(ctx, config, segments[0], segments[1], segments[2])
+	default:
+		return nil, fmt.Errorf("%s is a machine, not a directory", formatPath(segments))
+	}
+}
+
+func remoteEntries() ([]pathEntry, error) {
+	incusDir, _ := scconfig.SharedIncusDirExplained()
+	remotes, err := readLocalRemotes(incusDir)
+	if err != nil {
+		return nil, fmt.Errorf("read incus remotes from %s: %w", incusDir, err)
+	}
+	cfg, _ := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+	entries := []pathEntry{}
+	for _, row := range sandcastleRemoteRows(remotes, cfg) {
+		tenant := cfg.TenantForRemote(row.Name)
+		entries = append(entries, pathEntry{Name: row.Name, Kind: "remote", Fields: []string{row.Name, tenant, shortProjectName(row.Project, tenant), row.AuthHostname}})
+	}
+	return entries, nil
+}
+
+func tenantEntries(ctx context.Context, config commandConfig, remote string) ([]pathEntry, error) {
+	bound, restore, err := configForPosition(config, remote, "")
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+	client, err := tenantClient(bound)
+	if err != nil {
+		return nil, err
+	}
+	tenants, err := client.ListTenants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entries := []pathEntry{}
+	for _, row := range tenantListRows(tenants, strings.TrimSpace(bound.adminConfig.Tenant)) {
+		entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal)}})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, nil
+}
+
+func projectEntries(ctx context.Context, config commandConfig, remote string, tenantName string) ([]pathEntry, error) {
+	bound, restore, err := configForPosition(config, remote, tenantName)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+	summary, err := currentTenantSummary(ctx, bound)
+	if err != nil {
+		return nil, err
+	}
+	entries := []pathEntry{}
+	for _, project := range summary.Projects {
+		entries = append(entries, pathEntry{Name: project.Name, Kind: "project", Fields: []string{project.Name, project.Domain, project.Image}})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, nil
+}
+
+func machineEntries(ctx context.Context, config commandConfig, remote string, tenantName string, project string) ([]pathEntry, error) {
+	bound, restore, err := configForPosition(config, remote, tenantName)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+	request := listMachinesRequest{Project: project}
+	result, ok := listMachinesViaCache(ctx, bound, request, listRenderOptions{})
+	if !ok {
+		if result, err = listMachines(ctx, bound, request); err != nil {
+			return nil, err
+		}
+	}
+	entries := []pathEntry{}
+	for _, m := range result.Machines {
+		state := "stopped"
+		if m.Running {
+			state = "running"
+		}
+		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, m.CreatedAt}})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, nil
+}
+
+// pathMatch is one path a (possibly globbing) argument expanded to.
+type pathMatch struct {
+	Segments []string
+	// Entry is set for a machine (leaf) match, carrying its long fields.
+	Entry *pathEntry
+	// Loose marks a match a "**" produced: its depth is not the pattern's,
+	// so a literal segment after it is checked against the children rather
+	// than appended on trust.
+	Loose bool
+}
+
+// expandPath expands globs in a path against the tree, one pattern segment
+// at a time over the current set of matches. A literal directory segment is
+// taken as is (listing it later reports whether it exists); a literal
+// machine is checked against its project, since a leaf has no listing of its
+// own to fail. "**" matches zero or more levels: each match stays and every
+// descendant joins, as deep as the remaining segments leave room for. A
+// subtree that cannot be read under "**" becomes a warning rather than
+// failing the whole expansion.
+func expandPath(ctx context.Context, config commandConfig, segments []string, warnings *[]string) ([]pathMatch, error) {
+	matches := []pathMatch{{Segments: []string{}}}
+	for index, segment := range segments {
+		last := index == len(segments)-1
+		remaining := fixedSegments(segments[index+1:])
+		next := []pathMatch{}
+		for _, match := range matches {
+			if match.Entry != nil {
+				continue // a machine has no children
+			}
+			if segment == globstar {
+				loose := match
+				loose.Loose = true
+				next = append(next, loose)
+				next = append(next, descendants(ctx, config, match.Segments, levelMachine-remaining, warnings)...)
+				continue
+			}
+			leaf := len(match.Segments) == levelProject
+			if !naming.IsPattern(segment) && !leaf && !match.Loose {
+				next = append(next, pathMatch{Segments: appendSegment(match.Segments, segment)})
+				continue
+			}
+			children, err := childrenOf(ctx, config, match.Segments)
+			if err != nil {
+				if match.Loose {
+					if warnings != nil {
+						*warnings = append(*warnings, fmt.Sprintf("%s: %v", formatPath(match.Segments), err))
+					}
+					continue
+				}
+				return nil, err
+			}
+			for _, child := range children {
+				if !naming.MatchName(segment, child.Name) {
+					continue
+				}
+				expanded := pathMatch{Segments: appendSegment(match.Segments, child.Name), Loose: match.Loose}
+				if leaf {
+					entry := child
+					expanded.Entry = &entry
+				}
+				next = append(next, expanded)
+			}
+		}
+		if len(next) == 0 {
+			if last && !naming.IsPattern(segment) {
+				return nil, fmt.Errorf("no such %s: %s", levelName(len(segments)), formatPath(segments))
+			}
+			return nil, fmt.Errorf("nothing matches %q in %s", segment, formatPath(segments[:index]))
+		}
+		matches = dedupeMatches(next)
+	}
+	return matches, nil
+}
+
+// descendants walks a directory down to maxDepth, returning every path
+// below it (machines as leaves with their entry).
+func descendants(ctx context.Context, config commandConfig, segments []string, maxDepth int, warnings *[]string) []pathMatch {
+	if len(segments) >= maxDepth {
+		return nil
+	}
+	children, err := childrenOf(ctx, config, segments)
+	if err != nil {
+		if warnings != nil {
+			*warnings = append(*warnings, fmt.Sprintf("%s: %v", formatPath(segments), err))
+		}
+		return nil
+	}
+	out := []pathMatch{}
+	for _, child := range children {
+		childSegments := appendSegment(segments, child.Name)
+		match := pathMatch{Segments: childSegments, Loose: true}
+		if len(childSegments) == levelMachine {
+			entry := child
+			match.Entry = &entry
+		}
+		out = append(out, match)
+		if len(childSegments) < levelMachine {
+			out = append(out, descendants(ctx, config, childSegments, maxDepth, warnings)...)
+		}
+	}
+	return out
+}
+
+func appendSegment(segments []string, segment string) []string {
+	return append(append(make([]string, 0, len(segments)+1), segments...), segment)
+}
+
+// dedupeMatches drops paths a "**" produced twice (as itself and as a
+// descendant of a shallower match), keeping first-seen order.
+func dedupeMatches(matches []pathMatch) []pathMatch {
+	seen := map[string]bool{}
+	out := make([]pathMatch, 0, len(matches))
+	for _, match := range matches {
+		key := formatPath(match.Segments)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, match)
+	}
+	return out
+}
+
+// listPaths is `sc ls` in path mode: each argument is expanded, every match
+// is listed (a directory's children, or the leaf itself), and directories
+// recurse with -R.
+func listPaths(ctx context.Context, config commandConfig, args []string, options pathListOptions) (pathListPayload, error) {
+	payload := pathListPayload{Listings: []pathListing{}}
+	if len(args) == 0 {
+		args = []string{"."}
+	}
+	for _, arg := range args {
+		segments, err := resolvePath(config, arg)
+		if err != nil {
+			return payload, err
+		}
+		matches, err := expandPath(ctx, config, segments, &payload.Warnings)
+		if err != nil {
+			return payload, err
+		}
+		for _, segment := range segments {
+			if naming.IsPattern(segment) {
+				payload.Headers = true
+			}
+		}
+		for _, match := range matches {
+			if len(match.Segments) == levelRoot {
+				// "**" matched nothing: the argument's own directory.
+				if err := listDirectory(ctx, config, match.Segments, options.Recursive, &payload); err != nil {
+					return payload, err
+				}
+				continue
+			}
+			if match.Entry != nil {
+				payload.Listings = append(payload.Listings, pathListing{Path: formatPath(match.Segments), Level: "machine", Machine: true, Entries: []pathEntry{*match.Entry}})
+				continue
+			}
+			if options.Directory {
+				payload.Listings = append(payload.Listings, pathListing{Path: formatPath(match.Segments), Level: levelName(len(match.Segments)), Entries: []pathEntry{{Name: match.Segments[len(match.Segments)-1], Kind: levelName(len(match.Segments))}}})
+				continue
+			}
+			if err := listDirectory(ctx, config, match.Segments, options.Recursive, &payload); err != nil {
+				return payload, err
+			}
+		}
+	}
+	if len(payload.Listings) > 1 {
+		payload.Headers = true
+	}
+	return payload, nil
+}
+
+// listDirectory appends one directory's listing, recursing into its child
+// directories when asked. A child that cannot be read becomes a warning, so
+// one unreachable install does not hide the others (as `sc ls '*:*:*'` does).
+func listDirectory(ctx context.Context, config commandConfig, segments []string, recursive bool, payload *pathListPayload) error {
+	children, err := childrenOf(ctx, config, segments)
+	if err != nil {
+		if len(segments) > levelRoot && len(payload.Listings) > 0 {
+			payload.Warnings = append(payload.Warnings, fmt.Sprintf("%s: %v", formatPath(segments), err))
+			return nil
+		}
+		return err
+	}
+	payload.Listings = append(payload.Listings, pathListing{Path: formatPath(segments), Level: levelName(len(segments)), Entries: children})
+	if !recursive || len(segments) >= levelProject {
+		return nil
+	}
+	for _, child := range children {
+		if err := listDirectory(ctx, config, append(append([]string{}, segments...), child.Name), recursive, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// formatPathList renders path-mode output the way a shell's ls does: one
+// listing prints its entries; several print each under a "path:" header.
+func formatPathList(payload pathListPayload, options pathListOptions) string {
+	var b strings.Builder
+	for _, warning := range payload.Warnings {
+		fmt.Fprintf(&b, "warning: %s\n", warning)
+	}
+	headers := payload.Headers || len(payload.Listings) > 1
+	blockBefore := false
+	for _, listing := range payload.Listings {
+		if listing.Machine || options.Directory {
+			// Leaves and names print as plain lines, like ls on files.
+			if options.Long {
+				writeEntryTable(&b, entryDepth(listing), listing.Entries)
+			} else {
+				fmt.Fprintln(&b, listing.Path)
+			}
+			continue
+		}
+		if blockBefore {
+			b.WriteString("\n")
+		}
+		blockBefore = true
+		if headers {
+			fmt.Fprintf(&b, "%s:\n", listing.Path)
+		}
+		if len(listing.Entries) == 0 {
+			continue
+		}
+		if options.Long {
+			writeEntryTable(&b, entryDepth(listing), listing.Entries)
+			continue
+		}
+		for _, entry := range listing.Entries {
+			fmt.Fprintln(&b, entry.Name)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// entryDepth is the directory depth whose columns describe the listing's
+// entries: a machine listing shows machine columns, a project listing too.
+func entryDepth(listing pathListing) int {
+	if listing.Machine {
+		return levelProject
+	}
+	switch listing.Level {
+	case "root":
+		return levelRoot
+	case "remote":
+		return levelRemote
+	case "tenant":
+		return levelTenant
+	}
+	return levelProject
+}
+
+func writeEntryTable(b *strings.Builder, depth int, entries []pathEntry) {
+	table := tabwriter.NewWriter(b, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, strings.Join(longColumns(depth), "\t"))
+	for _, entry := range entries {
+		fields := entry.Fields
+		if len(fields) == 0 {
+			fields = []string{entry.Name}
+		}
+		fmt.Fprintln(table, strings.Join(fields, "\t"))
+	}
+	table.Flush()
+}

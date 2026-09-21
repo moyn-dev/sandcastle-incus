@@ -33,10 +33,14 @@ const (
 
 type Admin struct {
 	DirectoryConfigPath string // nearest .sandcastle read; empty means global fallback
-	Tenant              string
-	Project             string
-	Remote              string
-	AdminRemote         string // Incus remote for admin commands; uses global ~/.config/incus/ config
+	// PositionLevel is the Current Position's level from the nearest
+	// .sandcastle ("root", "remote", "tenant", "project"); empty when no
+	// selection file was read, which means the project level.
+	PositionLevel string
+	Tenant        string
+	Project       string
+	Remote        string
+	AdminRemote   string // Incus remote for admin commands; uses global ~/.config/incus/ config
 	// ActiveInstall is the Sandcastle install the user CLI is currently on —
 	// the same value `sc ls` resolves (LoadUser). Filled in by ExecuteAdmin,
 	// never read from file or env, and empty when the operator named a remote
