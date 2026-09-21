@@ -513,9 +513,10 @@ func TestSCShimPayloadContract(t *testing.T) {
 	}
 }
 
-// zsh is the default login shell (issue: "use zsh by default"): the profile
-// must set /bin/zsh and install the zsh package so a fresh machine has it.
-func TestV2DefaultProfileUserDataDefaultsToZsh(t *testing.T) {
+// The default profile stays lean (2026-09-21): bash is the login shell and
+// only openssh-server is installed — no zsh on a stock machine. The Dev
+// Image keeps its own zsh setup (V2DevUserData), untouched here.
+func TestV2DefaultProfileUserDataDefaultsToBashWithoutZsh(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		data string
@@ -524,16 +525,13 @@ func TestV2DefaultProfileUserDataDefaultsToZsh(t *testing.T) {
 		{"minimal", V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "", "", "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if !strings.Contains(tc.data, "shell: /bin/zsh") {
-				t.Fatalf("login shell should be /bin/zsh:\n%s", tc.data)
+			if !strings.Contains(tc.data, "shell: /bin/bash") || strings.Contains(tc.data, "shell: /bin/zsh") {
+				t.Fatalf("login shell should be /bin/bash:\n%s", tc.data)
 			}
-			if strings.Contains(tc.data, "shell: /bin/bash") {
-				t.Fatalf("login shell should not be bash:\n%s", tc.data)
-			}
-			// zsh must be installed so /bin/zsh exists on a stock machine.
 			pkgs := tc.data[strings.Index(tc.data, "packages:"):]
-			if !strings.Contains(pkgs[:strings.Index(pkgs, "\nwrite_files:")], "- zsh") {
-				t.Fatalf("packages must install zsh:\n%s", tc.data)
+			pkgs = pkgs[:strings.Index(pkgs, "\nwrite_files:")]
+			if strings.Contains(pkgs, "- zsh") || !strings.Contains(pkgs, "- openssh-server") {
+				t.Fatalf("packages should be openssh-server only:\n%s", pkgs)
 			}
 		})
 	}

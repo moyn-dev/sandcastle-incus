@@ -94,13 +94,12 @@ func V2ProfileUserData(user string, sshKey string, project string, suffix string
   - name: %s
     uid: 2000
     groups: [sudo]
-    shell: /bin/zsh
+    shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
 %s
 packages:
   - openssh-server
-  - zsh
 `, user, sshAuthorizedKeysYAML(sshKey))
 
 	// Machines carry only stable /.sc shims (ADR-0022): scShimWriteFiles bakes

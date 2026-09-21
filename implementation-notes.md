@@ -6375,3 +6375,12 @@ the empty-list message now render `remote:tenant:project:machine`
 A tenant's login user now defaults to the tenant name (valid Unix username
 required; else `dev`), overridable with `--unix-user`; the login path keeps
 sending the client's local user and stored users are never rewritten.
+
+## 2026-09-21 — default machine profile no longer installs zsh
+
+The stock-image profile installed `zsh` and set it as the login shell for
+every machine; the operator wants the default lean. The profile now installs
+`openssh-server` only and the login shell is `/bin/bash`. The `/.sc` shell
+shim is still appended to both `/etc/bash.bashrc` and `/etc/zsh/zshrc`
+(harmless without zsh; picked up if a user installs it). The Dev Image keeps
+its own zsh/starship setup — that image is opinionated by design.

@@ -1031,8 +1031,8 @@ export INCUS_CONF=~/.config/incus-admin
 incus profile show big:default --project sc2-$TENANT-default
 ```
 **PASS (✅ validated):** `cloud-init.user-data` contains the login user with
-`shell: /bin/zsh` and `ssh_authorized_keys: [ <your key> ]`, installs
-`openssh-server` and `zsh`, and `runcmd: [systemctl, enable, --now, ssh]`;
+`shell: /bin/bash` and `ssh_authorized_keys: [ <your keys> ]`, installs
+`openssh-server` only, and `runcmd: [systemctl, enable, --now, ssh]`;
 devices include the shared **`workspace`** (→ `/workspace`), **`sc-platform`**
 (→ `/.sc/platform`, `readonly: "true"`) and **`sc-local`** (→ `/.sc/local`)
 volumes — and **no `home` device**: the shared `/home` moved to the separate
