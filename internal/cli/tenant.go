@@ -83,7 +83,7 @@ func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Comman
 			if long {
 				text = formatTenantAccessList(output)
 			}
-			return writeOutput(config.stdout, opts.output, positionLine(config)+"\n"+text, output)
+			return writeOutput(config.stdout, opts.output, formatPath([]string{strings.TrimSpace(config.adminConfig.Remote)})+"\n"+text, output)
 		},
 	}
 	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: Tenant Role Personal table (default: names only)")

@@ -42,10 +42,6 @@ type pathListing struct {
 type pathListPayload struct {
 	Listings []pathListing `json:"listings"`
 	Warnings []string      `json:"warnings,omitempty"`
-	// Headers asks the text form to print each listing under its path: set
-	// when several directories were listed, or when an argument globbed (a
-	// pattern that matched one empty project still says which one).
-	Headers bool `json:"-"`
 }
 
 // pathListOptions are `sc ls`'s path-mode flags.
@@ -197,7 +193,7 @@ func machineEntries(ctx context.Context, config commandConfig, remote string, te
 		if m.Running {
 			state = "running"
 		}
-		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, m.CreatedAt, displayValue(m.RenderedVersion)}})
+		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, formatListCreatedAt(m.CreatedAt), displayValue(m.RenderedVersion)}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil
@@ -343,11 +339,6 @@ func listPaths(ctx context.Context, config commandConfig, args []string, options
 		if err != nil {
 			return payload, err
 		}
-		for _, segment := range segments {
-			if naming.IsPattern(segment) {
-				payload.Headers = true
-			}
-		}
 		for _, match := range matches {
 			if len(match.Segments) == levelRoot {
 				// "**" matched nothing: the argument's own directory.
@@ -368,9 +359,6 @@ func listPaths(ctx context.Context, config commandConfig, args []string, options
 				return payload, err
 			}
 		}
-	}
-	if len(payload.Listings) > 1 {
-		payload.Headers = true
 	}
 	payload.Warnings = dedupeStrings(payload.Warnings)
 	return payload, nil
@@ -415,30 +403,28 @@ func listDirectory(ctx context.Context, config commandConfig, segments []string,
 
 // formatPathList renders path-mode output the way a shell's ls does: one
 // listing prints its entries; several print each under a "path:" header.
+// formatPathList renders path-mode output: every listed directory (and, in
+// long form, every listed machine) starts with its own Sandcastle Path, then
+// its entries; blocks are separated by a blank line. -d prints only the
+// matching paths. The path line is what tells the reader where the names
+// below live, so it is never omitted.
 func formatPathList(payload pathListPayload, options pathListOptions) string {
 	var b strings.Builder
 	for _, warning := range payload.Warnings {
 		fmt.Fprintf(&b, "warning: %s\n", warning)
 	}
-	headers := payload.Headers || len(payload.Listings) > 1
 	blockBefore := false
 	for _, listing := range payload.Listings {
-		if listing.Machine || options.Directory {
-			// Leaves and names print as plain lines, like ls on files.
-			if options.Long {
-				writeEntryTable(&b, entryDepth(listing), listing.Entries)
-			} else {
-				fmt.Fprintln(&b, listing.Path)
-			}
+		if options.Directory || (listing.Machine && !options.Long) {
+			// Names print as plain lines, like ls on files.
+			fmt.Fprintln(&b, listing.Path)
 			continue
 		}
 		if blockBefore {
 			b.WriteString("\n")
 		}
 		blockBefore = true
-		if headers {
-			fmt.Fprintf(&b, "%s:\n", listing.Path)
-		}
+		fmt.Fprintln(&b, listing.Path)
 		if len(listing.Entries) == 0 {
 			continue
 		}

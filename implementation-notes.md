@@ -14,9 +14,12 @@ and `sc tenant list` — an explicit user decision, taken against the
 "additive only" rule; JSON output is untouched, which is what scripts and
 the e2e automation should parse.
 
-- First line of every listing is the Current Position as a Sandcastle
-  Path, even when the listing addresses another install (`sc ls obelix:`):
-  the line says where *you* are, the names say what was listed.
+- First line of every listing is the Sandcastle Path of *what is listed*
+  (the project, the tenant with `-a`, `/` for remotes, the remote for
+  tenants; in path mode each matched directory heads its own block). A
+  first cut printed the Current Position instead, which read wrong for
+  `sc ls -l /idefix/thieso2/home/test` from another install: the line
+  must say where the names below live, not where the user stands.
 - Short `sc ls`: bare names inside one project, `project/name` when the
   listing spans projects (`-a`, a project glob), absolute paths when it
   spans installs, `name (unmanaged)` for unmanaged instances. `-l` is the

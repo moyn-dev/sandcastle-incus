@@ -44,7 +44,7 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 		Short:   "List enrolled Sandcastle remotes (installs)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(config.stdout, positionLine(config))
+			fmt.Fprintln(config.stdout, formatPath(nil))
 			cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
 			if err != nil {
 				fmt.Fprintf(config.stderr, "warning: could not read sandcastle config: %v\n", err)

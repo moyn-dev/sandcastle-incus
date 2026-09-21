@@ -57,7 +57,8 @@ func newProjectListCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 			if long {
 				text = formatProjectNamespaceTable(tenantSummary, current)
 			}
-			return writeOutput(config.stdout, opts.output, positionLine(config)+"\n"+selectionSource(config)+"\n"+text, payload)
+			listed := formatPath([]string{strings.TrimSpace(config.adminConfig.Remote), strings.TrimSpace(tenantSummary.Tenant)})
+			return writeOutput(config.stdout, opts.output, listed+"\n"+selectionSource(config)+"\n"+text, payload)
 		},
 	}
 	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: PROJECT DOMAIN IMAGE table (default: names only)")

@@ -177,28 +177,28 @@ func TestCdPwdLsAcrossLevels(t *testing.T) {
 	if out := run("ls"); out != "/alpha/acme\napi\ndefault\nweb\nwebdev" {
 		t.Fatalf("ls at tenant level: %q", out)
 	}
-	if out := run("ls", "-d", "*web*"); out != "/alpha/acme\n/alpha/acme/web\n/alpha/acme/webdev" {
+	if out := run("ls", "-d", "*web*"); out != "/alpha/acme/web\n/alpha/acme/webdev" {
 		t.Fatalf("ls -d glob: %q", out)
 	}
-	if out := run("ls", "-l", "web"); !strings.HasPrefix(out, "/alpha/acme\nMACHINE") || !strings.Contains(out, "running") {
+	if out := run("ls", "-l", "web"); !strings.HasPrefix(out, "/alpha/acme/web\nMACHINE") || !strings.Contains(out, "running") {
 		t.Fatalf("ls -l web: %q", out)
 	}
-	if out := run("ls", "web", "api"); !strings.Contains(out, "/alpha/acme/web:\nci\ndev") || !strings.Contains(out, "/alpha/acme/api:") {
+	if out := run("ls", "web", "api"); !strings.Contains(out, "/alpha/acme/web\nci\ndev") || !strings.Contains(out, "\n\n/alpha/acme/api") {
 		t.Fatalf("ls two dirs: %q", out)
 	}
 	if out := run("cd", "-"); out != "/alpha/acme/web" {
 		t.Fatalf("cd -: %q", out)
 	}
-	if out := run("ls", "../*dev"); out != "/alpha/acme/web\n/alpha/acme/webdev:" {
+	if out := run("ls", "../*dev"); out != "/alpha/acme/webdev" {
 		t.Fatalf("ls ../*dev: %q", out)
 	}
-	if out := run("ls", "-d", "/alpha/acme/**/*dev*"); out != "/alpha/acme/web\n/alpha/acme/webdev\n/alpha/acme/web/dev" {
+	if out := run("ls", "-d", "/alpha/acme/**/*dev*"); out != "/alpha/acme/webdev\n/alpha/acme/web/dev" {
 		t.Fatalf("ls -d globstar: %q", out)
 	}
-	if out := run("ls", "-d", "../**"); out != "/alpha/acme/web\n/alpha/acme\n/alpha/acme/api\n/alpha/acme/default\n/alpha/acme/web\n/alpha/acme/web/ci\n/alpha/acme/web/dev\n/alpha/acme/webdev" {
+	if out := run("ls", "-d", "../**"); out != "/alpha/acme\n/alpha/acme/api\n/alpha/acme/default\n/alpha/acme/web\n/alpha/acme/web/ci\n/alpha/acme/web/dev\n/alpha/acme/webdev" {
 		t.Fatalf("ls -d ../**: %q", out)
 	}
-	if out := run("ls", "-d", "/alpha/acme/**/web/*"); out != "/alpha/acme/web\n/alpha/acme/web/ci\n/alpha/acme/web/dev" {
+	if out := run("ls", "-d", "/alpha/acme/**/web/*"); out != "/alpha/acme/web/ci\n/alpha/acme/web/dev" {
 		t.Fatalf("ls -d /alpha/acme/**/web/*: %q", out)
 	}
 	if out := run("cd", "--local-only", "/beta/globex/backend"); out != "/beta/globex/backend" {

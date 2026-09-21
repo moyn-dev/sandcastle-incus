@@ -174,13 +174,12 @@ Globbing installs needs all three parts spelled out: a two-part reference stays
 [remote:]project or project:machine. Quote the pattern so the shell does not
 expand it first.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			position := positionLine(config)
 			if listInPathMode(config, args, pathOpts) {
 				payload, err := listPaths(cmd.Context(), config, args, pathOpts)
 				if err != nil {
 					return err
 				}
-				return writeOutput(config.stdout, opts.output, position+"\n"+formatPathList(payload, pathOpts), payload)
+				return writeOutput(config.stdout, opts.output, formatPathList(payload, pathOpts), payload)
 			}
 			if len(args) > 1 {
 				return fmt.Errorf("several arguments need Sandcastle Paths (/remote/tenant/project/machine); the colon grammar takes one reference")
@@ -200,7 +199,7 @@ expand it first.`,
 				if pathOpts.Long {
 					text = formatMultiMachineList(payload)
 				}
-				return writeOutput(config.stdout, opts.output, position+"\n"+text, payload)
+				return writeOutput(config.stdout, opts.output, text, payload)
 			}
 			runCfg := config
 			if remoteOverride != "" && remoteOverride != strings.TrimSpace(config.adminConfig.Remote) {
@@ -230,7 +229,7 @@ expand it first.`,
 			if pathOpts.Long {
 				text = formatMachineList(result, renderOpts)
 			}
-			return writeOutput(config.stdout, opts.output, position+"\n"+text, result)
+			return writeOutput(config.stdout, opts.output, listedScopePath(runCfg, result)+"\n"+text, result)
 		},
 	}
 	command.Flags().BoolVarP(&allProjects, "all-projects", "a", false, "list machines across all projects")
@@ -245,10 +244,20 @@ expand it first.`,
 	return command
 }
 
-// positionLine is the first line of every listing: the Current Position as
-// a Sandcastle Path, so the reader always knows where the names below live.
-func positionLine(config commandConfig) string {
-	return formatPath(currentPosition(config))
+// listedScopePath is the first line of a colon-mode listing: the Sandcastle
+// Path of what was listed — the project, or the tenant when the listing
+// spans projects — so the names below always say where they live (which
+// `sc ls obelix:home` from another install would otherwise leave open).
+func listedScopePath(config commandConfig, result listPayload) string {
+	remote := strings.TrimSpace(result.Remote)
+	if remote == "" {
+		remote = strings.TrimSpace(config.adminConfig.Remote)
+	}
+	segments := []string{remote, strings.TrimSpace(result.Tenant.Tenant)}
+	if project := strings.TrimSpace(result.Project); project != "" && !result.AllProjects && !naming.IsPattern(project) {
+		segments = append(segments, project)
+	}
+	return formatPath(segments)
 }
 
 // formatMachineListShort is `sc ls` without -l: one machine per line, as a

@@ -24,8 +24,9 @@ sc ls -a         # every machine in every project of the active install
 ```
 
 Every level listing (`sc ls`, `sc project list`, `sc remote list`, `sc tenant
-list`) prints the Current Position (`/remote/tenant/project`) first, then names
-only; `-l` gives the table. Parse `--json`, not the text.
+list`) prints the Sandcastle Path of what it lists first (the project, the
+tenant, `/`, the remote), then names only; `-l` gives the table. Parse
+`--json`, not the text.
 
 `sc info --json` and `sc ls --json` give the same facts parseably. Read the
 result rather than assuming: an install's project prefix, DNS suffix, and remote
@@ -54,7 +55,7 @@ sc pwd                      # /obelix/acme/web  (remote / tenant / project)
 sc cd backend               # sibling project (from a project, a bare name is ../name)
 sc cd ..                    # up to the tenant: sc ls now lists projects
 sc cd /obelix/acme/web      # absolute; sc cd -  goes back; sc cd  goes home (global config)
-sc ls ../*dev               # every sibling project matching *dev, each under a "path:" header
+sc ls ../*dev               # every sibling project matching *dev, each block headed by its path
 sc ls -d ../*dev            # just their names;  -l a table per level;  -R recurse
 sc ls /                     # enrolled remotes; sc ls /obelix  its tenants
 sc ls -d '../**'            # ** matches across levels: every project and machine of the tenant
@@ -115,7 +116,7 @@ machine is `user@<fqdn>:` (just `<fqdn>:` for the tenant user).
 ## Everyday operations
 
 ```bash
-sc ls                       # position line, then machine names in the active project
+sc ls                       # the project's path, then its machine names
 sc ls -a                    # …across every project (project/machine lines)
 sc ls -l -a                 # the table: PROJECT MACHINE TYPE FQDN … CREATED RENDERED STATE (RENDERED = release whose profile the machine booted with)
 sc create dev               # create a container in the active project
