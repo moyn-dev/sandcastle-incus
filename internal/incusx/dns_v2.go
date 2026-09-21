@@ -13,6 +13,7 @@ import (
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/dns"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
@@ -50,6 +51,12 @@ type V2DNSReconciler struct {
 }
 
 func (r *V2DNSReconciler) Reconcile(ctx context.Context) error {
+	return r.ReconcileFleet(ctx, nil)
+}
+
+// ReconcileFleet is Reconcile over a fleet the loop listed once; a nil fleet
+// lists per project (the pre-handoff path).
+func (r *V2DNSReconciler) ReconcileFleet(ctx context.Context, fleet authapp.InstanceFleet) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.Server == nil {
@@ -85,7 +92,13 @@ func (r *V2DNSReconciler) Reconcile(ctx context.Context) error {
 		if suffix == "" || cidr == "" {
 			continue
 		}
-		if err := reconcileOneV2TenantDNS(r.Server, project.Name, suffix, cidr, defaultProject, r.lastZone); err != nil {
+		instancesOf := func(projectName string) ([]api.InstanceFull, error) {
+			if fleet != nil {
+				return fleetInstances(fleet, projectName), nil
+			}
+			return r.Server.UseProject(projectName).GetInstancesFull(api.InstanceTypeAny)
+		}
+		if err := reconcileOneV2TenantDNS(r.Server, project.Name, suffix, cidr, defaultProject, r.lastZone, instancesOf); err != nil {
 			errs = append(errs, project.Name+": "+err.Error())
 		}
 	}
@@ -95,7 +108,7 @@ func (r *V2DNSReconciler) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func reconcileOneV2TenantDNS(server incus.InstanceServer, infraProject, suffix, cidr, defaultProject string, lastZone map[string]string) error {
+func reconcileOneV2TenantDNS(server incus.InstanceServer, infraProject, suffix, cidr, defaultProject string, lastZone map[string]string, instancesOf func(project string) ([]api.InstanceFull, error)) error {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
 		return err
@@ -114,7 +127,7 @@ func reconcileOneV2TenantDNS(server incus.InstanceServer, infraProject, suffix, 
 		if !ok || shortProject == "" {
 			continue
 		}
-		instances, err := server.UseProject(projectName).GetInstancesFull(api.InstanceTypeAny)
+		instances, err := instancesOf(projectName)
 		if err != nil {
 			return fmt.Errorf("list %s instances: %w", projectName, err)
 		}

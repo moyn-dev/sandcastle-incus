@@ -328,7 +328,7 @@ sync + recreate. Parse failure, a marker with neither `PRIVATE=` nor `MODE=`, or
 
 ## 6. Reconciler (slice 3, final) — supersedes public-dns-zones §4.1, §4.2, §4.6 (records), §4.7
 
-The zone stage of the ADR-0018 DNS pass (`internal/authapp/zone_reconcile.go`, 30 s ticker +
+The zone stage of the ADR-0018 DNS pass (`internal/authapp/zone_reconcile.go`, 5-minute ticker +
 instance lifecycle events + a kick from the hostname/domain endpoints and from every finished
 order). Everything public-dns-zones §4 says about ordering (§4.3: ARI, backoff, TXT sweep,
 concurrency cap, orders regardless of running state), the push protocol (§4.4 as amended by §5.3),

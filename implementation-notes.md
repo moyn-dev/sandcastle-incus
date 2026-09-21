@@ -6284,3 +6284,38 @@ configured pool, so an operator creating a tenant on a running install had
 to look the pool up or silently get a foreign /16. The pool now resolves
 flag > configured (env/seed; the admin default constant does not count) >
 the /16 the install's existing tenants occupy > built-in default.
+
+## 2026-09-21 — Auth App reconcilers stop polling incusd (HANDOFF-incusd-polling.md)
+
+On `big` the obelix auth-app produced ~450 of ~460 Incus API requests per
+90 s: the DNS and zone reconcilers each swept every project with
+`recursion=2` on a 30 s ticker and re-read machine files every pass. Changes:
+
+- **One fleet listing per pass, shared.** `runDNSReconcileLoop` assembles an
+  `InstanceFleet` (project → instances) once and hands it to both stages
+  (`V2DNSReconciler.ReconcileFleet`, `zoneReconciler.ReconcileFleet` →
+  `ZoneMachineServer.ListZoneMachinesFrom`). Source order: the event-fed
+  `ResourceCache` when ready (zero requests), else ONE
+  `GetInstancesFullAllProjects` filtered to the install prefix
+  (`incusx.FleetServer`). The per-project listing survives only as the
+  fallback for installs without a mounted socket (nil fleet).
+- **Events name their project.** `DNSProjectEvents` passes the event's
+  project; the pass re-reads only dirty projects live (the DHCP lease lands
+  after the event, so the cache's own refresh is too early) and feeds the
+  result back into the cache. Settle passes (+3 s, +8 s) reuse the dirty set,
+  then it is cleared.
+- **File reads are cached** (`zoneReconciler.readFile`, 10 min TTL): marker,
+  hostnames file, project-domain file, certificate and key. Our own pushes
+  (`forgetMachineFiles`) and lifecycle events (`markProjectDirty`) drop a
+  machine's entries; unreachable-instance errors are never cached. TTL 0 in
+  tests keeps the existing drift tests exact; Serve sets the TTL.
+- **Fallback ticker 30 s → 5 min.** Events already give convergence within
+  seconds; the ticker only covers missed events and restarts.
+- Not done: the ~5 s `instance-updated` on the auth-app's own instance. The
+  route backend's `EnsureProxyDevice` already skips equal device maps and
+  nothing else in this code writes that instance periodically; it needs a
+  live look at the event's requestor before changing anything.
+
+Verification target from the handoff (idle: incusd < 0.2 cores, < 10
+listings/min) is recorded in docs/e2e-sc2.md's Phase 1 notes as a read-only
+check (`incus monitor --type=logging`) — no live run was done here.

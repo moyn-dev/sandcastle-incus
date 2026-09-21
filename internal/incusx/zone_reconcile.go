@@ -41,6 +41,17 @@ func NewZoneMachineServer(server incus.InstanceServer, store tenant.IncusTenantS
 // its public-name keys (the list, and the legacy single key the reconciler
 // only ever deletes), its certificate mirror and its bridge address.
 func (s ZoneMachineServer) ListZoneMachines(ctx context.Context) ([]authapp.ZoneMachine, error) {
+	return s.listZoneMachines(ctx, nil)
+}
+
+// ListZoneMachinesFrom shapes a fleet the loop already listed (authapp
+// zoneFleetLister): the project walk stays, the per-project instance
+// listing does not.
+func (s ZoneMachineServer) ListZoneMachinesFrom(ctx context.Context, fleet authapp.InstanceFleet) ([]authapp.ZoneMachine, error) {
+	return s.listZoneMachines(ctx, fleet)
+}
+
+func (s ZoneMachineServer) listZoneMachines(ctx context.Context, fleet authapp.InstanceFleet) ([]authapp.ZoneMachine, error) {
 	if s.Server == nil || s.Store == nil {
 		return nil, nil
 	}
@@ -59,9 +70,14 @@ func (s ZoneMachineServer) ListZoneMachines(ctx context.Context) ([]authapp.Zone
 				return nil, err
 			}
 			incusProject := summary.V2IncusProjectName(project.Name)
-			instances, err := s.Server.UseProject(incusProject).GetInstancesFull(api.InstanceTypeAny)
-			if err != nil {
-				return nil, fmt.Errorf("list %s instances: %w", incusProject, err)
+			var instances []api.InstanceFull
+			if fleet != nil {
+				instances = fleetInstances(fleet, incusProject)
+			} else {
+				var err error
+				if instances, err = s.Server.UseProject(incusProject).GetInstancesFull(api.InstanceTypeAny); err != nil {
+					return nil, fmt.Errorf("list %s instances: %w", incusProject, err)
+				}
 			}
 			for _, instance := range instances {
 				if meta.IsManaged(instance.Config) && instance.Config[meta.KeyKind] == meta.KindSidecar {

@@ -54,6 +54,13 @@ var dnsRelevantLifecycleActions = map[string]struct{}{
 // trigger half of ADR-0018's event-driven DNS registration. It blocks until
 // ctx is done, reconnecting with backoff when the event socket drops.
 func subscribeInstanceLifecycleEvents(ctx context.Context, server incus.InstanceServer, notify func()) {
+	subscribeProjectLifecycleEvents(ctx, server, func(string) { notify() })
+}
+
+// subscribeProjectLifecycleEvents is subscribeInstanceLifecycleEvents with
+// the event's project handed to notify, so the DNS loop re-reads only that
+// project (HANDOFF incusd-polling).
+func subscribeProjectLifecycleEvents(ctx context.Context, server incus.InstanceServer, notify func(project string)) {
 	for ctx.Err() == nil {
 		listener, err := server.GetEventsAllProjects()
 		if err != nil {
@@ -70,7 +77,7 @@ func subscribeInstanceLifecycleEvents(ctx context.Context, server incus.Instance
 				return
 			}
 			if _, ok := dnsRelevantLifecycleActions[lifecycle.Action]; ok {
-				notify()
+				notify(event.Project)
 			}
 		})
 		if err != nil {

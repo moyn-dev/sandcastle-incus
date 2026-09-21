@@ -130,9 +130,21 @@ type HTTPRunner struct {
 	// the event-driven half of ADR-0018's registration. It should block until
 	// ctx is done, reconnecting internally as needed.
 	DNSEvents func(ctx context.Context, notify func())
+	// DNSProjectEvents is DNSEvents with the event's project, so a pass
+	// re-reads only what changed (HANDOFF incusd-polling). When set it is
+	// used instead of DNSEvents.
+	DNSProjectEvents func(ctx context.Context, notify func(project string))
 	// DNSReconcile, when set, is invoked periodically to register tenant machine
 	// DNS records (auto-registration of freeform `incus launch` machines).
 	DNSReconcile func(context.Context) error
+	// DNSReconcileFleet is DNSReconcile over a fleet the loop listed once
+	// (shared with the zone stage). Preferred over DNSReconcile when the loop
+	// could assemble a fleet.
+	DNSReconcileFleet func(context.Context, InstanceFleet) error
+	// Fleet lists the install's instances for the loop: one all-projects read
+	// per pass at most, a project read per lifecycle event. nil leaves each
+	// reconciler listing for itself.
+	Fleet FleetLister
 	// ZoneMachines, when set (the serving appliance with the mounted socket),
 	// is the Incus seam of the Public DNS Zone reconciler (ADR-0027 §4): it
 	// runs as the zone stage of the same DNS loop, after DNSReconcile.
@@ -334,8 +346,11 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	if r.DNSReconcile != nil || zones != nil {
-		go r.runDNSReconcileLoop(ctx, logger, zones)
+	if zones != nil {
+		zones.fileCacheTTL = zoneFileCacheTTL
+	}
+	if r.DNSReconcile != nil || r.DNSReconcileFleet != nil || zones != nil {
+		go r.runDNSReconcileLoop(ctx, logger, zones, resourceCache)
 	}
 	if resourceCache != nil {
 		go RunResourceCache(ctx, resourceCache, r.ResourceCacheServer, func(format string, args ...any) {
@@ -380,18 +395,36 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 // `incus launch` machines resolve without a manual step (ADR-0018): instance
 // lifecycle events trigger a reconcile within seconds (with two settle passes
 // to catch the DHCP lease landing after the event), and a periodic pass every
-// 30s guarantees convergence across missed events and restarts. Errors are
-// logged and the loop continues; it stops when ctx is cancelled.
-func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger, zones *zoneReconciler) {
-	const interval = 30 * time.Second
+// dnsLoopInterval guarantees convergence across missed events and restarts.
+// Every pass lists the fleet ONCE (the event-fed resource cache when ready,
+// else one all-projects read) and hands it to both the DNS and the zone
+// stage; the projects the triggering events named are re-read live so the
+// lease is seen (HANDOFF incusd-polling). Errors are logged and the loop
+// continues; it stops when ctx is cancelled.
+func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logger, zones *zoneReconciler, cache *ResourceCache) {
+	dirty := &dirtyProjects{}
+	source := fleetSource{cache: cache, lister: r.Fleet, dirty: dirty, logf: func(level, format string, args ...any) {
+		logger.Message(ctx, level, "auth-app "+format, args...)
+	}}
 	reconcile := func() {
-		if r.DNSReconcile != nil {
+		fleet := source.fleet(ctx)
+		if zones != nil {
+			for _, project := range dirty.take() {
+				zones.markProjectDirty(project)
+			}
+		}
+		switch {
+		case fleet != nil && r.DNSReconcileFleet != nil:
+			if err := r.DNSReconcileFleet(ctx, fleet); err != nil {
+				logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
+			}
+		case r.DNSReconcile != nil:
 			if err := r.DNSReconcile(ctx); err != nil {
 				logger.Message(ctx, "ERROR", "auth-app DNS reconcile: %v", err)
 			}
 		}
 		if zones != nil {
-			if err := zones.Reconcile(ctx); err != nil {
+			if err := zones.ReconcileFleet(ctx, fleet); err != nil {
 				logger.Message(ctx, "ERROR", "auth-app zone reconcile: %v", err)
 			}
 		}
@@ -403,13 +436,22 @@ func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logg
 		default:
 		}
 	}
+	notifyProject := func(project string) {
+		if project != "" {
+			dirty.add(project)
+		}
+		notify()
+	}
 	if zones != nil {
 		// A finished order (and a hostname add/remove through the API)
 		// kicks the loop so the push does not wait for the ticker.
 		zones.setKick(notify)
 	}
-	if r.DNSEvents != nil || zones != nil {
-		if r.DNSEvents != nil {
+	if r.DNSProjectEvents != nil || r.DNSEvents != nil || zones != nil {
+		switch {
+		case r.DNSProjectEvents != nil:
+			go r.DNSProjectEvents(ctx, notifyProject)
+		case r.DNSEvents != nil:
 			go r.DNSEvents(ctx, notify)
 		}
 		go func() {
@@ -421,7 +463,7 @@ func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logg
 					reconcile()
 					// The event usually precedes the DHCP lease; settle passes
 					// pick up the IP. The reconciler skips unchanged zones, so
-					// extra passes are cheap.
+					// extra passes are cheap — and re-read only dirty projects.
 					for _, settle := range []time.Duration{3 * time.Second, 8 * time.Second} {
 						select {
 						case <-ctx.Done():
@@ -434,11 +476,12 @@ func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logg
 						}
 						reconcile()
 					}
+					dirty.clear()
 				}
 			}
 		}()
 	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(dnsLoopInterval)
 	defer ticker.Stop()
 	reconcile()
 	for {

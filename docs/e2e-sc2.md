@@ -679,7 +679,7 @@ sc login "https://$E2E_HOSTNAME" --simulate-token "$SIMULATE_TOKEN" --as e2edns 
 ```
 
 Registration is event-driven: records appear **within seconds** of
-`incus launch`/`sc create` (30s reconcile loop as backstop). The admin-plane
+`incus launch`/`sc create` (5-minute reconcile loop as backstop). The admin-plane
 counterpart of this protocol is automated in `scripts/e2e-v2.sh` (run it on the
 server VM once the stack is up — it refuses to run without the auth-app).
 
@@ -934,6 +934,18 @@ sc-adm auth-app deploy \
 
 ---
 
+### Phase 1b — Auth App idle load on the Incus host (HANDOFF-incusd-polling) 🚧 not yet run
+
+Read-only check on a running install with tenants and machines. PASS: while
+no machine is created or started, `incus monitor <remote>: --type=logging
+--format=json` over 90 s shows **fewer than 10** `Handling API request`
+entries for `/1.0/instances?…recursion=2` from the auth-app and no periodic
+burst of `instance-file-retrieved` events; `incusd` sits below 0.2 cores.
+After `sc create`, the machine's record and certificate still converge
+within seconds (event-driven), and the 5-minute pass lists the fleet
+**once** (one all-projects request, or none when the resource cache is
+ready).
+
 ## Phase 2 — Front it on `sc-edge` (public HTTPS, LE cert, no client certs) ✅
 Add a terminate vhost so `https://sc2.thieso2.dev` reverse-proxies to the auth app.
 
@@ -1183,7 +1195,7 @@ for m in ct1 vm1; do
   done
   echo "$m = ${IP[$m]}"
 done
-# register A-records in the sidecar CoreDNS (now auto-registered by the auth-app reconciler within ~30s; manual step optional)
+# register A-records in the sidecar CoreDNS (now auto-registered by the auth-app reconciler within seconds of the lifecycle event (5-minute backstop); manual step optional)
 incus exec big:sc2-$TENANT --project sc2-$TENANT -- bash -c "
   Z=/etc/coredns/zones/db.$TENANT
   grep -q '^ct1 ' \$Z || echo 'ct1 IN A ${IP[ct1]}' >> \$Z
@@ -1233,7 +1245,7 @@ now applies to a pair created with `--home-share`.
 
 > ✅ **Auto-registration is now automatic.** A background reconciler in the auth-app
 > registers every running machine (incl. freeform `incus launch`) into the sidecar
-> CoreDNS zone as `<name>.<suffix>` (~30s). Manual A-record steps below are no longer
+> CoreDNS zone as `<name>.<suffix>` (within seconds; 5-minute backstop). Manual A-record steps below are no longer
 > required — query CoreDNS by IP to verify (`dig @<sidecar-ip> <name>.<suffix>`).
 > The reconciler compares against the sidecar's **live** zone (not just an in-memory
 > cache), so if a sidecar restarts and loses its zone the next pass re-writes it.
@@ -1833,7 +1845,7 @@ address the split-DNS will be served on to tailnet clients later.
 
 ```bash
 TSIP=$(incus exec big:sc2-$TENANT --project sc2-$TENANT -- tailscale ip -4 | head -1)
-# register machine A-records + bump SOA serial + reload (now auto-registered by the auth-app reconciler within ~30s; manual step optional)
+# register machine A-records + bump SOA serial + reload (now auto-registered by the auth-app reconciler within seconds of the lifecycle event (5-minute backstop); manual step optional)
 incus exec big:sc2-$TENANT --project sc2-$TENANT -- bash -c '
   Z=/etc/coredns/zones/db.e2etest
   grep -q "^'$NAME' " $Z || echo "'$NAME' IN A '$VM_IP'" >> $Z

@@ -77,7 +77,7 @@ func (r *zoneReconciler) serveProjectCertificate(ctx context.Context, t zoneTarg
 		return out, err
 	}
 	if !drift {
-		installedKey, readErr := r.machines.ReadInstanceFile(ctx, t.machine.IncusProject, t.machine.Name, tenant.MachineTLSHostKeyPath(t.projectDomain))
+		installedKey, readErr := r.readFile(ctx, t.machine.IncusProject, t.machine.Name, tenant.MachineTLSHostKeyPath(t.projectDomain))
 		if readErr != nil && !errors.Is(readErr, ErrInstanceFileNotFound) {
 			return out, readErr
 		}

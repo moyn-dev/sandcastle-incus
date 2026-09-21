@@ -142,6 +142,7 @@ func ExecuteAdmin(name string, args []string) int {
 	// (ADR-0027 §4): only the serving appliance runs it.
 	var authAppZoneMachines authapp.ZoneMachineServer
 	var authAppTailnetPublisher authapp.TailnetPublisher
+	var authAppFleet authapp.FleetLister
 	if authAppServeArgs(args) {
 		if socketServer, err := adminSocketServer(); err == nil && socketServer != nil {
 			authAppSocketServer = socketServer
@@ -149,6 +150,7 @@ func ExecuteAdmin(name string, args []string) int {
 			zoneMachines := incusx.NewZoneMachineServer(socketServer, authAppTenants, adminConfig.IncusProjectPrefix)
 			authAppZoneMachines = zoneMachines
 			authAppTailnetPublisher = zoneMachines
+			authAppFleet = incusx.NewFleetServer(socketServer, adminConfig.IncusProjectPrefix)
 			authAppMachines = incusx.NewHostOverrideManagerForServer(socketServer)
 			authAppCreator = incusx.NewTenantCreatorForServer(socketServer).WithVerbose(verbose, os.Stderr)
 			authAppDeleter = incusx.NewTenantDeleterForServer(socketServer).WithVerbose(verbose, os.Stderr)
@@ -235,6 +237,19 @@ func ExecuteAdmin(name string, args []string) int {
 					return nil // no mounted socket (not the serving appliance) — nothing to reconcile
 				}
 				return authAppDNSReconciler(authAppSocketServer, authAppTenants, adminConfig.IncusProjectPrefix).Reconcile(ctx)
+			},
+			DNSReconcileFleet: func(ctx context.Context, fleet authapp.InstanceFleet) error {
+				if authAppSocketServer == nil {
+					return nil
+				}
+				return authAppDNSReconciler(authAppSocketServer, authAppTenants, adminConfig.IncusProjectPrefix).ReconcileFleet(ctx, fleet)
+			},
+			Fleet: authAppFleet,
+			DNSProjectEvents: func(ctx context.Context, notify func(project string)) {
+				if authAppSocketServer == nil {
+					return
+				}
+				subscribeProjectLifecycleEvents(ctx, authAppSocketServer, notify)
 			},
 			ZoneMachines:     authAppZoneMachines,
 			TailnetPublisher: authAppTailnetPublisher,

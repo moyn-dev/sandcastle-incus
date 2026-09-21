@@ -104,6 +104,12 @@ type ZoneMachineServer interface {
 	PushMachineHostnames(ctx context.Context, incusProject, name string, hostnames []string) error
 }
 
+// zoneFleetLister is the optional fleet-aware form of ListZoneMachines: the
+// loop listed the fleet once, the seam only shapes it (no Incus request).
+type zoneFleetLister interface {
+	ListZoneMachinesFrom(ctx context.Context, fleet InstanceFleet) ([]ZoneMachine, error)
+}
+
 // zoneDNSProvider is the slice of libdns the reconciler uses: read a zone,
 // set A records, delete A/TXT records.
 type zoneDNSProvider interface {
@@ -166,6 +172,71 @@ type zoneReconciler struct {
 	// earlier pass of this process, so the pass after the last name is
 	// removed still converges the (now empty) hostnames file on the Machine.
 	namedBefore map[string]struct{}
+
+	// fileCache remembers file reads across passes (HANDOFF incusd-polling:
+	// marker, hostnames, certificate and key reads were ~half of the
+	// auth-app's Incus traffic). An entry is trusted for fileCacheTTL unless
+	// the Machine was pushed to by us or its project saw a lifecycle event,
+	// which drop the Machine's entries. TTL 0 (tests) disables the cache.
+	fileCacheMu  sync.Mutex
+	fileCache    map[string]map[string]cachedFileRead // machine key → path → read
+	fileCacheTTL time.Duration
+}
+
+type cachedFileRead struct {
+	content string
+	err     error
+	at      time.Time
+}
+
+// markProjectDirty drops every cached read of the project's Machines (a
+// lifecycle event named the project).
+func (r *zoneReconciler) markProjectDirty(incusProject string) {
+	r.fileCacheMu.Lock()
+	defer r.fileCacheMu.Unlock()
+	for key := range r.fileCache {
+		if strings.HasPrefix(key, incusProject+"/") {
+			delete(r.fileCache, key)
+		}
+	}
+}
+
+// forgetMachineFiles drops a Machine's cached reads (we pushed to it).
+func (r *zoneReconciler) forgetMachineFiles(incusProject, name string) {
+	r.fileCacheMu.Lock()
+	defer r.fileCacheMu.Unlock()
+	delete(r.fileCache, incusProject+"/"+name)
+}
+
+// readFile is ReadInstanceFile through the cache. Unreachable-instance
+// errors are not cached (the next pass retries); "not found" is.
+func (r *zoneReconciler) readFile(ctx context.Context, incusProject, name, path string) (string, error) {
+	if r.fileCacheTTL <= 0 {
+		return r.machines.ReadInstanceFile(ctx, incusProject, name, path)
+	}
+	key := incusProject + "/" + name
+	now := r.now()
+	r.fileCacheMu.Lock()
+	if byPath := r.fileCache[key]; byPath != nil {
+		if cached, hit := byPath[path]; hit && now.Sub(cached.at) < r.fileCacheTTL {
+			r.fileCacheMu.Unlock()
+			return cached.content, cached.err
+		}
+	}
+	r.fileCacheMu.Unlock()
+	content, err := r.machines.ReadInstanceFile(ctx, incusProject, name, path)
+	if err == nil || errors.Is(err, ErrInstanceFileNotFound) {
+		r.fileCacheMu.Lock()
+		if r.fileCache == nil {
+			r.fileCache = map[string]map[string]cachedFileRead{}
+		}
+		if r.fileCache[key] == nil {
+			r.fileCache[key] = map[string]cachedFileRead{}
+		}
+		r.fileCache[key][path] = cachedFileRead{content: content, err: err, at: now}
+		r.fileCacheMu.Unlock()
+	}
+	return content, err
 }
 
 func newZoneReconciler(db *sql.DB, machines ZoneMachineServer, issuer certIssuer, directory string, logf func(level, format string, args ...any)) *zoneReconciler {
@@ -251,13 +322,25 @@ type orderCandidate struct {
 // Reconcile runs one pass (spec §4.1–§4.7, machine-hostnames §7). It returns
 // the joined per-Machine errors; only a listing failure aborts the pass.
 func (r *zoneReconciler) Reconcile(ctx context.Context) error {
+	return r.ReconcileFleet(ctx, nil)
+}
+
+// ReconcileFleet is Reconcile over a fleet the loop listed once; a nil fleet
+// makes the seam list for itself (the pre-handoff path).
+func (r *zoneReconciler) ReconcileFleet(ctx context.Context, listed InstanceFleet) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.db == nil || r.machines == nil {
 		return nil
 	}
 	now := r.now().UTC()
-	machines, err := r.machines.ListZoneMachines(ctx)
+	var machines []ZoneMachine
+	var err error
+	if lister, ok := r.machines.(zoneFleetLister); ok && listed != nil {
+		machines, err = lister.ListZoneMachinesFrom(ctx, listed)
+	} else {
+		machines, err = r.machines.ListZoneMachines(ctx)
+	}
 	if err != nil {
 		return fmt.Errorf("list machines for zone reconcile: %w", err)
 	}
@@ -652,12 +735,13 @@ func (r *zoneReconciler) reconcileMachine(ctx context.Context, mt machineTargets
 					break
 				}
 			}
-			old, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineProjectDomainPath)
+			old, err := r.readFile(ctx, m.IncusProject, m.Name, tenant.MachineProjectDomainPath)
 			if err != nil && !errors.Is(err, ErrInstanceFileNotFound) {
 				errs = append(errs, err)
 			} else if strings.TrimSpace(old) != selectedDomain {
 				ready, _ := r.markerReady(ctx, zoneTarget{machine: m, hostname: m.Name})
 				if ready {
+					r.forgetMachineFiles(m.IncusProject, m.Name)
 					if err := r.machines.PushMachineProjectDomain(ctx, m.IncusProject, m.Name, selectedDomain); err != nil {
 						errs = append(errs, err)
 					}
@@ -718,7 +802,7 @@ func (r *zoneReconciler) convergeHostnamesFile(ctx context.Context, mt machineTa
 		return err
 	}
 	want := tenant.FormatMachineHostnamesFile(names)
-	content, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineHostnamesPath)
+	content, err := r.readFile(ctx, m.IncusProject, m.Name, tenant.MachineHostnamesPath)
 	if err != nil && !errors.Is(err, ErrInstanceFileNotFound) {
 		return fmt.Errorf("%s: read hostnames file: %w", m.key(), err)
 	}
@@ -728,6 +812,7 @@ func (r *zoneReconciler) convergeHostnamesFile(ctx context.Context, mt machineTa
 		}
 		return nil
 	}
+	r.forgetMachineFiles(m.IncusProject, m.Name)
 	if err := r.machines.PushMachineHostnames(ctx, m.IncusProject, m.Name, names); err != nil {
 		return fmt.Errorf("%s: push hostnames file: %w", m.key(), err)
 	}
@@ -879,7 +964,7 @@ func (r *zoneReconciler) readMarker(ctx context.Context, m ZoneMachine) (tenant.
 		return cached.marker, cached.ok, cached.err
 	}
 	var read markerRead
-	content, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.CaddySetupMarkerPath)
+	content, err := r.readFile(ctx, m.IncusProject, m.Name, tenant.CaddySetupMarkerPath)
 	switch {
 	case errors.Is(err, ErrInstanceFileNotFound):
 		r.logOnce(r.markerLogged, m.key()+"/absent", "INFO",
@@ -937,7 +1022,7 @@ func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, e
 // is an error the caller logs and retries next pass.
 func (r *zoneReconciler) driftCheck(ctx context.Context, t zoneTarget, row machineCertificate) (bool, error) {
 	m := t.machine
-	content, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineTLSHostCertPath(t.hostname))
+	content, err := r.readFile(ctx, m.IncusProject, m.Name, tenant.MachineTLSHostCertPath(t.hostname))
 	if err != nil {
 		if errors.Is(err, ErrInstanceFileNotFound) {
 			return true, nil
@@ -969,6 +1054,8 @@ func (r *zoneReconciler) push(ctx context.Context, t zoneTarget, row machineCert
 		return false, fmt.Errorf("%s: %w", t.hostname, err)
 	}
 	m := t.machine
+	r.forgetMachineFiles(t.machine.IncusProject, t.machine.Name)
+	r.forgetMachineFiles(m.IncusProject, m.Name)
 	if err := r.machines.PushMachineCertificate(ctx, m.IncusProject, m.Name, row.Hostname, row.CertPEM, keyPEM); err != nil {
 		return false, fmt.Errorf("%s: push certificate to %s: %w", t.hostname, m.key(), err)
 	}

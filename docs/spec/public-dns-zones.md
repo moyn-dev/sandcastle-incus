@@ -393,7 +393,7 @@ try when the window frees — see Open §9 for whether creation should refuse in
 > §4.6 and §4.7 (mirroring) are replaced there; §4.3 (orders), §4.4 (push, as amended by
 > machine-hostnames §5.3), §4.5 (drift) and the retention rules of §4.6 still hold per pair.
 
-The existing ADR-0018 pass (30s ticker + lifecycle events) gains a zone stage. The private stage
+The existing ADR-0018 pass (5-minute ticker + lifecycle events; one shared fleet listing per pass) gains a zone stage. The private stage
 serves every Machine's Machine Private Hostname (ADR-0028) and is otherwise unchanged. Every
 per-Machine error is collected with `errors.Join` and logged; a pass never fails as a whole.
 
