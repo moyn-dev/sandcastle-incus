@@ -102,7 +102,7 @@ func sharedTenantHandler(t *testing.T, members *fakeTenantMembershipManager, pro
 func TestProjectImageAPIWritesThroughTheAdminSeamForTheRequestTenant(t *testing.T) {
 	projects := &fakeTenantProjectCreator{}
 	handler, tokens := sharedTenantHandler(t, &fakeTenantMembershipManager{}, projects)
-	req := httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"images:ubuntu/26.04"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"images:ubuntu/26.04/cloud"}`))
 	req.Header.Set("Authorization", "Bearer "+tokens["skorfmann"])
 	req.Header.Set(TenantHeader, "moyn-dev")
 	res := httptest.NewRecorder()
@@ -115,7 +115,7 @@ func TestProjectImageAPIWritesThroughTheAdminSeamForTheRequestTenant(t *testing.
 	req.Header.Set(TenantHeader, "moyn-dev")
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || !slices.Equal(projects.images, []string{"moyn-dev/web=images:ubuntu/26.04", "moyn-dev/web="}) {
+	if res.Code != http.StatusOK || !slices.Equal(projects.images, []string{"moyn-dev/web=images:ubuntu/26.04/cloud", "moyn-dev/web="}) {
 		t.Fatalf("unset = %d images = %v", res.Code, projects.images)
 	}
 	req = httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"bad ref"}`))

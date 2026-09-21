@@ -1727,11 +1727,11 @@ func TestProjectSetAndUnsetImage(t *testing.T) {
 	updater := &fakeProjectUpdater{}
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		name: "sandcastle", projectSettings: updater, tenantStore: tenant.MemoryStore{Projects: projects},
-	}, "project", "set-image", "work", "images:ubuntu/26.04")
+	}, "project", "set-image", "work", "images:ubuntu/26.04/cloud")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "set default image images:ubuntu/26.04 on project work") || updater.incusProject != "sc2-acme-work" || updater.image != "images:ubuntu/26.04" {
+	if !strings.Contains(stdout, "set default image images:ubuntu/26.04/cloud on project work") || updater.incusProject != "sc2-acme-work" || updater.image != "images:ubuntu/26.04/cloud" {
 		t.Fatalf("stdout = %q updater = %#v", stdout, updater)
 	}
 	updater = &fakeProjectUpdater{}
@@ -1758,10 +1758,10 @@ func TestProjectSetImageUsesTheAuthAppWhenLoggedIn(t *testing.T) {
 	admin.AuthHostname, admin.AuthToken = "https://auth.example.com", "stored-token"
 	if _, err := executeForTestWithConfig(t, commandConfig{
 		name: "sandcastle", adminConfig: admin, authProjects: stub, projectSettings: updater, tenantStore: tenant.MemoryStore{Projects: projects},
-	}, "project", "set-image", "work", "images:ubuntu/26.04"); err != nil {
+	}, "project", "set-image", "work", "images:ubuntu/26.04/cloud"); err != nil {
 		t.Fatal(err)
 	}
-	if updater.called || len(stub.calls) != 1 || stub.calls[0] != "image:work=images:ubuntu/26.04" {
+	if updater.called || len(stub.calls) != 1 || stub.calls[0] != "image:work=images:ubuntu/26.04/cloud" {
 		t.Fatalf("direct updater called=%v auth calls=%v", updater.called, stub.calls)
 	}
 }

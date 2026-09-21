@@ -6490,3 +6490,13 @@ rights, tenant-scoped via the Current Tenant header), direct Incus only
 without a login. `set-cloud-identity` and `set-docker-autostart` still
 write directly and will hit the same restriction for tenant users; they
 should follow the same seam.
+
+## 2026-09-21 — `images:` refs must be the cloud variant
+
+Live: `sc p set-image newbuild2 images:ubuntu/26.04` produced a machine
+that booted but never opened SSH — the plain image has no cloud-init, so
+no user, keys or sshd ever appeared, and `sc c` only said "did not open SSH
+within 2m". `tenant.ValidateMachineImageRef` now refuses a non-cloud
+`images:` ref at `sc create --image`, `sc project set-image` and the Auth
+App endpoint (aliases and fingerprints pass), and the SSH timeout path
+probes for cloud-init and names the cause when it is absent.

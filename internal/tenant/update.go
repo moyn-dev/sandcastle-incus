@@ -211,6 +211,27 @@ func summaryHasProject(summary Summary, name string) bool {
 	return false
 }
 
+// ValidateMachineImageRef checks an image reference `sc create` / `sc project
+// set-image` accept. Sandcastle machines are configured by cloud-init (login
+// user, keys, sshd, the /.sc shims), so an `images:` remote ref must name the
+// cloud variant: `images:ubuntu/26.04` boots but never opens SSH, which is
+// hard to diagnose from the outside. Aliases and fingerprints pass through.
+func ValidateMachineImageRef(ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fmt.Errorf("image reference is required")
+	}
+	if strings.ContainsAny(ref, " \t\n") {
+		return fmt.Errorf("invalid image reference %q", ref)
+	}
+	if rest, ok := strings.CutPrefix(ref, "images:"); ok {
+		if !strings.HasSuffix(rest, "/cloud") && !strings.Contains(rest, "/cloud/") {
+			return fmt.Errorf("image %q has no cloud-init: Sandcastle machines need the cloud variant (%s/cloud) to get their login user, SSH keys and sshd", ref, ref)
+		}
+	}
+	return nil
+}
+
 // PlanSetProjectImage records a project's default machine image ("" clears
 // it back to the CLI's stock default). The image ref is not validated against
 // the remote here: aliases and images: refs resolve at `sc create` time.
@@ -222,8 +243,10 @@ func PlanSetProjectImage(ctx context.Context, admin config.Admin, store IncusTen
 		return ProjectMutationPlan{}, err
 	}
 	image := strings.TrimSpace(request.Image)
-	if strings.ContainsAny(image, " \t\n") {
-		return ProjectMutationPlan{}, fmt.Errorf("invalid image reference %q", request.Image)
+	if image != "" {
+		if err := ValidateMachineImageRef(image); err != nil {
+			return ProjectMutationPlan{}, err
+		}
 	}
 	summary, err := findCurrentTenant(ctx, admin, store)
 	if err != nil {

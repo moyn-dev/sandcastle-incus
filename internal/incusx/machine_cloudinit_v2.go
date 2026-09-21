@@ -55,3 +55,28 @@ func (c TenantCreator) MachineCloudInitDoneV2(ctx context.Context, incusProject 
 	}
 	return false, fmt.Errorf("read cloud-init state for machine %s: file access unavailable", name)
 }
+
+// MachineHasCloudInitV2 reports whether the machine's image ships cloud-init
+// at all (a non-cloud `images:` variant does not — it then never gets a
+// login user, keys or sshd). An unreadable machine is an error.
+func (c TenantCreator) MachineHasCloudInitV2(ctx context.Context, incusProject string, name string) (bool, error) {
+	server, err := c.resolveV2Server()
+	if err != nil {
+		return false, err
+	}
+	project := server.UseProject(incusProject)
+	readable := func(path string) bool {
+		content, _, err := project.GetInstanceFile(name, path)
+		if content != nil {
+			_ = content.Close()
+		}
+		return err == nil
+	}
+	if readable(cloudInitBootFinished) || readable(cloudInitDir) {
+		return true, nil
+	}
+	if readable(machineProbePath) {
+		return false, nil
+	}
+	return false, fmt.Errorf("read cloud-init presence for machine %s: file access unavailable", name)
+}

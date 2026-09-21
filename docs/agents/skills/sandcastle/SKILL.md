@@ -97,7 +97,7 @@ sc c backend:api -- uptime  # …in another project
 sc start dev / sc stop dev / sc restart dev      # aliases: up / down / reboot
 sc delete dev --yes                              # alias: del / rm
 sc fix dev                  # backfill maintenance fixups over SSH (idempotent)
-sc p set-image work images:ubuntu/26.04          # project default image for sc create (unset-image clears)
+sc p set-image work images:ubuntu/26.04/cloud          # project default image for sc create (unset-image clears)
 sc c dev -- install-agentic.sh                   # on the machine: mise + herdr, claude, codex for the login user
 ```
 
@@ -139,6 +139,8 @@ matches nothing is an **error**, never a silent no-op — except a project glob 
   `--unix-user` overrides. Existing tenants keep their stored user.
 - **`sc update` twice after a CLI upgrade**: no longer needed; one run
   finishes every stage.
+- **Non-cloud `images:` refs** (`images:ubuntu/26.04`): refused. Machines are
+  configured by cloud-init, so always use the `/cloud` variant.
 
 ## Rules that bite
 

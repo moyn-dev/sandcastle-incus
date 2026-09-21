@@ -1,6 +1,7 @@
 package tenant
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -90,5 +91,21 @@ func TestPlanCreateV2DefaultsTheUnixUserToTheTenantName(t *testing.T) {
 	}
 	if got := DefaultUnixUserForTenant("1octocat"); got != DefaultV2UnixUser {
 		t.Fatalf("invalid-name fallback = %q", got)
+	}
+}
+
+func TestValidateMachineImageRefRequiresTheCloudVariantOfImagesRefs(t *testing.T) {
+	for _, ok := range []string{"images:ubuntu/26.04/cloud", "images:debian/13/cloud", "images:debian/13/cloud/arm64", "mybase", "sandcastle/dev:latest", "abc123def"} {
+		if err := ValidateMachineImageRef(ok); err != nil {
+			t.Fatalf("%s rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"images:ubuntu/26.04", "images:debian/13", "bad ref", ""} {
+		if err := ValidateMachineImageRef(bad); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+	if _, err := PlanSetProjectImage(context.Background(), v2TestAdmin(), MemoryStore{}, ProjectMutationRequest{Name: "work", Image: "images:ubuntu/26.04"}); err == nil || !strings.Contains(err.Error(), "cloud variant") {
+		t.Fatalf("plan accepted a non-cloud ref: %v", err)
 	}
 }

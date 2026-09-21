@@ -338,6 +338,11 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		return err
 	}
 	image := strings.TrimSpace(options.Image)
+	if image != "" {
+		if err := tenant.ValidateMachineImageRef(image); err != nil {
+			return err
+		}
+	}
 	if image == "" {
 		image = projectDefaultImage(summary, project)
 	}
@@ -616,6 +621,9 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	waitForCloudInitV2(ctx, config, summary.V2IncusProjectName(project), machineName, sshDeadline)
 	for !probeSSHPort(ensured.PrivateIP, 3*time.Second) {
 		if !time.Now().Before(sshDeadline) {
+			if has, err := config.tenantCreator.MachineHasCloudInitV2(ctx, summary.V2IncusProjectName(project), machineName); err == nil && !has {
+				return dialedV2Machine{}, fmt.Errorf("machine %s (%s) has no cloud-init, so it never got its login user, SSH keys or sshd: its image is not a cloud variant. Recreate it from one (e.g. images:ubuntu/26.04/cloud): sc delete %s --yes && sc create %s --image <ref>/cloud, or fix the project default with sc project set-image", machineName, ensured.PrivateIP, machineName, machineName)
+			}
 			return dialedV2Machine{}, fmt.Errorf("machine %s (%s) did not open SSH within %s — cloud-init may still be running", machineName, ensured.PrivateIP, sshWait)
 		}
 		select {

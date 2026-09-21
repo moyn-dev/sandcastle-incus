@@ -11,6 +11,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
 	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 // Project Domain endpoints on the tenant plane (ADR-0027, spec §3.2):
@@ -450,8 +451,8 @@ func (h handler) projectImageSet(w http.ResponseWriter, r *http.Request, user Us
 			return
 		}
 		image = strings.TrimSpace(request.Image)
-		if image == "" || strings.ContainsAny(image, " \t\n") {
-			writeAPIError(w, http.StatusBadRequest, fmt.Errorf("invalid image reference %q", request.Image))
+		if err := tenant.ValidateMachineImageRef(image); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
 	}
