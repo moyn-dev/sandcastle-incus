@@ -67,12 +67,16 @@ Decisions worth getting right the first time:
 sc-adm tenant list                 # every tenant on the install
 sc-adm tenant list <tenant>        # every resource in one tenant
 sc-adm tenant status <tenant>
-sc-adm tenant create acme --dns-suffix acme --initial-project default \
-  --unix-user dev --ssh-key "$(cat ~/.ssh/id_ed25519.pub)" --tailscale-authkey …
-sc-adm tenant grant acme alice     # give a restricted user access
+sc-adm tenant create acme --ssh-key "$(cat ~/.ssh/id_ed25519.pub)" [--tailscale-authkey …]
+                                   # login user = tenant name (--unix-user overrides); CIDR pool derived from the
+                                   # install; no --dns-suffix (deprecated: the suffix is the tenant name)
+sc-adm tenant create moyn-dev --member thieso2 --member skorfmann   # Shared Tenant: members must have logged in
+sc-adm tenant grant acme alice     # Tenant Access: every project + membership + the member's key on machines
 sc-adm tenant revoke acme alice
 sc-adm tenant users acme
-sc-adm tenant set-ssh-key acme "ssh-ed25519 …"
+sc-adm tenant set-ssh-key acme "ssh-ed25519 …"      # replace the key list
+sc-adm tenant add-ssh-key acme "ssh-ed25519 …"      # append / remove-ssh-key drops one (never the last)
+sc-adm tenant delete acme --purge --yes              # all-or-nothing (machines, volumes, sidecar, bridge)
 sc-adm tenant payload-sync acme --check
 sc-adm tenant delete acme --purge --yes
 ```

@@ -28,8 +28,12 @@ result rather than assuming: an install's project prefix, DNS suffix, and remote
 name are all operator-chosen and differ per deployment.
 
 Switch context with `sc remote switch <name>` (install), `sc tenant switch
-<name>`, `sc project switch <name>`. Remote/project switches write the nearest `.sandcastle`, searching the
-current directory then parents; with none, they create it in the current directory.
+<name>` (`sc t sw`), `sc project switch <name>`. Every switch writes the nearest
+`.sandcastle` (remote, project AND tenant), searching the current directory
+then parents; with none, they create it in the current directory. `sc tenant
+list` marks the active tenant with `*` and shows the Role (`owner` for your
+Personal Tenant, `member` for a Shared Tenant). Messages name machines by their
+full path `tenant@remote:project:machine`, which pastes back into any command.
 Switches report the path written; `sc remote list` and `sc project list` report
 the file read. Global defaults are fallback only, and raw Incus defaults remain
 unchanged. `SANDCASTLE_REMOTE` / `SANDCASTLE_PROJECT` override local selection
@@ -42,6 +46,13 @@ Tenant                          the ownership / identity / DNS / tailnet boundar
  └── Project                    an Incus project; owns shared /home + /workspace volumes
       └── Machine               a container (CT) or VM; native Incus instance name
 ```
+
+A tenant is either a **Personal Tenant** (one per user, created by `sc login`)
+or a **Shared Tenant** (admin-created with `sc-adm tenant create --member …`;
+its members switch to it with `sc tenant switch`, every member's SSH key is on
+its machines, and every `sc` command then acts on it). Machines log in as the
+tenant's unix user, which defaults to the tenant name; the shell prompt on a
+machine is `user@<fqdn>:` (just `<fqdn>:` for the tenant user).
 
 - **Every sandcastle is part of a tailnet by default — that is the main
   operation mode, not an add-on.** Tenant creation brings the tenant's sidecar
@@ -83,10 +94,16 @@ sc hostname add zp:web api.tc42.uk          # claim another public name later; l
 sc c dev                    # interactive shell as the login user
 sc c dev -- uptime          # run one command, non-interactive
 sc c backend:api -- uptime  # …in another project
-sc start dev / sc stop dev / sc restart dev
-sc delete dev --yes
+sc start dev / sc stop dev / sc restart dev      # aliases: up / down / reboot
+sc delete dev --yes                              # alias: del / rm
 sc fix dev                  # backfill maintenance fixups over SSH (idempotent)
+sc p set-image work images:ubuntu/26.04          # project default image for sc create (unset-image clears)
+sc c dev -- install-agentic.sh                   # on the machine: mise + herdr, claude, codex for the login user
 ```
+
+Short aliases: `new` create, `c` connect, `ls` list, `del`/`rm` delete, `up`
+start, `down` stop, `reboot` restart, `st` status, `upd` update, `t` tenant,
+`p`/`proj` project, `rem` remote, `img` image, `host` hostname, `sw` switch.
 
 `sc create` is idempotent about nothing — it fails if the machine exists.
 Lifecycle verbs (`start`/`stop`/`restart`/`delete`) never create.
@@ -104,6 +121,24 @@ sc stop 'lc*'           # acts on each match, one report line per machine
 Globbing the install part requires all three parts spelled out. A glob that
 matches nothing is an **error**, never a silent no-op — except a project glob in
 `sc ls`, which lists nothing and exits 0. A glob never creates a machine.
+
+## Deprecations (do not recommend these)
+
+- **`--dns-suffix`** on `sc login` / `sc-adm tenant create`: leave it out. The
+  private suffix defaults to the tenant name and is only the machine's private
+  identity; public, resolvable names come from **Project Domains** under a
+  **Public DNS Zone** (`sc project create <p> --domain <sub.zone>`,
+  `sc hostname add`), with Let's Encrypt certificates.
+- **`sc dns setup` / `sc trust install`** (local resolver for the private
+  suffix, trusting the tenant CA): legacy of the private-DNS era. Reach
+  machines by their public names or IP; `sc tenant switch` no longer hints
+  them. `sc trust` / `sc dns` still exist for old private-only setups.
+- **`zsh` on machines**: the default profile installs `openssh-server` only
+  and the login shell is bash (the Dev Image keeps its own zsh setup).
+- **Login user `dev`**: new tenants log in as the tenant name;
+  `--unix-user` overrides. Existing tenants keep their stored user.
+- **`sc update` twice after a CLI upgrade**: no longer needed; one run
+  finishes every stage.
 
 ## Rules that bite
 
@@ -151,11 +186,11 @@ a TTY; `SANDCASTLE_NO_UPDATE_NOTIFIER=1` silences them.
 | `sc info` / `sc status` / `sc version` | active context / tenant health / CLI version |
 | `sc ls`, `sc create`, `sc c`, `sc start\|stop\|restart\|delete`, `sc fix` | machine lifecycle |
 | `sc project …` | create, delete, list, switch, per-project settings |
-| `sc tenant …` / `sc remote …` | select tenant / manage and switch installs |
+| `sc tenant …` / `sc remote …` | select tenant (Personal or Shared; `*` marks the active one) / manage and switch installs |
 | `sc login` / `sc enroll` | device login and provisioning / enroll from a token |
 | `sc route …` | publish a machine port to the public Internet |
 | `sc image …` | save, list, remove reusable base images |
-| `sc dns …` / `sc trust …` / `sc ssh-key purge` | local resolver / tenant CA / known_hosts |
+| `sc dns …` / `sc trust …` / `sc ssh-key purge` | legacy local resolver / legacy tenant CA / known_hosts |
 | `sc tailscale …` | attach, detach, check the tenant sidecar |
 | `sc incus …` / `sc incus-infra …` | raw incus, scoped to the tenant's app / infra project |
 | `sc payload-sync` / `sc update` | converge the `/.sc` platform payload / update CLI + sidecar |

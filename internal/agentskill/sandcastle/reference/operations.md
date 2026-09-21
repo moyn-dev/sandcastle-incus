@@ -215,6 +215,15 @@ keeps a child from carrying the source machine's identity.
 
 ## DNS, trust, tailnet
 
+**Deprecated parts first.** Private-suffix names (`<machine>.<project>.<suffix>`
+served by the sidecar CoreDNS) and the tenant CA are the private-DNS era. The
+supported way to reach a machine by name over HTTPS is a Public DNS Zone plus a
+Project Domain (see "Project Domains and certificates"): real A records and
+Let's Encrypt certificates. `sc dns setup` and `sc trust install` remain for
+old private-only setups; do not recommend them, and `sc tenant switch` no
+longer hints them. `--dns-suffix` is deprecated too: the suffix defaults to the
+tenant name.
+
 Tailnet membership is the default state, not an opt-in: every sandcastle is on
 its Tenant Tailnet — tenant creation attaches the sidecar, and all access (CLI,
 SSH, DNS, the Incus remote itself) rides it. `sc tailscale up` re-attaches or
@@ -300,7 +309,7 @@ keep a `.bak`; a root-owned install directory needs the update run as root.
 ```bash
 sc login https://<auth-host>                      # device login in the browser
 sc login https://<auth-host> --force              # re-authenticate
-sc login https://<auth-host> --dns-suffix castle --default-project work
+sc login https://<auth-host> --default-project work   # (--dns-suffix is deprecated: the suffix is the tenant name)
 sc login https://<auth-host> --tailscale-auth-key … --ssh-public-key ~/.ssh/id_ed25519.pub
 sc enroll <tenant> --token <enrollment-token>     # enroll from an admin-minted token
 sc remote add <name> <join-token> --tenant <tenant>
@@ -313,8 +322,9 @@ sc remote add <name> <join-token> --tenant <tenant>
   verifies afterwards that traffic actually egresses over the tailnet, printing
   one ✓/✗ line per layer. `--skip-setup` skips the client-side DNS/trust/
   tailscale setup and that precheck.
-- The **Tenant DNS Suffix is immutable** once the tenant exists. A later
-  `--dns-suffix` on the same tenant is refused.
+- The **Tenant DNS Suffix is immutable** once the tenant exists and defaults to
+  the tenant name; `--dns-suffix` is deprecated and a differing later value is
+  refused.
 - Login shells out to the `incus` client, which must be installed
   (`incus-client` on Debian/Ubuntu).
 
@@ -322,11 +332,12 @@ sc remote add <name> <join-token> --tenant <tenant>
 
 ```bash
 sc tenant list                                    # "*" marks the active tenant; Role: owner | member
-sc tenant switch moyn-dev                         # member: enrols remote "<dns-suffix>" at the tenant
-                                                  # sidecar's tailnet IP, pins its default project
+sc tenant switch moyn-dev                         # member: enrols remote "moyn-dev" (the tenant's suffix, i.e. its
+                                                  # name) at the tenant sidecar's tailnet IP, pins its default project
 sc tenant switch thieso2                          # back to the personal tenant (re-activates its remote)
 sc-adm tenant create moyn-dev --member thieso2 --member skorfmann \
-    --tailscale-authkey … --dns-suffix moyn       # admin: Shared Tenant with two members
+    [--tailscale-authkey …]                       # admin: Shared Tenant with two members (pool derived; without a
+                                                  # key it prints the tailnet login URL — re-run once after joining)
 sc-adm tenant grant moyn-dev alice                # admin: add a member later (cert scope over every
                                                   # project, membership metadata, profiles, running machines)
 sc-adm tenant revoke moyn-dev alice
