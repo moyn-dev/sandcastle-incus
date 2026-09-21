@@ -6440,3 +6440,13 @@ by path worked) but not listable. New platform volumes get
 `initial.mode=0755`; existing ones keep 0711 (`initial.*` applies at
 creation only; the file API cannot chmod an existing directory) — harmless,
 just not browsable.
+
+## 2026-09-21 — prompt applied from PROMPT_COMMAND
+
+Live on dev2 the prompt stayed Debian's: the skel `~/.bashrc` sets PS1
+after `/etc/bash.bashrc` (where our shim runs). The rc now installs a
+one-shot `PROMPT_COMMAND` hook that replaces a stock prompt (one still
+containing `\u@\h`) at the first prompt and leaves a custom one alone.
+Interactive PATH/mise verified on dev2; non-interactive `ssh host cmd`
+shells do not read the rc (Debian's `.bashrc` returns early), which is a
+known limit — use `ssh host 'bash -ic cmd'` or a login shell for now.

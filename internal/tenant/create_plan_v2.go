@@ -359,8 +359,10 @@ fi
 # Sandcastle prompt: user@<fqdn>:<dir>$ — the machine's full private name
 # says where you are. When the login user IS the tenant (the default: the
 # FQDN ends in ".<user>"), the user is redundant and the prompt is just the
-# FQDN. Interactive shells only; a prompt the user set themselves in
-# ~/.bashrc / ~/.zshrc runs after this file and wins.
+# FQDN. The stock ~/.bashrc (Debian's skel) sets its own PS1 AFTER this
+# file, so bash applies ours from PROMPT_COMMAND at the first prompt — and
+# only over the stock prompt (one that still shows \u@\h): a prompt the
+# user chose is left alone. zsh sets PROMPT here; ~/.zshrc may override.
 if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
   __sc_fqdn="$(hostname -f 2>/dev/null || hostname)"
   __sc_user="$(id -un 2>/dev/null)"
@@ -371,7 +373,14 @@ if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
   if [ -n "$ZSH_VERSION" ]; then
     PROMPT="$__sc_prompt_host:%~%# "
   elif [ -n "$BASH_VERSION" ]; then
-    PS1="$__sc_prompt_host"':\w\$ '
+    SC_PROMPT_HOST="$__sc_prompt_host"
+    __sc_prompt() {
+      case "$PS1" in
+        *'\u@\h'*|'') PS1="$SC_PROMPT_HOST"':\w\$ ' ;;
+      esac
+      PROMPT_COMMAND="${PROMPT_COMMAND#__sc_prompt;}"; PROMPT_COMMAND="${PROMPT_COMMAND#__sc_prompt}"
+    }
+    PROMPT_COMMAND="__sc_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   fi
   unset __sc_fqdn __sc_user __sc_prompt_host
 fi
