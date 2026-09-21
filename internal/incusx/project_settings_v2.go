@@ -23,6 +23,11 @@ func (c TenantCreator) SetProjectCloudIdentity(_ context.Context, incusProject s
 	return c.updateProjectConfig(incusProject, meta.KeyV2CloudIdentity, strings.TrimSpace(cloudIdentity))
 }
 
+// SetProjectImage stores (or clears, with "") a project's default machine image.
+func (c TenantCreator) SetProjectImage(_ context.Context, incusProject string, image string) error {
+	return c.updateProjectConfig(incusProject, meta.KeyV2Image, strings.TrimSpace(image))
+}
+
 func (c TenantCreator) SetProjectDockerAutostart(_ context.Context, incusProject string, enabled bool) error {
 	return c.updateProjectConfig(incusProject, meta.KeyV2DockerAutostart, strconv.FormatBool(enabled))
 }

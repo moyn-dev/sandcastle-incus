@@ -22,6 +22,18 @@ import (
 // (login user + SSH key + sshd). The plain variant would boot without any user.
 const v2DefaultMachineImage = "images:debian/13/cloud"
 
+// projectDefaultImage is the image a machine launches from when --image is
+// not given: the project's `sc project set-image` choice, else the stock
+// default.
+func projectDefaultImage(summary tenant.Summary, project string) string {
+	for _, p := range summary.Projects {
+		if p.Name == project && strings.TrimSpace(p.Image) != "" {
+			return strings.TrimSpace(p.Image)
+		}
+	}
+	return v2DefaultMachineImage
+}
+
 // v2TenantSummary resolves the current tenant against the remote and reports
 // whether it is a v2 tenant (per-project Incus projects, freeform machines).
 //
@@ -327,7 +339,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 	}
 	image := strings.TrimSpace(options.Image)
 	if image == "" {
-		image = v2DefaultMachineImage
+		image = projectDefaultImage(summary, project)
 	}
 	// The Dev Image gets no Caddy/TLS ingress (it is reached over SSH, not
 	// HTTPS) — detected by the --image the machine launches from matching the
@@ -550,7 +562,7 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	request := incusx.CreateMachineV2Request{
 		IncusProject: summary.V2IncusProjectName(project),
 		Name:         machineName,
-		Image:        v2DefaultMachineImage,
+		Image:        projectDefaultImage(summary, project),
 		VM:           vm,
 		HomeShare:    launch.HomeShare,
 		// Only used when the ensure has to create: the public-name set a

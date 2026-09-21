@@ -60,6 +60,10 @@ const (
 	// ever read back, so `sc project set-cloud-identity` was a no-op.
 	KeyV2CloudIdentity   = Prefix + "v2.cloud-identity"
 	KeyV2DockerAutostart = Prefix + "v2.docker-autostart"
+	// KeyV2Image holds a project's default machine image (an Incus image ref
+	// such as images:ubuntu/26.04 or a saved alias) on its own kind=project
+	// Incus project; `sc create` uses it when --image is not given.
+	KeyV2Image = Prefix + "v2.image"
 	// KeyV2TailnetEgress holds the tenant's tailnet-egress toggle on the
 	// kind=infra project (ADR-0026): "true" means machines reach tailnet peers
 	// (100.64.0.0/10) through the sidecar — a DHCP classless static route on the
@@ -171,6 +175,9 @@ type Project struct {
 	// Domain is the project's Project Domain (KeyV2Domain, ADR-0027); empty
 	// for a private-mode project.
 	Domain string `json:"domain,omitempty"`
+	// Image is the project's default machine image (KeyV2Image); empty means
+	// the CLI's stock default.
+	Image string `json:"image,omitempty"`
 }
 
 type Tailscale struct {

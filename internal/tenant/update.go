@@ -3,6 +3,7 @@ package tenant
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
@@ -18,6 +19,7 @@ type ProjectMutationRequest struct {
 	Machines        []meta.Machine
 	CloudIdentity   string
 	DockerAutostart bool
+	Image           string
 }
 
 type ProjectMutationPlan struct {
@@ -207,4 +209,49 @@ func summaryHasProject(summary Summary, name string) bool {
 		}
 	}
 	return false
+}
+
+// PlanSetProjectImage records a project's default machine image ("" clears
+// it back to the CLI's stock default). The image ref is not validated against
+// the remote here: aliases and images: refs resolve at `sc create` time.
+func PlanSetProjectImage(ctx context.Context, admin config.Admin, store IncusTenantStore, request ProjectMutationRequest) (ProjectMutationPlan, error) {
+	if err := admin.Validate(); err != nil {
+		return ProjectMutationPlan{}, err
+	}
+	if err := naming.ValidateProjectName(request.Name); err != nil {
+		return ProjectMutationPlan{}, err
+	}
+	image := strings.TrimSpace(request.Image)
+	if strings.ContainsAny(image, " \t\n") {
+		return ProjectMutationPlan{}, fmt.Errorf("invalid image reference %q", request.Image)
+	}
+	summary, err := findCurrentTenant(ctx, admin, store)
+	if err != nil {
+		return ProjectMutationPlan{}, err
+	}
+	projects := append([]meta.Project{}, summary.Projects...)
+	var updated meta.Project
+	found := false
+	for i := range projects {
+		if projects[i].Name == request.Name {
+			projects[i].Image = image
+			updated = projects[i]
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ProjectMutationPlan{}, fmt.Errorf("Sandcastle project %s not found in tenant %s", request.Name, summary.Tenant)
+	}
+	action := "set default image " + image + " on"
+	if image == "" {
+		action = "clear the default image of"
+	}
+	return ProjectMutationPlan{
+		Action:       action,
+		Tenant:       summary,
+		Project:      updated,
+		Projects:     projects,
+		IncusProject: summary.IncusName,
+	}, nil
 }

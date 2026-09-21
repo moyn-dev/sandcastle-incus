@@ -136,6 +136,7 @@ type authWorkloadClient interface {
 type projectSettingsUpdater interface {
 	SetProjectCloudIdentity(ctx context.Context, incusProject string, cloudIdentity string) error
 	SetProjectDockerAutostart(ctx context.Context, incusProject string, enabled bool) error
+	SetProjectImage(ctx context.Context, incusProject string, image string) error
 }
 
 // projectDeleter removes one app project of a v2 tenant, with its machines,

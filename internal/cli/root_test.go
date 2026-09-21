@@ -1722,6 +1722,34 @@ func TestProjectSetDockerAutostartUpdatesDefaultProject(t *testing.T) {
 	}
 }
 
+func TestProjectSetAndUnsetImage(t *testing.T) {
+	projects := v2TenantProjects("acme", "10.248.0.0/24", "default", "work")
+	updater := &fakeProjectUpdater{}
+	stdout, err := executeForTestWithConfig(t, commandConfig{
+		name: "sandcastle", projectSettings: updater, tenantStore: tenant.MemoryStore{Projects: projects},
+	}, "project", "set-image", "work", "images:ubuntu/26.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "set default image images:ubuntu/26.04 on project work") || updater.incusProject != "sc2-acme-work" || updater.image != "images:ubuntu/26.04" {
+		t.Fatalf("stdout = %q updater = %#v", stdout, updater)
+	}
+	updater = &fakeProjectUpdater{}
+	if _, err := executeForTestWithConfig(t, commandConfig{
+		name: "sandcastle", projectSettings: updater, tenantStore: tenant.MemoryStore{Projects: projects},
+	}, "project", "unset-image", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if !updater.called || updater.image != "" {
+		t.Fatalf("unset updater = %#v", updater)
+	}
+	if _, err := executeForTestWithConfig(t, commandConfig{
+		name: "sandcastle", projectSettings: &fakeProjectUpdater{}, tenantStore: tenant.MemoryStore{Projects: projects},
+	}, "project", "set-image", "work", "bad ref"); err == nil {
+		t.Fatal("image ref with whitespace accepted")
+	}
+}
+
 func TestProjectDeleteRejectsNonEmptyProject(t *testing.T) {
 	projects := v2TenantProjects("acme", "10.248.0.0/24", "default", "website")
 	_, err := executeForTestWithConfig(t, commandConfig{
@@ -2742,12 +2770,20 @@ type fakeProjectUpdater struct {
 	incusProject    string
 	cloudIdentity   string
 	dockerAutostart bool
+	image           string
 }
 
 func (f *fakeProjectUpdater) SetProjectCloudIdentity(_ context.Context, incusProject string, cloudIdentity string) error {
 	f.called = true
 	f.incusProject = incusProject
 	f.cloudIdentity = cloudIdentity
+	return nil
+}
+
+func (f *fakeProjectUpdater) SetProjectImage(_ context.Context, incusProject string, image string) error {
+	f.called = true
+	f.incusProject = incusProject
+	f.image = image
 	return nil
 }
 

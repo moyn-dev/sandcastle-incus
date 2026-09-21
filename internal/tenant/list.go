@@ -160,6 +160,7 @@ func v2Summaries(projects []IncusProject, installPrefix string) []Summary {
 			CloudIdentity:   strings.TrimSpace(incusProject.Config[meta.KeyV2CloudIdentity]),
 			DockerAutostart: strings.TrimSpace(incusProject.Config[meta.KeyV2DockerAutostart]) == "true",
 			Domain:          strings.TrimSpace(incusProject.Config[meta.KeyV2Domain]),
+			Image:           strings.TrimSpace(incusProject.Config[meta.KeyV2Image]),
 		})
 	}
 	summaries := make([]Summary, 0, len(order))

@@ -27,6 +27,8 @@ func newProjectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command.AddCommand(newProjectSetCloudIdentityCommand(config, opts))
 	command.AddCommand(newProjectUnsetCloudIdentityCommand(config, opts))
 	command.AddCommand(newProjectSetDockerAutostartCommand(config, opts))
+	command.AddCommand(newProjectSetImageCommand(config, opts))
+	command.AddCommand(newProjectUnsetImageCommand(config, opts))
 	command.AddCommand(newProjectDeleteCommand(config, opts))
 	return command
 }
@@ -628,6 +630,9 @@ func formatProjectNamespaceStatus(status projectStatusPayload) string {
 	if status.Project.DockerAutostart {
 		fmt.Fprintln(&builder, "Docker autostart: on")
 	}
+	if status.Project.Image != "" {
+		fmt.Fprintf(&builder, "Default image: %s\n", status.Project.Image)
+	}
 	fmt.Fprintf(&builder, "Machines: %d\n", status.MachineCount)
 	if status.Domain == "" {
 		fmt.Fprint(&builder, "Domain: (none)")
@@ -692,4 +697,48 @@ func findProject(summary tenant.Summary, name string) (meta.Project, bool) {
 		}
 	}
 	return meta.Project{}, false
+}
+
+func newProjectSetImageCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use:   "set-image name image",
+		Short: "Set the default image for new machines in a project (an images: ref or a saved alias)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProjectSetImage(cmd.Context(), config, opts, args[0], args[1], dryRun)
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "render the project metadata update without mutating resources")
+	return command
+}
+
+func newProjectUnsetImageCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use:   "unset-image name",
+		Short: "Clear a project's default image (new machines use the stock default again)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProjectSetImage(cmd.Context(), config, opts, args[0], "", dryRun)
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "render the project metadata update without mutating resources")
+	return command
+}
+
+func runProjectSetImage(ctx context.Context, config commandConfig, opts *rootOptions, project string, image string, dryRun bool) error {
+	plan, err := tenant.PlanSetProjectImage(ctx, config.adminConfig, config.tenantStore, tenant.ProjectMutationRequest{Name: project, Image: image})
+	if err != nil {
+		return err
+	}
+	if !dryRun {
+		if config.projectSettings == nil {
+			return fmt.Errorf("project settings updater is not configured")
+		}
+		if err := config.projectSettings.SetProjectImage(ctx, plan.Tenant.V2IncusProjectName(project), image); err != nil {
+			return err
+		}
+	}
+	return writeOutput(config.stdout, opts.output, formatProjectMutationPlan(plan), plan)
 }

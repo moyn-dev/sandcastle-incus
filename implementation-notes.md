@@ -6469,3 +6469,12 @@ prompt, the rest is exactly the reference grammar, and the parser accepts
 (and ignores) a leading `tenant@` so a printed path pastes back into any
 command. A `remote/project` variant was considered and rejected because it
 would have introduced a second grammar next to the colon one.
+
+## 2026-09-21 — `sc project set-image` / `unset-image`
+
+A per-project default machine image (`v2.image` on the app project), used
+by `sc create` and the auto-create of `sc connect` when `--image` is not
+given. Stored as a plain ref (an `images:` ref or an alias from `sc image
+save`) and not validated against the remote at set time — aliases resolve at
+create time, and a project may be configured before its image is published.
+Mirrors the docker-autostart setting's plan/updater shape.
