@@ -244,3 +244,26 @@ func TestTenantSwitchRepointsADriftedSharedRemote(t *testing.T) {
 		t.Fatalf("unchanged remote re-installed: %#v", installer.requests)
 	}
 }
+
+func TestMachinePathAndReferencePrefixRoundTrip(t *testing.T) {
+	if got := machinePath("obelix", "thieso2", "work", "dev"); got != "thieso2@obelix:work:dev" {
+		t.Fatalf("machinePath = %q", got)
+	}
+	if got := scopePath("obelix", "thieso2", "work"); got != "thieso2@obelix:work" {
+		t.Fatalf("scopePath = %q", got)
+	}
+	if got := machinePath("", "", "work", "dev"); got != "work:dev" {
+		t.Fatalf("bare path = %q", got)
+	}
+	if got := machinePath("obelix", "", "work", "dev"); got != "obelix:work:dev" {
+		t.Fatalf("no-tenant path = %q", got)
+	}
+	// The printed form pastes back into any command: tenant@ is ignored.
+	suffix, project, machine, err := splitMachineReference("thieso2@obelix:work:dev", "default")
+	if err != nil || suffix != "obelix" || project != "work" || machine != "dev" {
+		t.Fatalf("split = %q %q %q %v", suffix, project, machine, err)
+	}
+	if _, project, machine, err := splitMachineReference("thieso2@work:dev", "default"); err != nil || project != "work" || machine != "dev" {
+		t.Fatalf("split project ref = %q %q %v", project, machine, err)
+	}
+}

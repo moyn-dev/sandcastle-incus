@@ -19,7 +19,7 @@ func TestConfirmCreateMissingMachine(t *testing.T) {
 		if err := confirmCreateMissingMachine(config, false)("web", "dev"); err != nil {
 			t.Fatalf("confirmed create rejected: %v", err)
 		}
-		if !strings.Contains(stderr.String(), "Machine obelix:acme:web:dev does not exist. Create it? [y/N]") {
+		if !strings.Contains(stderr.String(), "Machine acme@obelix:web:dev does not exist. Create it? [y/N]") {
 			t.Fatalf("prompt %q does not name the machine and project", stderr.String())
 		}
 	})

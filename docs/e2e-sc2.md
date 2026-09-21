@@ -1314,7 +1314,7 @@ sc list                                        # lc1 gone
   `/home`; on the shared `/home` volume when created with `--home-share`).
 - `sc c <machine>` creates a missing machine, starts a stopped one, waits for
   sshd, and lands an SSH session as the profile login user. Creating one is
-  **confirmed first**: `Machine <remote>:<tenant>:default:lc1 does not exist. Create
+  **confirmed first**: `Machine <tenant>@<remote>:default:lc1 does not exist. Create
   it? [y/N]`, and anything but `y`/`yes` cancels with `create canceled` and
   creates nothing. `--yes` skips the prompt; with no terminal the missing
   `--yes` is an error (`… pass --yes to create it`), not a silent create.
@@ -2003,7 +2003,7 @@ machine, so `/.sc` platform-payload updates reach it too (ADR-0022).
 
 ```bash
 sc create --bare web
-# → Machine <remote>:<tenant>:default:web created (container, image images:debian/13/cloud).
+# → Machine <tenant>@<remote>:default:web created (container, image images:debian/13/cloud).
 #   HTTPS: https://web.default.<suffix>   (Caddy with the tenant-CA leaf, …)
 #   Bare: no login user, no sshd — `sc connect` will not work; …
 

@@ -127,8 +127,8 @@ func installPrefixFromRemoteName(remote string, tenantName string) string {
 	return ""
 }
 
-// splitMachineReference splits "[[dns-suffix:]project:]machine" (ADR-0020) into
-// its parts WITHOUT validating them. Colon count selects scope: 0 colons =
+// splitMachineReference splits "[tenant@][[dns-suffix:]project:]machine"
+// (ADR-0020) into its parts WITHOUT validating them. Colon count selects scope: 0 colons =
 // machine only, 1 = project:machine, 2 = dns-suffix:project:machine (the
 // leftmost part names the install by its DNS suffix). The project defaults to
 // the configured Current Project, then to "default". A returned dnsSuffix of ""
@@ -141,6 +141,12 @@ func installPrefixFromRemoteName(remote string, tenantName string) string {
 func splitMachineReference(reference string, currentProject string) (dnsSuffix string, project string, machine string, err error) {
 	reference = strings.TrimSpace(reference)
 	project = strings.TrimSpace(currentProject)
+	// Messages print machines as tenant@remote:project:machine; the tenant@
+	// prefix is accepted (and ignored — the remote implies the tenant) so a
+	// printed path pastes back into any command.
+	if at := strings.Index(reference, "@"); at >= 0 && !strings.Contains(reference[:at], ":") {
+		reference = reference[at+1:]
+	}
 	parts := strings.Split(reference, ":")
 	switch len(parts) {
 	case 1:

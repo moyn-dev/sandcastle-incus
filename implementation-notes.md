@@ -6459,3 +6459,13 @@ re-runs the freshly installed binary as a child (`update --yes
 --no-self-update`, hidden flag) with stdio passed through — a child rather
 than exec(2) so it stays portable and the exit status propagates — and each
 stage narrates what it changes.
+
+## 2026-09-21 — machine paths as `tenant@remote:project:machine`
+
+The colon-only form (`obelix:thieso2:work:dev`) read poorly and doubled up
+for a shared tenant whose remote carries its name. Messages now print
+`thieso2@obelix:work:dev`: the `tenant@` reads like the machine's shell
+prompt, the rest is exactly the reference grammar, and the parser accepts
+(and ignores) a leading `tenant@` so a printed path pastes back into any
+command. A `remote/project` variant was considered and rejected because it
+would have introduced a second grammar next to the colon one.
