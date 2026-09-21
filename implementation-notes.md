@@ -5,6 +5,18 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — Path walks fetch a tenant's machines once
+
+`sc ls -la '/obelix/*/*/test'` took 3.7 s: the tree walk asked the Auth
+App resource cache once per project (22 sequential round trips of ~150 ms)
+for data `sc ls -a` gets in one request. A per-listing `treeCache` rides
+the context: when a glob, `**` or `-R` is about to visit a tenant's
+projects, the first project visit fetches the tenant's machines with the
+all-projects request and every project is served from memory. A literal
+single project still costs one project-scoped request, which is cheaper
+on the live-Incus fallback path. Same sweep now ~0.4–0.9 s; the remaining
+cost is the tenant and project requests per remote, still sequential.
+
 ## 2026-09-21 — Listings: position line first, names by default, -l for tables
 
 Asked: `sc ls` and the other level listings print short by default and the

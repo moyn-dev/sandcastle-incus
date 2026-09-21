@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
@@ -175,11 +176,36 @@ func projectEntries(ctx context.Context, config commandConfig, remote string, te
 }
 
 func machineEntries(ctx context.Context, config commandConfig, remote string, tenantName string, project string) ([]pathEntry, error) {
+	cache := treeCacheFrom(ctx)
+	key := remote + "/" + tenantName
+	if cache != nil {
+		if byProject, ok := cache.machines[key]; ok {
+			return machineEntriesOf(byProject[project]), nil
+		}
+	}
 	bound, restore, err := configForPosition(config, remote, tenantName)
 	if err != nil {
 		return nil, err
 	}
 	defer restore()
+	if cache != nil && cache.batch[key] {
+		// A glob is about to visit several projects of this tenant: one
+		// tenant-wide request, served per project from memory, instead of
+		// one round trip per project (22 projects took 3.7 s that way).
+		request := listMachinesRequest{AllProjects: true}
+		result, ok := listMachinesViaCache(ctx, bound, request, listRenderOptions{})
+		if !ok {
+			if result, err = listMachines(ctx, bound, request); err != nil {
+				return nil, err
+			}
+		}
+		byProject := map[string][]meta.Machine{}
+		for _, m := range result.Machines {
+			byProject[m.Project] = append(byProject[m.Project], m)
+		}
+		cache.machines[key] = byProject
+		return machineEntriesOf(byProject[project]), nil
+	}
 	request := listMachinesRequest{Project: project}
 	result, ok := listMachinesViaCache(ctx, bound, request, listRenderOptions{})
 	if !ok {
@@ -187,8 +213,12 @@ func machineEntries(ctx context.Context, config commandConfig, remote string, te
 			return nil, err
 		}
 	}
+	return machineEntriesOf(result.Machines), nil
+}
+
+func machineEntriesOf(machines []meta.Machine) []pathEntry {
 	entries := []pathEntry{}
-	for _, m := range result.Machines {
+	for _, m := range machines {
 		state := "stopped"
 		if m.Running {
 			state = "running"
@@ -196,7 +226,35 @@ func machineEntries(ctx context.Context, config commandConfig, remote string, te
 		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, formatListCreatedAt(m.CreatedAt), displayValue(m.RenderedVersion)}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-	return entries, nil
+	return entries
+}
+
+// treeCache is one path listing's memory: machines already fetched per
+// tenant (remote/tenant → project → machines), and the tenants a glob is
+// about to sweep, whose first project visit fetches the whole tenant. It
+// rides the context so childrenOf keeps its signature for completion.
+type treeCache struct {
+	machines map[string]map[string][]meta.Machine
+	batch    map[string]bool
+}
+
+type treeCacheKey struct{}
+
+func withTreeCache(ctx context.Context) (context.Context, *treeCache) {
+	cache := &treeCache{machines: map[string]map[string][]meta.Machine{}, batch: map[string]bool{}}
+	return context.WithValue(ctx, treeCacheKey{}, cache), cache
+}
+
+func treeCacheFrom(ctx context.Context) *treeCache {
+	cache, _ := ctx.Value(treeCacheKey{}).(*treeCache)
+	return cache
+}
+
+// markBatch notes that the projects of a tenant-level match will be swept.
+func (c *treeCache) markBatch(segments []string) {
+	if c != nil && len(segments) == levelTenant {
+		c.batch[segments[0]+"/"+segments[1]] = true
+	}
 }
 
 // pathMatch is one path a (possibly globbing) argument expanded to.
@@ -234,6 +292,9 @@ func expandPath(ctx context.Context, config commandConfig, segments []string, wa
 				next = append(next, loose)
 				next = append(next, descendants(ctx, config, match.Segments, levelMachine-remaining, warnings)...)
 				continue
+			}
+			if naming.IsPattern(segment) {
+				treeCacheFrom(ctx).markBatch(match.Segments)
 			}
 			leaf := len(match.Segments) == levelProject
 			if !naming.IsPattern(segment) && !leaf && !match.Loose {
@@ -278,6 +339,9 @@ func expandPath(ctx context.Context, config commandConfig, segments []string, wa
 func descendants(ctx context.Context, config commandConfig, segments []string, maxDepth int, warnings *[]string) []pathMatch {
 	if len(segments) >= maxDepth {
 		return nil
+	}
+	if maxDepth > levelProject {
+		treeCacheFrom(ctx).markBatch(segments)
 	}
 	children, err := childrenOf(ctx, config, segments)
 	if err != nil {
@@ -326,6 +390,7 @@ func dedupeMatches(matches []pathMatch) []pathMatch {
 // is listed (a directory's children, or the leaf itself), and directories
 // recurse with -R.
 func listPaths(ctx context.Context, config commandConfig, args []string, options pathListOptions) (pathListPayload, error) {
+	ctx, _ = withTreeCache(ctx)
 	payload := pathListPayload{Listings: []pathListing{}}
 	if len(args) == 0 {
 		args = []string{"."}
@@ -381,6 +446,10 @@ func dedupeStrings(values []string) []string {
 // directories when asked. A child that cannot be read becomes a warning, so
 // one unreachable install does not hide the others (as `sc ls '*:*:*'` does).
 func listDirectory(ctx context.Context, config commandConfig, segments []string, recursive bool, payload *pathListPayload) error {
+	if recursive {
+		// -R visits every project of a tenant: fetch its machines once.
+		treeCacheFrom(ctx).markBatch(segments)
+	}
 	children, err := childrenOf(ctx, config, segments)
 	if err != nil {
 		if len(segments) > levelRoot && len(payload.Listings) > 0 {
