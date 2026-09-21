@@ -6514,3 +6514,13 @@ domain), so profile changes shipped in a release (no zsh, bash shell)
 never reached existing projects. `sc project rerender [name]` (Auth App,
 admin rights) and `sc-adm tenant rerender <tenant> [project]` re-render on
 demand; cloud-init runs once per machine, so only new machines see it.
+
+## 2026-09-21 — bare-name lookup: current project first, then the cache
+
+`sc del dev` still listed every project of the tenant (26 `recursion=2`
+listings, ~8 s) to find where `dev` lives before honouring the current
+project. The lookup now asks the Auth App resource cache (one request) or,
+without it, lists only the current project; the tenant-wide sweep is the
+last resort. Also on obelix: the `newbuild2` profile was re-rendered as
+operator with `sc-adm tenant rerender thieso2 newbuild2` (the appliance is
+on v0.18.18 and lacks the tenant-plane rerender endpoint until updated).

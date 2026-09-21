@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"slices"
 )
 
 // v2DefaultMachineImage is the stock cloud image v2 machines launch from: the
@@ -259,16 +261,16 @@ func resolveV2MachineTarget(ctx context.Context, config commandConfig, summary t
 	if err != nil || v2ReferenceHasProject(reference) {
 		return project, machine, err
 	}
+	// The current project first, and cheaply: one project-scoped listing
+	// (or the Auth App cache), never a sweep of every project of the tenant.
+	if current := strings.TrimSpace(config.adminConfig.Project); current != "" {
+		if found, err := v2MachineInProject(ctx, config, summary, current, machine); err == nil && found {
+			return current, machine, nil
+		}
+	}
 	projects, err := v2MachineProjects(ctx, config, summary, machine)
 	if err != nil {
 		return "", "", err
-	}
-	if current := strings.TrimSpace(config.adminConfig.Project); current != "" {
-		for _, candidate := range projects {
-			if candidate == current {
-				return current, machine, nil
-			}
-		}
 	}
 	switch len(projects) {
 	case 0:
@@ -291,9 +293,76 @@ func resolveV2MachineTarget(ctx context.Context, config commandConfig, summary t
 	return projects[choice], machine, nil
 }
 
+// v2MachineInProject reports whether the named machine exists in ONE project:
+// the Auth App cache when it answers, else a project-scoped store listing.
+func v2MachineInProject(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machine string) (bool, error) {
+	if projects, ok := v2MachineProjectsViaCache(ctx, config, summary, project, machine); ok {
+		return slices.Contains(projects, project), nil
+	}
+	if config.machineStore == nil {
+		return false, fmt.Errorf("machine metadata store is not configured")
+	}
+	machines, err := listMachinesScoped(ctx, config.machineStore, summary, project)
+	if err != nil {
+		return false, err
+	}
+	for _, managed := range machines {
+		if managed.Name == machine && firstNonEmptyString(managed.Project, naming.DefaultProjectName) == project {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// v2MachineProjectsViaCache answers "which projects hold this machine" from
+// the Auth App's event-fed resource cache — one request instead of one Incus
+// listing per project (a 26-project tenant took ~8 s live). ok=false on any
+// non-answer, exactly like `sc ls`'s cache fallback; the caller then lists.
+func v2MachineProjectsViaCache(ctx context.Context, config commandConfig, summary tenant.Summary, project string, machine string) ([]string, bool) {
+	client := config.authResources
+	if client == nil {
+		token := strings.TrimSpace(config.adminConfig.AuthToken)
+		baseURL := commandAuthHostname(config, "")
+		if token == "" || baseURL == "" {
+			return nil, false
+		}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
+	defer cancel()
+	result, err := client.ListResources(cacheCtx, authapp.ResourceListRequest{
+		Tenant:  summary.Tenant,
+		Project: firstNonEmptyString(project, "*"),
+		Machine: machine,
+		Include: []string{authapp.ResourceKindMachines},
+	})
+	if err != nil {
+		verboseCLI(config, "machine lookup: cache unavailable (%v); listing live", err)
+		return nil, false
+	}
+	seen := map[string]bool{}
+	var projects []string
+	for _, m := range result.Machines {
+		if m.Name != machine {
+			continue
+		}
+		p := firstNonEmptyString(m.Project, naming.DefaultProjectName)
+		if !seen[p] {
+			seen[p] = true
+			projects = append(projects, p)
+		}
+	}
+	sort.Strings(projects)
+	return projects, true
+}
+
 // v2MachineProjects returns, sorted, the projects of the tenant that hold a
-// machine with the given name.
+// machine with the given name: the Auth App cache when it answers, else a
+// listing of every project.
 func v2MachineProjects(ctx context.Context, config commandConfig, summary tenant.Summary, machine string) ([]string, error) {
+	if projects, ok := v2MachineProjectsViaCache(ctx, config, summary, "*", machine); ok {
+		return projects, nil
+	}
 	if config.machineStore == nil {
 		return nil, fmt.Errorf("machine metadata store is not configured")
 	}
