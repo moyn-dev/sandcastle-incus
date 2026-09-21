@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -195,5 +197,50 @@ func TestResolveTenantCIDRPoolPrefersFlagThenConfigThenSiblings(t *testing.T) {
 	// The unconfigured admin default is not "configured": siblings still win.
 	if got := resolveTenantCIDRPool("", scconfig.DefaultCIDRPool, []string{"10.123.5.0/24"}); got != "10.123.0.0/16" {
 		t.Fatalf("admin default vs siblings: %q", got)
+	}
+}
+
+func TestTenantSwitchRepointsADriftedSharedRemote(t *testing.T) {
+	useLoginHomeForTest(t)
+	t.Chdir(t.TempDir())
+	// The shared incus config already has the remote, at the OLD sidecar address.
+	incusDir, _ := scconfig.SharedIncusDirExplained()
+	if err := os.MkdirAll(incusDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(incusDir, "config.yml"), []byte("remotes:\n  moyn-dev:\n    addr: https://100.118.11.49:8443\n    project: sc2-moyn-dev-default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), scconfig.SandcastleConfig{
+		Tenant: "thieso2", Remote: "thieso2sh", AuthHostname: "https://auth.example.com", AuthToken: "stored-token",
+		Installs: map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
+		RemoteTenants: map[string]string{"thieso2sh": "thieso2", "moyn-dev": "moyn-dev"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "moyn-dev", Shared: true, Member: true, DNSSuffix: "moyn-dev", DefaultProject: "default", IncusProject: "sc2-moyn-dev-default", IncusRemoteAddress: "100.83.101.4"}}}
+	installer := &fakeTenantRemoteInstaller{}
+	admin := testAdminConfig()
+	admin.Tenant, admin.Remote, admin.AuthHostname, admin.AuthToken = "thieso2", "thieso2sh", "https://auth.example.com", "stored-token"
+	stdout, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client, tenantRemote: installer}, "tenant", "switch", "moyn-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installer.requests) != 1 || installer.requests[0].IncusAddress != "100.83.101.4" {
+		t.Fatalf("drifted remote not re-pointed: %#v", installer.requests)
+	}
+	if !strings.Contains(stdout, "re-pointing to 100.83.101.4") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	// Same address again: nothing to do.
+	installer.requests = nil
+	if err := os.WriteFile(filepath.Join(incusDir, "config.yml"), []byte("remotes:\n  moyn-dev:\n    addr: https://100.83.101.4:8443\n    project: sc2-moyn-dev-default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client, tenantRemote: installer}, "tenant", "switch", "moyn-dev"); err != nil {
+		t.Fatal(err)
+	}
+	if len(installer.requests) != 0 {
+		t.Fatalf("unchanged remote re-installed: %#v", installer.requests)
 	}
 }

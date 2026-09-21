@@ -6384,3 +6384,13 @@ every machine; the operator wants the default lean. The profile now installs
 shim is still appended to both `/etc/bash.bashrc` and `/etc/zsh/zshrc`
 (harmless without zsh; picked up if a user installs it). The Dev Image keeps
 its own zsh/starship setup — that image is opinionated by design.
+
+## 2026-09-21 — `sc tenant switch` re-points a drifted shared remote
+
+Live on obelix the moyn-dev sidecar re-registered on the tailnet as
+`obelix-moyn-dev-1` with a new address; the member's remote still pointed at
+the old, offline node and every command timed out on :8443. The switch now
+compares the remote's recorded address with the one the Auth App reports
+and re-points it (`incus remote set-url`) when they differ. The stale
+tailnet device has to be deleted in the admin console (see the e2e doc's
+"stale sidecar devices" note).

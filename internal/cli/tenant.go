@@ -244,10 +244,22 @@ func ensureSharedTenantRemote(ctx context.Context, config commandConfig, cfg *sc
 		remoteName = tenantName
 	}
 	incusDir, _ := scconfig.SharedIncusDirExplained()
-	if cfg.TenantForRemote(remoteName) != tenantName || !remoteExists(incusDir, remoteName) {
-		address := strings.TrimSpace(access.IncusRemoteAddress)
+	address := strings.TrimSpace(access.IncusRemoteAddress)
+	// Re-point a remote whose recorded address drifted: a sidecar that
+	// re-registered on the tailnet gets a new address, and the Auth App
+	// reports the live one — the stale node answers nothing but timeouts.
+	drifted := false
+	if address != "" && remoteExists(incusDir, remoteName) {
+		if current, err := remoteAddress(filepath.Join(incusDir, "config.yml"), remoteName); err == nil {
+			drifted = strings.TrimSuffix(strings.TrimSpace(current), "/") != "https://"+net.JoinHostPort(address, "8443")
+		}
+	}
+	if cfg.TenantForRemote(remoteName) != tenantName || !remoteExists(incusDir, remoteName) || drifted {
 		if address == "" {
 			return "", fmt.Errorf("shared tenant %s has no Incus Reach address yet: its sidecar has not joined the tailnet; ask the tenant owner to complete the join (sc login / sc tailscale up), then retry", tenantName)
+		}
+		if drifted {
+			fmt.Fprintf(config.stdout, "Incus remote %q pointed at a previous sidecar address; re-pointing to %s.\n", remoteName, address)
 		}
 		installer := config.tenantRemote
 		if installer == nil {
