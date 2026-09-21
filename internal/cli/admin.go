@@ -488,7 +488,9 @@ func printTailscaleLoginURL(w io.Writer, url string) {
 		return
 	}
 	fmt.Fprintf(w, "\nTailscale: no auth key was given, so the sidecar is not on a tailnet yet.\n"+
-		"Register it by opening this URL and approving the machine:\n  %s\n", url)
+		"Register it by opening this URL and approving the machine:\n  %s\n"+
+		"Then re-run this same command once: it completes the Incus Reach on the joined sidecar\n"+
+		"(members' `sc tenant switch` also completes it on first use).\n", url)
 }
 
 func formatCreatePlanV2(plan tenant.CreatePlanV2) string {

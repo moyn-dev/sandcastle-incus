@@ -6333,3 +6333,15 @@ checksums file still verifies every download. The API is the fallback only
 grace). A pinned tag is checked against its page so a typo fails early. A
 `GITHUB_TOKEN` / `GH_TOKEN` in the environment is used when present, never
 required.
+
+## 2026-09-21 — Incus Reach after an interactive sidecar join
+
+`sc-adm tenant create` without `--tailscale-authkey` prints the login URL and
+returns; the sidecar joins later, but the Reach (`tailscale serve` of the
+host's Incus :8443 onto the sidecar's tailnet address) only runs on a later
+provisioning pass, which login re-polls for and the admin create does not.
+A member's `sc tenant switch` then hit "connection refused" on the sidecar's
+:8443 (live on obelix, moyn-dev). `SidecarTailnetIPV2` — what the Auth App
+calls to report the address to a member — now completes the Reach
+idempotently before answering, and the create's URL hint says to re-run the
+command once after joining.

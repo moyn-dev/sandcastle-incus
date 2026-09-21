@@ -366,17 +366,28 @@ func sshKeyMaterial(key string) string {
 
 // SidecarTailnetIPV2 returns the tenant sidecar's tailnet IPv4 — the address a
 // member's Incus remote must point at (the Incus Reach, ADR-0017) — or "" when
-// the sidecar has not joined a tailnet yet.
+// the sidecar has not joined a tailnet yet. It also (idempotently) completes
+// the Reach itself: a sidecar joined through the interactive login URL of
+// `sc-adm tenant create` has an address but no `tailscale serve` yet, because
+// that step only runs on a provisioning pass AFTER the join and the admin
+// create does not re-poll the way login does. Without it a member's
+// `sc tenant switch` fails with "connection refused" on :8443.
 func (c TenantCreator) SidecarTailnetIPV2(_ context.Context, installPrefix string, tenantName string) (string, error) {
 	server, err := c.resolveV2Server()
 	if err != nil {
 		return "", err
 	}
-	infraProject, _, _, err := tenantV2Infra(server, installPrefix, tenantName)
+	infraProject, infra, _, err := tenantV2Infra(server, installPrefix, tenantName)
 	if err != nil {
 		return "", err
 	}
-	out, err := execSidecarCapture(server.UseProject(infraProject), naming.V2SidecarInstanceName, "tailscale ip -4 2>/dev/null | head -1")
+	script := "tailscale ip -4 2>/dev/null | head -1"
+	if gateway, err := gatewayIPFromCIDR(infra.Config[keyV2CIDR]); err == nil && gateway != "" {
+		script = "if tailscale ip -4 >/dev/null 2>&1; then " +
+			"tailscale serve status 2>/dev/null | grep -q ':8443' || tailscale serve --bg --tcp=8443 tcp://" + gateway + ":8443 >/dev/null 2>&1; " +
+			"fi; " + script
+	}
+	out, err := execSidecarCapture(server.UseProject(infraProject), naming.V2SidecarInstanceName, script)
 	if err != nil {
 		return "", fmt.Errorf("read sidecar tailnet address of %s: %w", tenantName, err)
 	}
