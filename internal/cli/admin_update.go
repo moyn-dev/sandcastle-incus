@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -27,7 +28,7 @@ var componentUnits = map[string][]string{
 // wanted GitHub release; --check shows the fleet table from the stamps;
 // --tenants/--all-tenants force-roll tenant sidecars (operator override).
 func newAdminUpdateCommand(config commandConfig) *cobra.Command {
-	var check, yes, allTenants bool
+	var check, yes, allTenants, all bool
 	var pin, prefixFlag string
 	var tenants []string
 	command := &cobra.Command{
@@ -58,6 +59,9 @@ func newAdminUpdateCommand(config commandConfig) *cobra.Command {
 				return fmt.Errorf("resolve release: %w", releaseErr)
 			}
 
+			if all {
+				allTenants = true
+			}
 			targets, err := selectUpdateTargets(scoped, tenants, allTenants)
 			if err != nil {
 				return err
@@ -125,7 +129,10 @@ func newAdminUpdateCommand(config commandConfig) *cobra.Command {
 				return fmt.Errorf("%d of %d components failed to update — re-run to repair", failed, len(targets))
 			}
 			fmt.Fprintf(config.stdout, "All %d components updated to %s.\n", len(targets), release.TagName)
-			return nil
+			if !all {
+				return nil
+			}
+			return finishUpdateAll(ctx, config, prefix, targets, checker, release)
 		},
 	}
 	command.Flags().StringVar(&prefixFlag, "prefix", "", "install to update when several share this Incus remote; auto-detected when only one is present")
@@ -134,6 +141,7 @@ func newAdminUpdateCommand(config commandConfig) *cobra.Command {
 	command.Flags().StringVar(&pin, "version", "", "release tag to install (vX.Y.Z; default: latest); an older tag rolls back")
 	command.Flags().StringSliceVar(&tenants, "tenants", nil, "also force-roll these tenants' sidecars (normally tenant-managed via sc update)")
 	command.Flags().BoolVar(&allTenants, "all-tenants", false, "also force-roll every tenant sidecar")
+	command.Flags().BoolVar(&all, "all", false, "everything in one go: global components, every tenant sidecar, every tenant's project profiles re-rendered, then this CLI binary")
 	return command
 }
 
@@ -328,4 +336,59 @@ func fleetNotes(c incusx.ComponentVersion, latestTag string) string {
 		notes = append(notes, "current")
 	}
 	return strings.Join(notes, ", ")
+}
+
+// finishUpdateAll is the tail of `sc-adm update --all`, after the
+// components: re-render every updated tenant's project profiles (the
+// profile document changes with the release — login shell, packages, the
+// RENDERED stamp — and nothing else re-renders it after an update), then
+// replace this CLI binary, last, so the whole run is one command. Failures
+// are reported per step and do not stop the next; the command stays
+// idempotent, so a re-run repairs what failed.
+func finishUpdateAll(ctx context.Context, config commandConfig, prefix string, targets []incusx.ComponentVersion, checker *update.Checker, release update.Release) error {
+	failed := 0
+	renderer, _ := config.tenantMembers.(interface {
+		RenderTenantProfilesV2(ctx context.Context, installPrefix string, tenantName string) error
+	})
+	tenantNames := []string{}
+	seen := map[string]bool{}
+	for _, t := range targets {
+		if t.Kind == meta.KindSidecar && t.Tenant != "" && !seen[t.Tenant] {
+			seen[t.Tenant] = true
+			tenantNames = append(tenantNames, t.Tenant)
+		}
+	}
+	sort.Strings(tenantNames)
+	if renderer == nil && len(tenantNames) > 0 {
+		fmt.Fprintln(config.stdout, "  skip profiles: tenant profile renderer is not configured")
+	} else {
+		for _, tenantName := range tenantNames {
+			if err := renderer.RenderTenantProfilesV2(ctx, prefix, tenantName); err != nil {
+				failed++
+				fmt.Fprintf(config.stdout, "  FAIL profiles %s: %v\n", tenantName, err)
+				continue
+			}
+			fmt.Fprintf(config.stdout, "  ok   profiles %s re-rendered (new machines use the %s document)\n", tenantName, release.TagName)
+		}
+	}
+	switch {
+	case update.IsDevBuild(version):
+		fmt.Fprintf(config.stdout, "  skip CLI: dev build %s is not replaced\n", version)
+	case update.IsBrewManaged():
+		fmt.Fprintln(config.stdout, "  skip CLI: installed by Homebrew — run `brew upgrade sandcastle`")
+	case version == release.TagName || "v"+version == release.TagName:
+		fmt.Fprintf(config.stdout, "  ok   CLI already %s\n", release.TagName)
+	default:
+		if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
+			failed++
+			fmt.Fprintf(config.stdout, "  FAIL CLI: %v\n", err)
+		} else {
+			fmt.Fprintf(config.stdout, "  ok   CLI → %s\n", release.TagName)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d step(s) of --all failed — re-run to repair", failed)
+	}
+	fmt.Fprintln(config.stdout, "Everything updated. Existing machines keep the document they booted with; sc ls -l shows it under RENDERED.")
+	return nil
 }

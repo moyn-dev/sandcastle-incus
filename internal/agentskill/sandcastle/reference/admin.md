@@ -173,7 +173,8 @@ and publishing it (`sc image save`, or `mise run image:dev:build-in-project`).
 
 ```bash
 sc-adm update --check                  # version table: appliances + every sidecar
-sc-adm update --yes                    # update the install's global components
+sc-adm update --all --yes              # everything: global components, every sidecar, every tenant's profiles re-rendered, then this CLI
+sc-adm update --yes                    # update the install's global components only
 sc-adm update --version vX.Y.Z --yes   # pin, or roll back
 sc-adm update --tenants acme,beta      # also force-roll named sidecars
 sc-adm update --all-tenants

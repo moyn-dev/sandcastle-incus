@@ -5,6 +5,18 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — `sc-adm update --all`
+
+One command for the four update layers: `--all` implies `--all-tenants`
+(global components + every sidecar), then re-renders every updated
+tenant's project profiles (nothing else re-renders them after a release,
+and the document is what changes: shell, packages, the RENDERED stamp),
+then replaces this CLI binary last (skipped for dev builds and Homebrew
+installs, which say so). Profiles come after the components because the
+Auth App that renders them must already run the new release. Each step
+reports and the next still runs; the command is idempotent. Existing
+machines are never touched — that stays a recreate or `chsh`.
+
 ## 2026-09-21 — A remote lists the tenant it is enrolled for
 
 `sc ls -la '/*/*/*/test'` showed every obelix machine twice: `moyn-dev`

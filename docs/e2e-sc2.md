@@ -2337,6 +2337,12 @@ SANDCASTLE_REMOTE=<other-remote> sc admin update --check
 
 # 10b — global update (admin)
 sc-adm update --yes                     # or --version v<X.Y.Z> to pin/rollback
+# 10b-all — the one-shot variant: components + every sidecar + every tenant's
+# profiles re-rendered + this CLI. expect: the 10b lines, then one
+# "ok   profiles <tenant> re-rendered" per tenant, then "ok   CLI → v<X.Y.Z>"
+# (or "skip CLI" for a dev build / Homebrew install); afterwards a NEW machine
+# shows v<X.Y.Z> under RENDERED in `sc ls -l`, existing machines still "-".
+sc-adm update --all --yes
 # expect: per-component "ok" lines; services back active
 #   (systemctl is-active sandcastle-auth-app / sandcastle-broker inside the
 #   appliances); user.sandcastle.binary-version stamped on both instances;
