@@ -16,7 +16,7 @@ func TestShellRCPromptUsesFQDNAndDropsARedundantTenantUser(t *testing.T) {
 	// Like a real login: the rc runs first, then the stock ~/.bashrc sets
 	// Debian's PS1, then the first prompt fires PROMPT_COMMAND.
 	run := func(fqdn, user string) string {
-		script := "PATH=/usr/bin:/bin; hostname() { echo " + fqdn + "; }; id() { echo " + user + "; }; PS1='x'; " + sshAgentConsumeSnippet +
+		script := "unset PROMPT_COMMAND; PATH=/nonexistent; HOME=/tmp/h; hostname() { echo " + fqdn + "; }; id() { echo " + user + "; }; PS1='x'; " + sshAgentConsumeSnippet +
 			"\nPS1='${debian_chroot:+($debian_chroot)}\\u@\\h:\\w\\$ '; eval \"$PROMPT_COMMAND\"; printf '%s' \"$PS1\""
 		out, err := exec.Command("bash", "--noprofile", "--norc", "-c", script).Output()
 		if err != nil {
@@ -35,7 +35,7 @@ func TestShellRCPromptUsesFQDNAndDropsARedundantTenantUser(t *testing.T) {
 	}
 	// A prompt the user chose (no \u@\h in it) is left alone, and the hook
 	// removes itself after the first prompt.
-	script := "PATH=/usr/bin:/bin; hostname() { echo m.default.t; }; id() { echo t; }; PS1='x'; " + sshAgentConsumeSnippet +
+	script := "unset PROMPT_COMMAND; PATH=/nonexistent; HOME=/tmp/h; hostname() { echo m.default.t; }; id() { echo t; }; PS1='x'; " + sshAgentConsumeSnippet +
 		"\nPS1='mine> '; eval \"$PROMPT_COMMAND\"; printf '%s|%s' \"$PS1\" \"$PROMPT_COMMAND\""
 	out, err := exec.Command("bash", "--noprofile", "--norc", "-c", script).Output()
 	if err != nil || string(out) != "mine> |" {
