@@ -84,7 +84,9 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				payloadsOutdated = payloadsOutdated || r.outdated
 			}
 
-			// Status table.
+			// Status table: detail for what is outdated, one summary line per
+			// kind for what is current (a 26-project tenant printed 26 identical
+			// "current" payload rows).
 			w := tabwriter.NewWriter(config.stdout, 2, 8, 2, ' ', 0)
 			fmt.Fprintln(w, "TARGET\tCURRENT\tWANTED\tSTATUS")
 			fmt.Fprintf(w, "sc CLI\t%s\t%s\t%s\n", cliCurrent, orUnknown(cliWanted),
@@ -92,11 +94,27 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if deploymentConfigured || sidecarCurrent != "" {
 				fmt.Fprintf(w, "sidecar\t%s\t%s\t%s\n", orUnknown(sidecarCurrent), orUnknown(deployment), sidecarStatus(sidecarOutdated, sidecarKnown, deploymentReachable))
 			}
+			currentSkills := 0
 			for _, r := range skillRows {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
+				if r.outdated {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
+				} else {
+					currentSkills++
+				}
 			}
+			if currentSkills > 0 {
+				fmt.Fprintf(w, "agent skills\t-\t-\t%d current\n", currentSkills)
+			}
+			currentPayloads := 0
 			for _, r := range payloadRows {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
+				if r.outdated {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.name(), r.current, r.wanted, r.status())
+				} else {
+					currentPayloads++
+				}
+			}
+			if currentPayloads > 0 {
+				fmt.Fprintf(w, "platform payloads\t-\t-\t%d project(s) current\n", currentPayloads)
 			}
 			if payloadCheckErr != nil {
 				fmt.Fprintf(w, "project payloads\tunknown\tunknown\tunknown (%v)\n", payloadCheckErr)

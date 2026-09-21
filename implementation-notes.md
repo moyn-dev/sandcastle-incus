@@ -6544,3 +6544,11 @@ installs, and `tenant users` matches certificates holding ANY project of
 the tenant namespace (a personal login certificate never held the infra
 project, so personal tenants listed "none") and shows each user once,
 without the install prefix.
+
+## 2026-09-21 — `sc update`: download deadline; compact status table
+
+Live: the CLI tarball download died with "context deadline exceeded" —
+`download` reused the API client's 30 s overall timeout for a ~40 MB body.
+Downloads now run under their own 15-minute context with the client's
+timeout disabled. The status table prints detail only for outdated rows and
+one summary line per kind for current ones (26 payload rows → one line).

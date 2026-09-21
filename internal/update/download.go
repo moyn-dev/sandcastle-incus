@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // binaryName is the single file inside every release tarball.
@@ -79,12 +80,21 @@ func (c *Checker) FetchBinary(ctx context.Context, rel Release, goos, goarch str
 	return extractBinary(archive)
 }
 
+// downloadTimeout bounds one asset download. The API client's 30 s is far too
+// short for a ~40 MB tarball on a slow link (seen live: "context deadline
+// exceeded while reading body"); ctx still cancels earlier if the caller does.
+const downloadTimeout = 15 * time.Minute
+
 func (c *Checker) download(ctx context.Context, url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.client().Do(req)
+	client := *c.client()
+	client.Timeout = 0 // the context above is the deadline
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
