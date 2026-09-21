@@ -416,8 +416,6 @@ func sidecarReachable(address string) bool {
 	return true
 }
 
-
-
 func tenantSwitchTailscaleReady(ctx context.Context, config commandConfig, tenantName string) bool {
 	if config.tenantStore == nil || config.tailscale == nil {
 		return false
