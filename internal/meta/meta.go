@@ -80,6 +80,15 @@ const (
 	// domain is claimed (`sc project create --domain`, `set-domain`), removed
 	// by `unset-domain`. Absent ⇒ a private-mode project.
 	KeyV2Domain = Prefix + "v2.domain"
+	// KeyV2ProfileVersion, on a project's default profile, is the release
+	// that rendered its cloud-init document. KeyV2RenderedVersion, on a
+	// machine, freezes that value at creation — cloud-init runs once, so the
+	// machine stays what that release rendered even after a rerender —
+	// and KeyV2CreatedVersion is the CLI release that created the machine.
+	// `sc ls` shows the rendered version; a Freeform Machine has neither.
+	KeyV2ProfileVersion  = Prefix + "v2.profile-version"
+	KeyV2RenderedVersion = Prefix + "v2.rendered-version"
+	KeyV2CreatedVersion  = Prefix + "v2.created-version"
 	// KeyV2PublicHostname is the LEGACY single-name record of ADR-0027: the
 	// derived Machine Public Hostname `<machine>.<Project Domain>`, or the
 	// literal NamingModePrivate. Superseded by KeyV2PublicHostnames (ADR-0028):
@@ -243,6 +252,12 @@ type Machine struct {
 	CreatedBy       string   `json:"createdBy,omitempty"`
 	CreatedAt       string   `json:"createdAt,omitempty"`
 	Running         bool     `json:"running,omitempty"`
+	// RenderedVersion is the release whose profile document cloud-init ran at
+	// creation (KeyV2RenderedVersion); CreatedVersion the CLI release that
+	// created the machine (KeyV2CreatedVersion). Empty for machines created
+	// before the stamps existed and for Freeform Machines.
+	RenderedVersion string `json:"renderedVersion,omitempty"`
+	CreatedVersion  string `json:"createdVersion,omitempty"`
 	// Bare marks a machine created with `sc create --bare`: no login user, no
 	// sshd, no shared storage. It changes how the machine is reached, so a
 	// listing says so rather than leaving `sc connect` to time out.
@@ -365,6 +380,8 @@ func FormatPublicHostnames(names []string) string {
 // render as anything but private. CertStates is the per-hostname mirror,
 // CertState its worst entry.
 func DecodeMachine(config map[string]string, machine Machine) Machine {
+	machine.RenderedVersion = strings.TrimSpace(config[KeyV2RenderedVersion])
+	machine.CreatedVersion = strings.TrimSpace(config[KeyV2CreatedVersion])
 	machine.PublicHostnames = PublicHostnamesFromConfig(config)
 	machine.PublicHostname = ""
 	machine.MachineTunnelHostnames = MachineTunnelHostnamesFromConfig(config)

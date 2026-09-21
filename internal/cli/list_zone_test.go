@@ -87,14 +87,14 @@ func TestFormatMachineListZoneModeGolden(t *testing.T) {
 	summary := tenant.Summary{Tenant: "acme", DNSSuffix: "acme.sandcastle.dev"}
 	private := meta.Machine{Project: "gbrain", Name: "web", Type: "container", PrivateIP: "10.1.0.9", Running: true}
 	zone := meta.Machine{Project: "zp", Name: "api", Type: "container", PrivateIP: "10.1.0.12", Running: true,
-		PublicHostname: "api.baum.hase.de", PublicHostnames: []string{"api.baum.hase.de", "api12.tc42.uk"}, CertState: "installed", CertNotAfter: "2026-12-01T00:00:00Z"}
+		PublicHostname: "api.baum.hase.de", PublicHostnames: []string{"api.baum.hase.de", "api12.tc42.uk"}, CertState: "installed", CertNotAfter: "2026-12-01T00:00:00Z", RenderedVersion: "0.19.1"}
 
 	got := formatMachineList(listPayload{Tenant: summary, AllProjects: true, Machines: []meta.Machine{private, zone}}, listRenderOptions{})
 	want := strings.Join([]string{
 		"the current install",
-		"PROJECT  MACHINE  TYPE  FQDN                            CERT  TUNNEL  TAILNET  IP         CREATED  STATE",
-		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     -       -        10.1.0.9   -        running",
-		"zp       api      CT    api.baum.hase.de (+1)           ok    -       -        10.1.0.12  -        running",
+		"PROJECT  MACHINE  TYPE  FQDN                            CERT  TUNNEL  TAILNET  IP         CREATED  RENDERED  STATE",
+		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     -       -        10.1.0.9   -        -         running",
+		"zp       api      CT    api.baum.hase.de (+1)           ok    -       -        10.1.0.12  -        0.19.1    running",
 	}, "\n")
 	if got != want {
 		t.Fatalf("sc ls table:\n%s\nwant:\n%s", got, want)
@@ -104,9 +104,9 @@ func TestFormatMachineListZoneModeGolden(t *testing.T) {
 		{Remote: "obelix", Tenant: summary, AllProjects: true, Machines: []meta.Machine{private, zone}},
 	}})
 	for _, line := range []string{
-		"REMOTE  PROJECT  MACHINE  TYPE  FQDN                            CERT  IP         CREATED  STATE",
-		"obelix  gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     10.1.0.9   -        running",
-		"obelix  zp       api      CT    api.baum.hase.de (+1)           ok    10.1.0.12  -        running",
+		"REMOTE  PROJECT  MACHINE  TYPE  FQDN                            CERT  IP         CREATED  RENDERED  STATE",
+		"obelix  gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     10.1.0.9   -        -         running",
+		"obelix  zp       api      CT    api.baum.hase.de (+1)           ok    10.1.0.12  -        0.19.1    running",
 	} {
 		if !strings.Contains(multi, line) {
 			t.Fatalf("cross-install table missing %q:\n%s", line, multi)
@@ -115,9 +115,9 @@ func TestFormatMachineListZoneModeGolden(t *testing.T) {
 
 	admin := formatTenantResources(tenantResourcesPayload{Tenant: summary, Machines: []meta.Machine{private, zone}})
 	for _, line := range []string{
-		"PROJECT  MACHINE  TYPE  FQDN                            CERT  IP         CREATED  STATE",
-		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     10.1.0.9   -        running",
-		"zp       api      CT    api.baum.hase.de (+1)           ok    10.1.0.12  -        running",
+		"PROJECT  MACHINE  TYPE  FQDN                            CERT  IP         CREATED  RENDERED  STATE",
+		"gbrain   web      CT    web.gbrain.acme.sandcastle.dev  -     10.1.0.9   -        -         running",
+		"zp       api      CT    api.baum.hase.de (+1)           ok    10.1.0.12  -        0.19.1    running",
 	} {
 		if !strings.Contains(admin, line) {
 			t.Fatalf("admin resources table missing %q:\n%s", line, admin)

@@ -3,6 +3,7 @@ package incusx
 import (
 	"context"
 	"fmt"
+	"github.com/thieso2/sandcastle-incus/internal/buildinfo"
 	"net/http"
 	"net/netip"
 	"os"
@@ -578,6 +579,10 @@ func ensureV2AppProfile(server TenantResourceServer, plan tenant.CreatePlanV2, p
 			meta.KeyKind:           "profile",
 			meta.KeyTenant:         plan.Tenant,
 			meta.KeyVersion:        "2",
+			// The release that rendered this document: machines freeze it
+			// at creation (KeyV2RenderedVersion), so `sc ls` can tell a
+			// machine rendered by an older release from a current one.
+			meta.KeyV2ProfileVersion: buildinfo.Version,
 		},
 		Devices: v2AppProfileDevices(plan),
 	}

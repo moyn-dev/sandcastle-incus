@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/thieso2/sandcastle-incus/internal/buildinfo"
 	"io"
 	"net"
 	"net/url"
@@ -36,6 +37,15 @@ import (
 //
 // Defaults to a dev sentinel for `go build`/`go test` and un-stamped installs.
 var version = "0.0.0-dev"
+
+// The stamped version is what profile renders and machine creates record
+// (buildinfo.Version); the fat binary always links this package, so the
+// Auth App and the admin CLI carry it too.
+func init() {
+	if version != "" {
+		buildinfo.Version = version
+	}
+}
 
 type outputFormat string
 

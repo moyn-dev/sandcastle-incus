@@ -324,6 +324,10 @@ _Avoid_: Implicit project, projectless container bucket
 The tenant selected by local CLI configuration for unqualified user commands.
 _Avoid_: Owner, SANDCASTLE_OWNER, active account, logged-in tenant
 
+**Rendered Version**:
+The release whose cloud-init document a Machine booted with, frozen on the Machine at creation from the Project's profile; the profile itself records the release that last rendered it. A later re-render changes the profile, never the Machine.
+_Avoid_: Profile version on a machine, image version, CLI version
+
 **Sandcastle Path**:
 The slash form of a reference, `/remote/tenant/project/machine`, absolute or relative to the Current Position, with `.`, `..`, `~` (home), `-` (previous) and shell globs in any segment. A second grammar beside the colon reference, selected by shape; a machine is its leaf.
 _Avoid_: Resource path, URL, colon path

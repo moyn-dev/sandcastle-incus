@@ -732,7 +732,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 	}
 	fmt.Fprintf(&builder, "%s\n", multiListContext(payload))
 	table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "REMOTE\tPROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
+	fmt.Fprintln(table, "REMOTE\tPROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tRENDERED\tSTATE")
 	for _, section := range payload.Remotes {
 		// The FQDN comes from each section's OWN tenant summary — installs have
 		// different DNS suffixes, so one shared summary would mislabel rows.
@@ -743,7 +743,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				section.Remote,
 				machine.Project,
 				machine.Name,
@@ -752,6 +752,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 				machineCertCell(machine),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
+				displayValue(machine.RenderedVersion),
 				state,
 			)
 		}
@@ -766,7 +767,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				section.Remote,
 				"-",
 				unmanaged.Name,
@@ -775,6 +776,7 @@ func formatMultiMachineList(payload multiListPayload) string {
 				"-",
 				displayValue(unmanaged.PrivateIP),
 				formatListCreatedAt(unmanaged.CreatedAt),
+				"-",
 				"unmanaged:"+state,
 			)
 		}
@@ -797,7 +799,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 	fmt.Fprintf(&builder, "%s\n", listContext(result))
 	if len(result.Machines) > 0 || len(result.Unmanaged) > 0 {
 		table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tTUNNEL\tTAILNET\tIP\tCREATED\tSTATE")
+		fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tTUNNEL\tTAILNET\tIP\tCREATED\tRENDERED\tSTATE")
 		for _, machine := range result.Machines {
 			state := "stopped"
 			if machine.Running {
@@ -805,7 +807,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				machine.Project,
 				machine.Name,
 				machineTypeCell(machine),
@@ -815,6 +817,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 				displayValue(strings.Join(machine.TailnetPublications, ",")),
 				machine.PrivateIP,
 				formatListCreatedAt(machine.CreatedAt),
+				displayValue(machine.RenderedVersion),
 				state,
 			)
 		}
@@ -829,7 +832,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 			}
 			fmt.Fprintf(
 				table,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				"-",
 				unmanaged.Name,
 				machineTypeShort(unmanaged.Type),
@@ -837,6 +840,7 @@ func formatMachineList(result listPayload, opts listRenderOptions) string {
 				"-",
 				displayValue(unmanaged.PrivateIP),
 				formatListCreatedAt(unmanaged.CreatedAt),
+				"-",
 				"unmanaged:"+state,
 			)
 		}
@@ -1100,14 +1104,14 @@ func formatTenantResources(result tenantResourcesPayload) string {
 	}
 	fmt.Fprintln(&b)
 	table := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tSTATE")
+	fmt.Fprintln(table, "PROJECT\tMACHINE\tTYPE\tFQDN\tCERT\tIP\tCREATED\tRENDERED\tSTATE")
 	for _, m := range result.Machines {
 		state := "stopped"
 		if m.Running {
 			state = "running"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Project, m.Name, machineTypeCell(m), machineFQDN(t, m), machineCertCell(m), m.PrivateIP, formatListCreatedAt(m.CreatedAt), state)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Project, m.Name, machineTypeCell(m), machineFQDN(t, m), machineCertCell(m), m.PrivateIP, formatListCreatedAt(m.CreatedAt), displayValue(m.RenderedVersion), state)
 	}
 	for _, u := range result.Unmanaged {
 		state := u.Status
@@ -1118,8 +1122,8 @@ func formatTenantResources(result tenantResourcesPayload) string {
 				state = "stopped"
 			}
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			"-", u.Name, machineTypeShort(u.Type), "-", "-", displayValue(u.PrivateIP), formatListCreatedAt(u.CreatedAt), "unmanaged:"+state)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			"-", u.Name, machineTypeShort(u.Type), "-", "-", displayValue(u.PrivateIP), formatListCreatedAt(u.CreatedAt), "-", "unmanaged:"+state)
 	}
 	_ = table.Flush()
 	return strings.TrimRight(b.String(), "\n")

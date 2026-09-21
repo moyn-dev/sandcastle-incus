@@ -65,7 +65,7 @@ func longColumns(depth int) []string {
 	case levelTenant:
 		return []string{"PROJECT", "DOMAIN", "IMAGE"}
 	default:
-		return []string{"MACHINE", "TYPE", "STATE", "IP", "CREATED"}
+		return []string{"MACHINE", "TYPE", "STATE", "IP", "CREATED", "RENDERED"}
 	}
 }
 
@@ -197,7 +197,7 @@ func machineEntries(ctx context.Context, config commandConfig, remote string, te
 		if m.Running {
 			state = "running"
 		}
-		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, m.CreatedAt}})
+		entries = append(entries, pathEntry{Name: m.Name, Kind: "machine", Fields: []string{m.Name, m.Type, state, m.PrivateIP, m.CreatedAt, displayValue(m.RenderedVersion)}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil

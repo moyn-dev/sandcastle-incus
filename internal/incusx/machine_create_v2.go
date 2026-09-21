@@ -3,6 +3,7 @@ package incusx
 import (
 	"context"
 	"fmt"
+	"github.com/thieso2/sandcastle-incus/internal/buildinfo"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -181,6 +182,19 @@ func (c TenantCreator) CreateMachineV2(ctx context.Context, request CreateMachin
 	// The public-name set rides the create call itself (ADR-0028): the
 	// instance records its names from its first second.
 	instanceConfig = v2InstanceConfigWithPublicHostnames(instanceConfig, result.PublicHostnames)
+	// Freeze which release's profile document this machine boots with, and
+	// which CLI created it. cloud-init runs once, so a later rerender of the
+	// profile does not change the machine; the frozen stamp is what `sc ls`
+	// reports as RENDERED.
+	if instanceConfig == nil {
+		instanceConfig = api.ConfigMap{}
+	}
+	instanceConfig[meta.KeyV2CreatedVersion] = buildinfo.Version
+	if profile, _, err := project.GetProfile("default"); err == nil {
+		if rendered := strings.TrimSpace(profile.Config[meta.KeyV2ProfileVersion]); rendered != "" {
+			instanceConfig[meta.KeyV2RenderedVersion] = rendered
+		}
+	}
 	if request.ProjectDomain != "" {
 		states := map[string]string{}
 		allProject := true

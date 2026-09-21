@@ -5,6 +5,30 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — Rendered Version stamps on profiles and machines
+
+Asked: record which release rendered a machine and show it in `sc ls`,
+after a project rendered under the zsh-default document kept handing new
+machines zsh. Decisions:
+
+- **Two stamps on the machine, one on the profile.** The profile carries
+  `v2.profile-version` (the release that rendered its document); `sc create`
+  freezes it on the instance as `v2.rendered-version` and adds
+  `v2.created-version` (the CLI release). Reading the profile's key through
+  the instance's expanded config would show the profile's *current* value,
+  which is exactly not what a machine booted with.
+- **The version reaches non-CLI packages through `internal/buildinfo`**, set
+  by `internal/cli`'s init from its ldflags-stamped var. Moving the ldflags
+  target would touch the release pipeline for no gain; the fat binary
+  always links the CLI package, so the Auth App gets the value too.
+- **`RENDERED` is a new `sc ls` column** (before STATE), `-` for machines
+  created before the stamp and for Freeform Machines. The user asked for it
+  in `ls`; the byte-for-byte compatibility note in usage.html concerns the
+  cache-vs-live paths, which still agree.
+- Staleness (profile newer than the machine) is not flagged yet: the
+  project list comes from the resource cache, which does not carry profile
+  config. A follow-up can add the profile version to `sc project status`.
+
 ## 2026-09-21 — Path navigation: decisions taken while implementing map #190
 
 Wayfinder map #190 charted `sc cd`/`pwd`/`ls`/`mkdir`/`rm` over the tree

@@ -1335,7 +1335,7 @@ the lifecycle commands. Quote the patterns so the shell does not expand them.
 sc c --yes lc1 -- true && sc c --yes lc2 -- true && sc c --yes web-a -- true   # three machines in the current project
 
 sc ls ':lc*'                    # machine glob within the current project
-sc ls -a '*:lc*'                # …across every project
+sc ls -a '*:lc*'                # …across every project; RENDERED column = the release whose profile each machine booted with (the running release for machines created now; '-' for machines predating the stamp or Freeform Machines)
 sc ls -a 'zz*:*'                # project glob matching nothing → empty listing, exit 0
 sc ls 'zzznope:*'               # literal project that does not exist → error, exit 1
 

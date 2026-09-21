@@ -112,7 +112,7 @@ machine is `user@<fqdn>:` (just `<fqdn>:` for the tenant user).
 
 ```bash
 sc ls                       # machines in the active project
-sc ls -a                    # …across every project (PROJECT MACHINE TYPE FQDN IP CREATED STATE)
+sc ls -a                    # …across every project (PROJECT MACHINE TYPE FQDN … CREATED RENDERED STATE; RENDERED = release whose profile the machine booted with)
 sc create dev               # create a container in the active project
 sc create dev --vm          # …a VM instead
 sc create web --image mybase --home-share
