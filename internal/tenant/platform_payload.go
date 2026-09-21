@@ -43,6 +43,10 @@ const (
 	// stable path lets systemd units follow centrally-synced platform behavior
 	// rather than carrying a private /usr/local binary per Machine.
 	SCPayloadCloudflaredPath = "sbin/cloudflared"
+	// SCPayloadInstallAgenticPath is the user-facing `install-agentic.sh`:
+	// installs mise for the calling user and, through it, herdr, claude and
+	// codex. Lives under bin/ (on every machine's PATH via the shell rc).
+	SCPayloadInstallAgenticPath = "bin/install-agentic.sh"
 )
 
 // PlatformPayload returns the versioned /.sc/platform payload: every platform
@@ -62,6 +66,7 @@ func PlatformPayload() ([]PlatformPayloadFile, string) {
 		{Path: SCPayloadCaddySetupPath, Mode: 0o755, Content: caddyIngressSetupScript},
 		{Path: SCPayloadCaddyPath, Mode: 0o755, Content: caddyPlatformLauncher},
 		{Path: SCPayloadCloudflaredPath, Mode: 0o755, Content: cloudflaredPlatformLauncher},
+		{Path: SCPayloadInstallAgenticPath, Mode: 0o755, Content: installAgenticScript},
 	}
 	version := platformPayloadVersion(files)
 	files = append(files, PlatformPayloadFile{Path: PlatformPayloadVersionFile, Mode: 0o644, Content: version + "\n"})

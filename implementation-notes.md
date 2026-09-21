@@ -6418,3 +6418,15 @@ in cloud-init, so existing machines get it too. The rule "user equals
 domain" is implemented as "the FQDN ends in `.<user>`": the tenant name is
 both the default login user and the private DNS suffix. User rc files run
 after the shim and override it.
+
+## 2026-09-21 — `install-agentic.sh` in the platform payload; PATH via the shell rc
+
+The installer lives in `/.sc/platform/bin` (a new payload dir) instead of
+the image or cloud-init, so every machine — existing ones after a payload
+sync — has it, and it updates centrally. It installs mise per user
+(`https://mise.run` into `~/.local/bin`) and the three tools through mise's
+registry (`herdr`, `claude`, `codex`), which keeps versions upgradeable with
+`mise up`. The shared shell rc prepends `/.sc/platform/bin`, `~/.local/bin`
+and the mise shims to PATH unconditionally (non-interactive SSH commands
+need them) and activates mise only in interactive shells. Root is refused:
+the tools are per user and the machines' login user is the tenant.

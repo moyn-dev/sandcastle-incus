@@ -343,6 +343,19 @@ const sshAgentConsumeSnippet = `# Sandcastle: follow the forwarded agent republi
 if [ -h "$HOME/.ssh/ssh_auth_sock" ]; then
   export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"
 fi
+# Sandcastle PATH: the platform's user-facing scripts (install-agentic.sh)
+# and, once installed, the user's mise (~/.local/bin) with its shims, so a
+# non-interactive "ssh machine claude" finds the tools too. Interactive
+# shells also activate mise (per-directory tool versions).
+case ":$PATH:" in *":/.sc/platform/bin:"*) ;; *) PATH="/.sc/platform/bin:$PATH" ;; esac
+if [ -n "$HOME" ]; then
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
+  case ":$PATH:" in *":$HOME/.local/share/mise/shims:"*) ;; *) PATH="$HOME/.local/share/mise/shims:$PATH" ;; esac
+fi
+export PATH
+if [ -n "$PS1" ] && command -v mise >/dev/null 2>&1; then
+  if [ -n "$ZSH_VERSION" ]; then eval "$(mise activate zsh)"; elif [ -n "$BASH_VERSION" ]; then eval "$(mise activate bash)"; fi
+fi
 # Sandcastle prompt: user@<fqdn>:<dir>$ — the machine's full private name
 # says where you are. When the login user IS the tenant (the default: the
 # FQDN ends in ".<user>"), the user is redundant and the prompt is just the
@@ -362,6 +375,42 @@ if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
   fi
   unset __sc_fqdn __sc_user __sc_prompt_host
 fi
+`
+
+// installAgenticScript is /.sc/platform/bin/install-agentic.sh: the one
+// command that turns a stock machine into an agent box for the calling user
+// — mise (https://mise.run) into ~/.local/bin, then herdr, claude and codex
+// through mise (all three are in mise's registry). Idempotent: re-running
+// upgrades to the latest of each. Runs as the login user; no sudo.
+const installAgenticScript = `#!/bin/sh
+# Sandcastle: install the agentic toolchain for the current user.
+#   mise (tool version manager) -> ~/.local/bin/mise
+#   herdr, claude (Claude Code), codex (OpenAI Codex) -> managed by mise
+# Re-run any time to upgrade. Sourced PATH comes from /.sc/platform/shell/rc.sh.
+set -eu
+TOOLS="${SC_AGENTIC_TOOLS:-herdr claude codex}"
+if [ "$(id -u)" = "0" ]; then
+  echo "install-agentic.sh: run as your login user, not root (tools install per user)" >&2
+  exit 2
+fi
+mkdir -p "$HOME/.local/bin"
+PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"; export PATH
+if ! command -v mise >/dev/null 2>&1; then
+  echo "== installing mise"
+  curl -fsSL https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh
+fi
+echo "== mise $(mise --version)"
+for tool in $TOOLS; do
+  echo "== installing $tool"
+  mise use -g -y "$tool@latest"
+done
+echo
+echo "Installed:"
+for tool in $TOOLS; do
+  printf '  %-8s %s\n' "$tool" "$(mise which "$tool" 2>/dev/null || echo '(not on PATH yet)')"
+done
+echo
+echo "Open a new shell (or: eval \"\$(mise activate bash)\") and run: claude / codex / herdr"
 `
 
 // scShimWriteFiles is a cloud-init write_files fragment (entries only, under a

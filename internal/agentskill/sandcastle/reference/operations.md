@@ -264,6 +264,13 @@ sc payload-sync --check   # report each project's payload version vs this binary
 sc payload-sync           # converge every app project of the tenant
 ```
 
+- The shell rc puts `/.sc/platform/bin`, `~/.local/bin` and the user's mise
+  shims on PATH (and activates mise in interactive shells), and sets the
+  prompt to `user@<fqdn>:` (just `<fqdn>:` when the user is the tenant).
+- `install-agentic.sh` (on PATH via `/.sc/platform/bin`) installs mise for
+  the calling user, then `herdr`, `claude` and `codex` through it; re-run to
+  upgrade. `SC_AGENTIC_TOOLS="claude"` narrows the set. Not as root.
+
 Written once per project, never per machine. Running machines pick the change up
 through the mount — no re-create, no sweep. Rolling back means running
 `payload-sync` from the previous binary.
