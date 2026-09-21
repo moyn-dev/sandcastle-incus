@@ -373,6 +373,7 @@ remote: sc-alice</code></pre>
 <span class="cmd">sandcastle-admin tenant grant</span> <span class="arg">moyn-dev alice</span>     <span class="comment"># add a member later: certificate scope, membership, profiles, running machines</span>
 <span class="cmd">sandcastle-admin tenant revoke</span> <span class="arg">moyn-dev alice</span>
 <span class="cmd">sandcastle-admin tenant users</span> <span class="arg">moyn-dev</span></code></pre>
+    <p><code>--cidr-pool</code> may be omitted: the tenant's /24 comes from the configured pool (<code>SANDCASTLE_CIDR_POOL</code> / seed), else from the /16 the install's existing tenants already occupy, and only on an empty install from the built-in <code>10.249.0.0/16</code>. Without <code>--tailscale-authkey</code> the command prints the sidecar's interactive <code>login.tailscale.com</code> URL.</p>
     <p>Members then run <code>sc tenant switch moyn-dev</code> (see <em>Select an accessible tenant</em>): the CLI enrols an Incus remote named after the tenant's DNS suffix at the tenant sidecar's tailnet address, pins its default project, and every <code>sc</code> command &mdash; including <code>sc project create</code>, hostnames, certificates and shares through the Auth App &mdash; acts on the shared tenant until they switch back. The Auth App's <code>/admin/access</code> page performs the same grant and revoke.</p>
   </div>
 

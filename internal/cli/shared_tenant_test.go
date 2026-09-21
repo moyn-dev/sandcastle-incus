@@ -138,3 +138,23 @@ func TestTenantSwitchUpdatesTheDirectorySelectionForMember(t *testing.T) {
 		t.Fatalf("selection = %#v", local)
 	}
 }
+
+func TestResolveTenantCIDRPoolPrefersFlagThenConfigThenSiblings(t *testing.T) {
+	if got := resolveTenantCIDRPool("10.1.0.0/16", "10.2.0.0/16", []string{"10.123.5.0/24"}); got != "10.1.0.0/16" {
+		t.Fatalf("flag: %q", got)
+	}
+	if got := resolveTenantCIDRPool("", "10.2.0.0/16", []string{"10.123.5.0/24"}); got != "10.2.0.0/16" {
+		t.Fatalf("configured: %q", got)
+	}
+	// An install with tenants: the /16 they occupy, stable across ordering.
+	if got := resolveTenantCIDRPool("", "", []string{"10.123.7.0/24", "10.123.5.0/24"}); got != "10.123.0.0/16" {
+		t.Fatalf("siblings: %q", got)
+	}
+	if got := resolveTenantCIDRPool("", "", nil); got != defaultTenantCIDRPool {
+		t.Fatalf("default: %q", got)
+	}
+	// The unconfigured admin default is not "configured": siblings still win.
+	if got := resolveTenantCIDRPool("", scconfig.DefaultCIDRPool, []string{"10.123.5.0/24"}); got != "10.123.0.0/16" {
+		t.Fatalf("admin default vs siblings: %q", got)
+	}
+}

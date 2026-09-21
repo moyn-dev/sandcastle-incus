@@ -6276,3 +6276,11 @@ the other member's later switch presented the wrong user's token and the
 Auth App answered "not accessible". The switch now records the caller's
 resolved credentials (active remote / directory selection), which is what
 every other command uses.
+
+## 2026-09-21 — `sc-adm tenant create` derives its CIDR pool from the install
+
+The flag's built-in default (`10.249.0.0/16`) used to override the
+configured pool, so an operator creating a tenant on a running install had
+to look the pool up or silently get a foreign /16. The pool now resolves
+flag > configured (env/seed; the admin default constant does not count) >
+the /16 the install's existing tenants occupy > built-in default.

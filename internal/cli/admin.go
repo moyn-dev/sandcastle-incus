@@ -3,12 +3,14 @@ package cli
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 
 	"context"
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/domain"
 	"github.com/thieso2/sandcastle-incus/internal/images"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
@@ -198,15 +200,21 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 				return nil
 			}
 			admin := config.adminConfig
-			if strings.TrimSpace(cidrPool) != "" {
-				admin.CIDRPool = strings.TrimSpace(cidrPool)
-			}
 			var reuse tenant.ProvisionReuse
 			if config.tenantStore != nil {
 				var err error
 				if reuse, err = tenant.ProvisionReuseInputs(cmd.Context(), config.tenantStore, admin.IncusProjectPrefix, args[0]); err != nil {
 					return fmt.Errorf("list allocated CIDRs: %w", err)
 				}
+			}
+			// The pool the tenant's /24 comes from: an explicit flag, else the
+			// configured pool (SANDCASTLE_CIDR_POOL / seed), else the /16 this
+			// install's existing tenants already occupy — so a create on a
+			// running install lands beside its siblings without the operator
+			// having to look the pool up — and only then the built-in default.
+			admin.CIDRPool = resolveTenantCIDRPool(cidrPool, admin.CIDRPool, reuse.OccupiedCIDRs)
+			if strings.TrimSpace(cidrPool) == "" {
+				fmt.Fprintf(config.stderr, "CIDR pool: %s\n", admin.CIDRPool)
 			}
 			plan, err := tenant.PlanCreateV2(admin, tenant.CreateRequest{
 				Reference:              args[0],
@@ -301,7 +309,7 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 	command.Flags().StringArrayVar(&members, "member", nil, "GitHub username granted Tenant Access to this Shared Tenant (repeatable; each must have logged in to this install already)")
 	command.Flags().StringVar(&tailscaleAuthKey, "tailscale-authkey", "", "the tenant's Tailscale auth key (joins the sidecar to the tenant's tailnet)")
 	command.Flags().StringVar(&sidecarImage, "sidecar-image", "", "system-container base image (alias or fingerprint) for the sidecar; defaults to the configured base")
-	command.Flags().StringVar(&cidrPool, "cidr-pool", "10.249.0.0/16", "CIDR pool to allocate the tenant's /24 from (must not overlap v1)")
+	command.Flags().StringVar(&cidrPool, "cidr-pool", "", "CIDR pool to allocate the tenant's /24 from (default: the configured pool, else the /16 this install's tenants already occupy, else 10.249.0.0/16)")
 	command.Flags().StringVar(&unixUser, "unix-user", "", "login user baked into the default-project profile (default \"dev\"); matches the login path's client username")
 	command.Flags().StringVar(&dnsSuffix, "dns-suffix", "", "Tenant DNS Suffix — the single-label final part of machine hostnames <machine>.<project>.<suffix> (default: the tenant name; immutable once created)")
 	command.Flags().StringVar(&initialProject, "initial-project", "", "name for the tenant's initial project — the middle part of machine hostnames <machine>.<project>.<suffix> (default: default)")
@@ -1446,4 +1454,33 @@ func newAdminTenantRemoveSSHKeyCommand(config commandConfig) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// defaultTenantCIDRPool is the last-resort pool when neither a flag, the
+// configuration, nor an existing tenant of the install names one.
+const defaultTenantCIDRPool = "10.249.0.0/16"
+
+// resolveTenantCIDRPool picks the pool for `tenant create`: explicit flag >
+// configured pool > the /16 of the install's occupied /24s (the first one,
+// sorted, so it is stable) > the built-in default.
+func resolveTenantCIDRPool(flag string, configured string, occupied []string) string {
+	if v := strings.TrimSpace(flag); v != "" {
+		return v
+	}
+	// The admin defaults carry a built-in pool even when nothing configured
+	// one; only an explicitly set pool (env / seed / flag) counts as configured.
+	if v := strings.TrimSpace(configured); v != "" && v != config.DefaultCIDRPool {
+		return v
+	}
+	sorted := append([]string{}, occupied...)
+	sort.Strings(sorted)
+	for _, cidr := range sorted {
+		ip, _, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err != nil || ip.To4() == nil {
+			continue
+		}
+		v4 := ip.To4()
+		return fmt.Sprintf("%d.%d.0.0/16", v4[0], v4[1])
+	}
+	return defaultTenantCIDRPool
 }
