@@ -66,6 +66,7 @@ func newAdminTenantCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 	command.AddCommand(newAdminTenantUsersCommand(config, opts))
 	command.AddCommand(newAdminTenantSetSSHKeyCommand(config))
 	command.AddCommand(newAdminTenantAddSSHKeyCommand(config))
+	command.AddCommand(newAdminTenantRerenderCommand(config))
 	command.AddCommand(newAdminTenantRemoveSSHKeyCommand(config))
 	command.AddCommand(newAdminTenantPayloadSyncCommand(config, opts))
 	return command
@@ -1485,4 +1486,36 @@ func resolveTenantCIDRPool(flag string, configured string, occupied []string) st
 		return fmt.Sprintf("%d.%d.0.0/16", v4[0], v4[1])
 	}
 	return defaultTenantCIDRPool
+}
+
+func newAdminTenantRerenderCommand(config commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rerender tenant [project]",
+		Short: "Re-render a tenant's project profiles (cloud-init) from this release and the stored settings",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if config.tenantMembers == nil {
+				return fmt.Errorf("tenant profile renderer is not configured")
+			}
+			renderer, ok := config.tenantMembers.(interface {
+				RenderTenantProfilesV2(ctx context.Context, installPrefix string, tenantName string) error
+				RenderProjectProfilesV2(ctx context.Context, installPrefix string, tenantName string, project string) error
+			})
+			if !ok {
+				return fmt.Errorf("tenant profile renderer is not configured")
+			}
+			if len(args) == 2 {
+				if err := renderer.RenderProjectProfilesV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, args[0], args[1]); err != nil {
+					return err
+				}
+				fmt.Fprintf(config.stdout, "Profiles of %s/%s re-rendered.\n", args[0], args[1])
+				return nil
+			}
+			if err := renderer.RenderTenantProfilesV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(config.stdout, "Profiles of every project of %s re-rendered (new machines use the current document; existing machines are unchanged).\n", args[0])
+			return nil
+		},
+	}
 }

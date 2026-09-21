@@ -355,6 +355,13 @@ func (c DeviceClient) SetProjectImage(ctx context.Context, project, image string
 	return result, c.publicDNSZoneCall(ctx, http.MethodPut, path, ProjectImageRequest{Image: strings.TrimSpace(image)}, &result)
 }
 
+// RerenderProjectProfiles drives POST /api/projects/{name}/profile (`sc
+// project rerender`).
+func (c DeviceClient) RerenderProjectProfiles(ctx context.Context, project string) (ProjectProfileResult, error) {
+	var result ProjectProfileResult
+	return result, c.publicDNSZoneCall(ctx, http.MethodPost, "/api/projects/"+url.PathEscape(strings.TrimSpace(project))+"/profile", nil, &result)
+}
+
 // DeleteProject drives DELETE /api/projects/{name} (`sc project delete` on an
 // Auth App install): releases the Project Domain claim, then deletes the
 // Incus project.

@@ -160,6 +160,19 @@ func TestResolveV2MachineTarget(t *testing.T) {
 		}
 	})
 
+	t.Run("a bare name is the current project's machine when it exists there", func(t *testing.T) {
+		config := commandConfig{machineStore: store, stdinIsTerminal: func(io.Reader) bool { return false }}
+		config.adminConfig.Project = "io"
+		// dev exists in io AND web; no prompt, no error: the current project wins.
+		project, machineName, err := resolveV2MachineTarget(context.Background(), config, summary, "dev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if project != "io" || machineName != "dev" {
+			t.Fatalf("got %q/%q", project, machineName)
+		}
+	})
+
 	t.Run("no match falls back to the inferred project", func(t *testing.T) {
 		config := commandConfig{machineStore: store, stdinIsTerminal: terminal}
 		config.adminConfig.Project = "io"

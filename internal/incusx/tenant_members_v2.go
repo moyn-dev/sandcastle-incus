@@ -407,3 +407,23 @@ func (c TenantCreator) RenderTenantProfilesV2(_ context.Context, installPrefix s
 	}
 	return c.renderTenantProfilesV2(server, tenantName, infraProject, infra.Config, nil)
 }
+
+// RenderProjectProfilesV2 re-renders ONE app project's profiles from the
+// tenant's current stored settings (login user, key set, domain, payload
+// mounts). This is how a project created under an older release picks up a
+// newer profile document — cloud-init only reads it on machine creation, so
+// existing machines are untouched.
+func (c TenantCreator) RenderProjectProfilesV2(_ context.Context, installPrefix string, tenantName string, project string) error {
+	if err := naming.ValidateProjectName(project); err != nil {
+		return err
+	}
+	server, err := c.resolveV2Server()
+	if err != nil {
+		return err
+	}
+	infraProject, infra, _, err := tenantV2Infra(server, installPrefix, tenantName)
+	if err != nil {
+		return err
+	}
+	return c.renderTenantProfilesV2(server, tenantName, infraProject, infra.Config, []string{project})
+}

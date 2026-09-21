@@ -180,6 +180,7 @@ type authProjectClient interface {
 	UnsetProjectDomain(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
 	DeleteProject(ctx context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error)
 	SetProjectImage(ctx context.Context, project, image string) (authapp.ProjectImageResult, error)
+	RerenderProjectProfiles(ctx context.Context, project string) (authapp.ProjectProfileResult, error)
 }
 
 type authRouteClient interface {

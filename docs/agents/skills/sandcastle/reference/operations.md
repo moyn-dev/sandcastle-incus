@@ -83,7 +83,10 @@ cannot. Per-project settings: `set-cloud-identity` / `unset-cloud-identity`
 (default Cloud Identity Config for new machines),
 `set-docker-autostart <name> on|off`, and `set-image <name> <image>` /
 `unset-image <name>` (default image for `sc create` without `--image`: an
-`images:` ref or an alias from `sc image save`).
+`images:` ref — cloud variant only — or an alias from `sc image save`), and
+`rerender [name]` (re-render the project's profiles from the current release
+and tenant settings; cloud-init runs once per machine, so only machines
+created afterwards see it).
 
 ### Project Domains and certificates
 

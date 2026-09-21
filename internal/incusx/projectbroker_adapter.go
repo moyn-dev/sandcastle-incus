@@ -85,6 +85,14 @@ func (p ProjectBrokerCreator) SetProjectImage(ctx context.Context, tenant string
 	return p.Creator.SetProjectImage(ctx, incusProject, image)
 }
 
+// RerenderProjectProfiles implements the Auth App's profile re-render seam.
+func (p ProjectBrokerCreator) RerenderProjectProfiles(ctx context.Context, tenant string, project string) error {
+	if _, _, err := p.Creator.v2AppProject(p.Prefix, tenant, project); err != nil {
+		return err
+	}
+	return p.Creator.RenderProjectProfilesV2(ctx, p.Prefix, tenant, project)
+}
+
 // SetProjectDomain implements authapp.TenantProjectDomainManager.
 func (p ProjectBrokerCreator) SetProjectDomain(ctx context.Context, tenant string, project string, domain string) error {
 	return p.Creator.SetProjectDomainV2(ctx, p.Prefix, tenant, project, domain)

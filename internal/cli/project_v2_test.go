@@ -279,6 +279,11 @@ func (s *stubAuthProjects) SetProjectImage(_ context.Context, project, image str
 	return authapp.ProjectImageResult{Tenant: s.tenant, Project: project, Image: image}, s.fail
 }
 
+func (s *stubAuthProjects) RerenderProjectProfiles(_ context.Context, project string) (authapp.ProjectProfileResult, error) {
+	s.calls = append(s.calls, "rerender:"+project)
+	return authapp.ProjectProfileResult{Tenant: s.tenant, Project: project}, s.fail
+}
+
 func (s *stubAuthProjects) DeleteProject(_ context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error) {
 	s.calls = append(s.calls, "delete "+project+" "+boolString(dryRun))
 	if s.fail != nil {

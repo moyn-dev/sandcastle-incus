@@ -6500,3 +6500,17 @@ within 2m". `tenant.ValidateMachineImageRef` now refuses a non-cloud
 `images:` ref at `sc create --image`, `sc project set-image` and the Auth
 App endpoint (aliases and fingerprints pass), and the SSH timeout path
 probes for cloud-init and names the cause when it is absent.
+
+## 2026-09-21 — bare names resolve in the current project; `project rerender`
+
+`sc del dev` in project newbuild2 asked "which of 12 projects?" because a
+bare name was looked up tenant-wide first. It now means the current
+project's machine when one exists there; the tenant-wide lookup (one hit
+resolves, several ask) only runs when the current project has no such
+machine. Wildcards (`'*:dev'`) remain the way to act across projects.
+
+A project's cloud-init profile is only re-rendered by events (grant, key,
+domain), so profile changes shipped in a release (no zsh, bash shell)
+never reached existing projects. `sc project rerender [name]` (Auth App,
+admin rights) and `sc-adm tenant rerender <tenant> [project]` re-render on
+demand; cloud-init runs once per machine, so only new machines see it.

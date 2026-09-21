@@ -98,6 +98,7 @@ sc start dev / sc stop dev / sc restart dev      # aliases: up / down / reboot
 sc delete dev --yes                              # alias: del / rm
 sc fix dev                  # backfill maintenance fixups over SSH (idempotent)
 sc p set-image work images:ubuntu/26.04/cloud          # project default image for sc create (unset-image clears)
+sc p rerender work          # re-render the project's cloud-init profile after a release; NEW machines get it
 sc c dev -- install-agentic.sh                   # on the machine: mise + herdr, claude, codex for the login user
 ```
 
@@ -118,6 +119,11 @@ sc ls -a '*:*:dev'      # the dev machine of every project of every install
 sc stop 'lc*'           # acts on each match, one report line per machine
 ```
 
+A bare machine name means the **current project's** machine when it exists
+there (`sc del dev` in project newbuild2 is `newbuild2:dev`); only when the
+current project has no such machine is the name looked up across projects.
+To act across projects on purpose, glob: `sc del '*:dev'`.
+
 Globbing the install part requires all three parts spelled out. A glob that
 matches nothing is an **error**, never a silent no-op — except a project glob in
 `sc ls`, which lists nothing and exits 0. A glob never creates a machine.
@@ -134,7 +140,10 @@ matches nothing is an **error**, never a silent no-op — except a project glob 
   machines by their public names or IP; `sc tenant switch` no longer hints
   them. `sc trust` / `sc dns` still exist for old private-only setups.
 - **`zsh` on machines**: the default profile installs `openssh-server` only
-  and the login shell is bash (the Dev Image keeps its own zsh setup).
+  and the login shell is bash (the Dev Image keeps its own zsh setup). A
+  project keeps the profile it was created with until it is re-rendered:
+  `sc project rerender <name>` (or `sc-adm tenant rerender <tenant>`) applies
+  the current document to NEW machines; existing machines never change.
 - **Login user `dev`**: new tenants log in as the tenant name;
   `--unix-user` overrides. Existing tenants keep their stored user.
 - **`sc update` twice after a CLI upgrade**: no longer needed; one run

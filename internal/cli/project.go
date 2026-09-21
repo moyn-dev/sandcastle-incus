@@ -29,6 +29,7 @@ func newProjectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command.AddCommand(newProjectUnsetCloudIdentityCommand(config, opts))
 	command.AddCommand(newProjectSetDockerAutostartCommand(config, opts))
 	command.AddCommand(newProjectSetImageCommand(config, opts))
+	command.AddCommand(newProjectRerenderCommand(config, opts))
 	command.AddCommand(newProjectUnsetImageCommand(config, opts))
 	command.AddCommand(newProjectDeleteCommand(config, opts))
 	return command
@@ -754,4 +755,33 @@ func runProjectSetImage(ctx context.Context, config commandConfig, opts *rootOpt
 		}
 	}
 	return writeOutput(config.stdout, opts.output, formatProjectMutationPlan(plan), plan)
+}
+
+func newProjectRerenderCommand(config commandConfig, opts *rootOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rerender [name]",
+		Short: "Re-render a project's machine profile (cloud-init) from the current release and tenant settings",
+		Long: "Re-render a project's default + homeshare profiles. A project keeps the cloud-init document it was " +
+			"created with until something re-renders it (a grant, a key or domain change); after a release that " +
+			"changes the document — the login shell, installed packages, the /.sc shims — run this so NEW machines " +
+			"get it. Existing machines are untouched: cloud-init runs once per machine.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := strings.TrimSpace(config.adminConfig.Project)
+			if len(args) == 1 {
+				project = strings.TrimSpace(args[0])
+			}
+			if project == "" {
+				project = naming.DefaultProjectName
+			}
+			if !projectAuthAppAvailable(config, "") {
+				return fmt.Errorf("project rerender needs an Auth App login (sc login); as an operator use sc-adm tenant rerender")
+			}
+			result, err := projectAuthClient(config).RerenderProjectProfiles(cmd.Context(), project)
+			if err != nil {
+				return err
+			}
+			return writeOutput(config.stdout, opts.output, fmt.Sprintf("Profiles of %s re-rendered; machines created from now on use the current document (existing machines are unchanged).", scopePath(config.adminConfig.Remote, result.Tenant, result.Project)), result)
+		},
+	}
 }

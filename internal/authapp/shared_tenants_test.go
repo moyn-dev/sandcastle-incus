@@ -51,6 +51,11 @@ func (c *fakeTenantProjectCreator) SetProjectImage(_ context.Context, tenantName
 func (c *fakeTenantProjectCreator) CreateTenantProjectWithDomain(_ context.Context, tenantName, project, _, domain string) (projectbroker.ProjectResult, error) {
 	return projectbroker.ProjectResult{Tenant: tenantName, Project: project, Domain: domain}, nil
 }
+func (c *fakeTenantProjectCreator) RerenderProjectProfiles(_ context.Context, tenantName, project string) error {
+	c.images = append(c.images, "rerender:"+tenantName+"/"+project)
+	return nil
+}
+
 func (c *fakeTenantProjectCreator) SetProjectDomain(context.Context, string, string, string) error {
 	return nil
 }
@@ -117,6 +122,14 @@ func TestProjectImageAPIWritesThroughTheAdminSeamForTheRequestTenant(t *testing.
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusOK || !slices.Equal(projects.images, []string{"moyn-dev/web=images:ubuntu/26.04/cloud", "moyn-dev/web="}) {
 		t.Fatalf("unset = %d images = %v", res.Code, projects.images)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/web/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens["skorfmann"])
+	req.Header.Set(TenantHeader, "moyn-dev")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || projects.images[len(projects.images)-1] != "rerender:moyn-dev/web" {
+		t.Fatalf("rerender = %d images = %v", res.Code, projects.images)
 	}
 	req = httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"bad ref"}`))
 	req.Header.Set("Authorization", "Bearer "+tokens["thieso2"])

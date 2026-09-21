@@ -76,6 +76,7 @@ sc-adm tenant revoke acme alice
 sc-adm tenant users acme
 sc-adm tenant set-ssh-key acme "ssh-ed25519 …"      # replace the key list
 sc-adm tenant add-ssh-key acme "ssh-ed25519 …"      # append / remove-ssh-key drops one (never the last)
+sc-adm tenant rerender acme [project]                # re-render profiles after a release (new machines only)
 sc-adm tenant delete acme --purge --yes              # all-or-nothing (machines, volumes, sidecar, bridge)
 sc-adm tenant payload-sync acme --check
 sc-adm tenant delete acme --purge --yes

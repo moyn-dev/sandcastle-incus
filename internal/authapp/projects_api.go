@@ -187,6 +187,8 @@ func (h handler) projectAPI(w http.ResponseWriter, r *http.Request) {
 		h.projectDomainUnset(w, r, user, project, dryRun)
 	case action == "image" && (r.Method == http.MethodPut || r.Method == http.MethodDelete):
 		h.projectImageSet(w, r, user, project)
+	case action == "profile" && r.Method == http.MethodPost:
+		h.projectProfileRerender(w, r, user, project)
 	case action == "" && r.Method == http.MethodDelete:
 		h.projectDelete(w, r, user, project, dryRun)
 	default:
@@ -465,4 +467,41 @@ func (h handler) projectImageSet(w http.ResponseWriter, r *http.Request, user Us
 		return
 	}
 	writeJSON(w, http.StatusOK, ProjectImageResult{Tenant: tenantName, Project: project, Image: image})
+}
+
+// projectProfileRerenderer is the optional seam for `sc project rerender`.
+type projectProfileRerenderer interface {
+	RerenderProjectProfiles(ctx context.Context, tenant, project string) error
+}
+
+// ProjectProfileResult is the answer of POST /api/projects/{name}/profile.
+type ProjectProfileResult struct {
+	Tenant  string `json:"tenant"`
+	Project string `json:"project"`
+}
+
+// projectProfileRerender re-renders the project's profiles from the tenant's
+// current settings with admin rights (a restricted certificate may not edit
+// profiles' cloud-init), so a project created under an older release picks
+// up the current profile document for its NEW machines.
+func (h handler) projectProfileRerender(w http.ResponseWriter, r *http.Request, user User, project string) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
+	rerenderer, ok := h.projectDomains.(projectProfileRerenderer)
+	if h.projectDomains == nil || !ok {
+		writeAPIError(w, http.StatusNotImplemented, errors.New("profile re-render is not available on this deployment"))
+		return
+	}
+	if err := rerenderer.RerenderProjectProfiles(r.Context(), tenantName, project); err != nil {
+		if errors.Is(err, projectbroker.ErrProjectNotFound) {
+			writeAPIError(w, http.StatusNotFound, err)
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ProjectProfileResult{Tenant: tenantName, Project: project})
 }

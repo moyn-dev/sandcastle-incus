@@ -247,10 +247,13 @@ func v2ReferenceHasProject(reference string) bool {
 
 // resolveV2MachineTarget resolves a reference to a machine that must already
 // exist. An explicit "project:machine" is taken at its word. A bare machine
-// name is looked up across every project of the tenant instead of assuming the
-// Current Project: one hit resolves silently, several ask which one is meant.
-// No hit falls back to the inferred project so the caller's own "not found"
-// names the project it looked in.
+// name means the CURRENT project when the machine exists there — `sc del dev`
+// in project newbuild2 is newbuild2:dev, never a question about the eleven
+// other projects with a dev. Only when the current project has no such
+// machine is the name looked up across the tenant: one hit resolves silently,
+// several ask which one is meant, and no hit falls back to the inferred
+// project so the caller's own "not found" names the project it looked in.
+// Use a wildcard (`sc del '*:dev'`) to act across projects deliberately.
 func resolveV2MachineTarget(ctx context.Context, config commandConfig, summary tenant.Summary, reference string) (project string, machine string, err error) {
 	project, machine, err = resolveV2MachineReference(summary, reference, config.adminConfig.Project)
 	if err != nil || v2ReferenceHasProject(reference) {
@@ -259,6 +262,13 @@ func resolveV2MachineTarget(ctx context.Context, config commandConfig, summary t
 	projects, err := v2MachineProjects(ctx, config, summary, machine)
 	if err != nil {
 		return "", "", err
+	}
+	if current := strings.TrimSpace(config.adminConfig.Project); current != "" {
+		for _, candidate := range projects {
+			if candidate == current {
+				return current, machine, nil
+			}
+		}
 	}
 	switch len(projects) {
 	case 0:
