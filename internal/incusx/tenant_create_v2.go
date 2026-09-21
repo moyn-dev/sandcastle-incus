@@ -473,7 +473,10 @@ func ensureV2ProjectVolumes(server TenantResourceServer, pool string, tenantName
 // mount it read-only at the device level. Shared by tenant/project creation
 // and the payload-sync legacy onboarding.
 func ensureV2SCVolumes(server TenantResourceServer, pool string, shifted bool) error {
-	scPlatformConfig := map[string]string{}
+	// Incus's default custom-volume root is 0711 (traversable, not
+	// listable): `ls /.sc/platform` failed for the login user while sourcing
+	// and PATH lookups worked. Make it a plain 0755 tree.
+	scPlatformConfig := map[string]string{"initial.mode": "0755"}
 	scLocalConfig := map[string]string{"initial.uid": "2000", "initial.gid": "2000", "initial.mode": "0775"}
 	if shifted {
 		scPlatformConfig["security.shifted"] = "true"

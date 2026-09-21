@@ -6430,3 +6430,13 @@ registry (`herdr`, `claude`, `codex`), which keeps versions upgradeable with
 and the mise shims to PATH unconditionally (non-interactive SSH commands
 need them) and activates mise only in interactive shells. Root is refused:
 the tools are per user and the machines' login user is the tenant.
+
+## 2026-09-21 — `/.sc/platform` volume root 0755
+
+Live: `find /.sc` as the login user answered `/.sc/platform: Permission
+denied`. Incus creates a custom volume's root as 0711, so the tree was
+traversable (sourcing `shell/rc.sh` and running `bin/install-agentic.sh`
+by path worked) but not listable. New platform volumes get
+`initial.mode=0755`; existing ones keep 0711 (`initial.*` applies at
+creation only; the file API cannot chmod an existing directory) — harmless,
+just not browsable.
