@@ -213,6 +213,9 @@ func TestCdPwdLsAcrossLevels(t *testing.T) {
 	if out := run("cd", "/"); out != "/" {
 		t.Fatalf("cd /: %q", out)
 	}
+	if out := run("ls", "/alpha", "/beta"); out != "/alpha\nacme\n\n/beta\nglobex" {
+		t.Fatalf("ls remotes: %q", out)
+	}
 	if out := run("ls"); out != "/\nalpha\nbeta" {
 		t.Fatalf("ls at root: %q", out)
 	}
@@ -230,6 +233,9 @@ func TestCdRefusesMachinesAndPatterns(t *testing.T) {
 	}
 	if _, err := runCd(context.Background(), config, "../*", true); err == nil || !strings.Contains(err.Error(), "not the pattern") {
 		t.Fatalf("pattern cd: %v", err)
+	}
+	if _, err := runCd(context.Background(), config, "/beta/acme/web", false); err == nil || !strings.Contains(err.Error(), `serves tenant "globex"`) || !strings.Contains(err.Error(), "/alpha/acme/web") {
+		t.Fatalf("cd to a tenant the remote does not serve: %v", err)
 	}
 	if _, err := runCd(context.Background(), config, "-", true); err == nil || !strings.Contains(err.Error(), "no previous position") {
 		t.Fatalf("cd - without history: %v", err)

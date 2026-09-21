@@ -5,6 +5,24 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — A remote lists the tenant it is enrolled for
+
+`sc ls -la '/*/*/*/test'` showed every obelix machine twice: `moyn-dev`
+and `obelix` are two enrollments of one install (personal login, Shared
+Tenant switch), and the install's Auth App lists every accessible tenant
+under either. Under a remote the tree now lists only the tenant the remote
+was enrolled for (ADR-0021's one remote per install and tenant), so each
+machine has one path; the same tenant name on two installs still shows
+under both remotes. Accessibility stays in `sc tenant list`, and
+`sc cd /obelix/moyn-dev` still works through the tenant switch. The Auth
+App is asked only for the role/personal columns; when it does not answer
+the tenant is listed by name, so a down install keeps its path. The
+recorded enrollment (`remote_tenants`) is the authority over the
+directory's current tenant, and `sc cd` now refuses a path pairing a
+remote with another tenant (`/moyn-dev/thieso2`), naming the remotes
+enrolled for that tenant — such a position would never appear in the
+tree it was reached through.
+
 ## 2026-09-21 — Path walks fetch a tenant's machines once
 
 `sc ls -la '/obelix/*/*/test'` took 3.7 s: the tree walk asked the Auth

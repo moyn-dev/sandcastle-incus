@@ -57,7 +57,7 @@ sc cd ..                    # up to the tenant: sc ls now lists projects
 sc cd /obelix/acme/web      # absolute; sc cd -  goes back; sc cd  goes home (global config)
 sc ls ../*dev               # every sibling project matching *dev, each block headed by its path
 sc ls -d ../*dev            # just their names;  -l a table per level;  -R recurse
-sc ls /                     # enrolled remotes; sc ls /obelix  its tenants
+sc ls /                     # enrolled remotes; sc ls /obelix  the tenant that remote is enrolled for
 sc ls -d '../**'            # ** matches across levels: every project and machine of the tenant
 sc stop '/**/dev'           # in a machine reference ** is as many * as reach a machine (= '*:*:dev')
 sc c ../api/dev             # any machine command takes a path

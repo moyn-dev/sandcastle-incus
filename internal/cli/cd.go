@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -127,6 +128,22 @@ func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool
 	if len(target) == levelMachine {
 		return positionOutput{}, fmt.Errorf("%s is a machine: a machine is a leaf, use `sc connect %s`", formatPath(target), formatPath(target))
 	}
+	// A remote serves one tenant (ADR-0021). A path pairing it with another
+	// tenant of the same install would record a position the tree never
+	// lists; name the remotes enrolled for that tenant instead.
+	if len(target) > levelRemote && !localOnly {
+		if served := tenantOfRemote(config, target[0]); served != "" && served != target[1] {
+			hint := fmt.Sprintf("`sc tenant switch %s` enrolls one", target[1])
+			if remotes := remotesEnrolledFor(target[1]); len(remotes) > 0 {
+				paths := make([]string, 0, len(remotes))
+				for _, remote := range remotes {
+					paths = append(paths, formatPath(append([]string{remote}, target[1:]...)))
+				}
+				hint = "use " + strings.Join(paths, " or ")
+			}
+			return positionOutput{}, fmt.Errorf("remote %q serves tenant %q, not %q: %s", target[0], served, target[1], hint)
+		}
+	}
 	before := currentPosition(config)
 	previous := formatPath(before)
 	notes := config.stderr
@@ -193,6 +210,22 @@ func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool
 	out.Previous = previous
 	out.ConfigPath = path
 	return out, nil
+}
+
+// remotesEnrolledFor lists the enrolled remotes recorded for a tenant, sorted.
+func remotesEnrolledFor(tenantName string) []string {
+	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+	if err != nil {
+		return nil
+	}
+	remotes := []string{}
+	for remote, tenant := range cfg.RemoteTenants {
+		if strings.TrimSpace(tenant) == tenantName {
+			remotes = append(remotes, remote)
+		}
+	}
+	sort.Strings(remotes)
+	return remotes
 }
 
 // reloadCommandConfig rebuilds the command config from the files a switch

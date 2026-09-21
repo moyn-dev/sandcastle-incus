@@ -248,19 +248,22 @@ func validatePathSegment(depth int, value string) error {
 	}
 }
 
-// tenantOfRemote is the tenant a remote is enrolled for: the Current Tenant
-// on the current remote, else the recorded enrollment. Empty when unknown.
+// tenantOfRemote is the tenant a remote is enrolled for: the enrollment
+// recorded at login or tenant switch (remote_tenants), which is the
+// authority (ADR-0021); only an unrecorded current remote falls back to the
+// Current Tenant. The order matters: a directory may pair a remote with
+// another tenant of the same install (`sc cd /moyn-dev/thieso2/…`), and
+// that pairing must not make the tree list thieso2 under moyn-dev.
 func tenantOfRemote(config commandConfig, remote string) string {
-	if remote == strings.TrimSpace(config.adminConfig.Remote) {
-		if tenant := strings.TrimSpace(config.adminConfig.Tenant); tenant != "" {
+	if cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath()); err == nil {
+		if tenant := cfg.TenantForRemote(remote); tenant != "" {
 			return tenant
 		}
 	}
-	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
-	if err != nil {
-		return ""
+	if remote == strings.TrimSpace(config.adminConfig.Remote) {
+		return strings.TrimSpace(config.adminConfig.Tenant)
 	}
-	return cfg.TenantForRemote(remote)
+	return ""
 }
 
 // pathToMachineReference converts a machine-level path into the colon

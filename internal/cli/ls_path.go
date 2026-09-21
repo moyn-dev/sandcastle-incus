@@ -135,23 +135,38 @@ func remoteEntries() ([]pathEntry, error) {
 	return entries, nil
 }
 
+// tenantEntries lists the tenant a remote is enrolled for (ADR-0021: one
+// remote per install and tenant). Two remotes may be enrollments of the
+// same install for different tenants — the personal login and a Shared
+// Tenant switch — and that install's Auth App lists every tenant the user
+// can access, so listing "accessible tenants" showed every machine twice.
+// The same tenant name on two installs stays two entries, under its two
+// remotes. The Auth App is still asked, for the role and personal columns;
+// when it does not answer the entry is the name alone, never an error, so
+// a down install does not hide its path.
 func tenantEntries(ctx context.Context, config commandConfig, remote string) ([]pathEntry, error) {
+	served := tenantOfRemote(config, remote)
 	bound, restore, err := configForPosition(config, remote, "")
 	if err != nil {
 		return nil, err
 	}
 	defer restore()
-	client, err := tenantClient(bound)
-	if err != nil {
-		return nil, err
-	}
-	tenants, err := client.ListTenants(ctx)
-	if err != nil {
-		return nil, err
-	}
 	entries := []pathEntry{}
-	for _, row := range tenantListRows(tenants, strings.TrimSpace(bound.adminConfig.Tenant)) {
-		entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal)}})
+	if client, err := tenantClient(bound); err == nil {
+		if tenants, err := client.ListTenants(ctx); err == nil {
+			for _, row := range tenantListRows(tenants, strings.TrimSpace(bound.adminConfig.Tenant)) {
+				if served == "" || row.Tenant == served {
+					entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal)}})
+				}
+			}
+		} else if served == "" {
+			return nil, err
+		}
+	} else if served == "" {
+		return nil, err
+	}
+	if len(entries) == 0 && served != "" {
+		entries = append(entries, pathEntry{Name: served, Kind: "tenant", Fields: []string{served, "-", "-"}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil
