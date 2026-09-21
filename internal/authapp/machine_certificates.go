@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS machine_certificates (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS project_certificate_owner ON machine_certificates(tenant, project) WHERE machine = '@project';
 CREATE INDEX IF NOT EXISTS machine_certificates_tenant_project ON machine_certificates(tenant, project);
 `
 

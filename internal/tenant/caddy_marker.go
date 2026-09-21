@@ -25,7 +25,8 @@ const (
 	// MachineHostnamesPath lists the machine's Machine Public Hostnames, one
 	// per line: seeded at first boot from PUBLIC_HOSTNAMES= in machine.env,
 	// pushed whole by the Auth App's reconciler whenever the set changes.
-	MachineHostnamesPath = "/etc/sandcastle/hostnames"
+	MachineProjectDomainPath = "/etc/sandcastle/project-domain"
+	MachineHostnamesPath     = "/etc/sandcastle/hostnames"
 	// MachineTLSDir holds the private leaf (cert.pem/key.pem, from the
 	// sidecar signer) and one <hostname>/ directory per public name.
 	MachineTLSDir = "/etc/sandcastle/tls"

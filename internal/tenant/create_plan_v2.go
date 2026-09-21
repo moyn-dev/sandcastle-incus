@@ -14,6 +14,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/dns"
 	domainrules "github.com/thieso2/sandcastle-incus/internal/domain"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
@@ -29,6 +30,42 @@ import (
 // from the sidecar CoreDNS zone.
 func V2DefaultProfileUserData(user string, sshKey string, project string, suffix string, signerURL string) string {
 	return V2ProfileUserData(user, sshKey, project, suffix, "", signerURL)
+}
+
+// sshAuthorizedKeysYAML renders the tenant's authorized keys (one per line,
+// meta.KeyV2SSHKey) as the cloud-init `ssh_authorized_keys` list items. Every
+// key the tenant holds — its own login key plus every Tenant Member's — lands
+// on every machine, which is what makes a Shared Tenant shared at the SSH
+// layer. An empty key set renders an empty list item so the document stays
+// valid YAML (the machine then has no key, as before).
+func sshAuthorizedKeysYAML(sshKeys string) string {
+	keys := meta.ParseSSHKeys(sshKeys)
+	if len(keys) == 0 {
+		return "      - "
+	}
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, "      - "+key)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// MergeTenantSSHKeys combines a (re)provision request's key with the tenant's
+// stored keys (meta.KeyV2SSHKey, one per line). The FIRST stored line is the
+// tenant's own login key, which the request replaces (a key rotation at
+// login); every further stored line — keys added with `sc-adm tenant
+// add-ssh-key` — is kept. A blank request keeps the stored keys as they are.
+func MergeTenantSSHKeys(requested string, existing string) string {
+	requestedKeys := meta.ParseSSHKeys(requested)
+	existingKeys := meta.ParseSSHKeys(existing)
+	if len(requestedKeys) == 0 {
+		return meta.FormatSSHKeys(existingKeys)
+	}
+	merged := append([]string{}, requestedKeys...)
+	if len(existingKeys) > 1 {
+		merged = append(merged, existingKeys[1:]...)
+	}
+	return meta.FormatSSHKeys(merged)
 }
 
 // V2ProfileUserData is V2DefaultProfileUserData with the project's Project
@@ -60,11 +97,11 @@ func V2ProfileUserData(user string, sshKey string, project string, suffix string
     shell: /bin/zsh
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
-      - %s
+%s
 packages:
   - openssh-server
   - zsh
-`, user, sshKey)
+`, user, sshAuthorizedKeysYAML(sshKey))
 
 	// Machines carry only stable /.sc shims (ADR-0022): scShimWriteFiles bakes
 	// thin, guarded sourcing stubs at the fixed OS paths; the actual platform
@@ -260,12 +297,12 @@ users:
     shell: /bin/zsh
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
-      - %s
+%s
 packages:
   - openssh-server
   - zsh
 write_files:
-`, domain, user, sshKey)
+`, domain, user, sshAuthorizedKeysYAML(sshKey))
 	return body + scShimWriteFiles + `runcmd:
   - [systemctl, enable, --now, ssh]
 `
@@ -558,7 +595,7 @@ set -u
 # Drop the source machine's host identity + stale leaf (re-fetched by caddy-setup),
 # its public-name certificates and hostnames file (this machine's set is seeded
 # fresh from machine.env and pushed by the Auth App — never inherited).
-rm -f /etc/ssh/ssh_host_* /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem /etc/sandcastle/hostnames
+rm -f /etc/ssh/ssh_host_* /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem /etc/sandcastle/hostnames /etc/sandcastle/project-domain
 find /etc/sandcastle/tls -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
 ssh-keygen -A >/dev/null 2>&1 || true
 # Remove (not truncate) machine-id so systemd-machine-id-setup mints a fresh one;
@@ -625,7 +662,7 @@ if [ -x /.sc/platform/sbin/caddy ]; then CADDY=/.sc/platform/sbin/caddy; else CA
 # lower case, trimmed, no trailing dot, only DNS characters, never the
 # private name, sorted and deduplicated. Stdin is the raw list.
 hostnames_normalized() {
-  tr 'A-Z,' 'a-z\n' | tr -d ' \t\r' | sed 's/\.$//' | grep -E '^[a-z0-9][a-z0-9.-]*$' | grep -vxF "$FQDN" | LC_ALL=C sort -u || true
+  tr 'A-Z,' 'a-z\n' | tr -d ' \t\r' | sed 's/\.$//' | grep -E '^(\*\.)?[a-z0-9][a-z0-9.-]*$' | grep -vxF "$FQDN" | LC_ALL=C sort -u || true
 }
 
 if [ "$REFRESH" = 0 ]; then
@@ -660,8 +697,11 @@ fi
 # preserved. redir handles the bare /_h and /_w (no trailing slash). The
 # handlers are identical for every name.
 site_block() {
+  sites="$1, *.$1"
+  case "$1" in '*.'*) sites="$1" ;; esac
+  [ "${4:-}" = project ] && sites="$1"
   cat <<EOF
-$1, *.$1 {
+$sites {
     tls $2 $3
     redir /_h /_h/
     redir /_w /_w/
@@ -686,11 +726,17 @@ EOF
 # whitespace (DNS characters only), so a plain word-split loop over them is
 # exact — and unlike a pipe into "while read", it keeps RENDERED in this shell.
 HOSTS="$(hostnames_normalized < /etc/sandcastle/hostnames)"
+PROJECT_DOMAIN="$(cat /etc/sandcastle/project-domain 2>/dev/null || true)"
 RENDERED=""
 {
   site_block "$FQDN" /etc/sandcastle/tls/cert.pem /etc/sandcastle/tls/key.pem
   for host in $HOSTS; do
-    if [ -s "/etc/sandcastle/tls/$host/cert.pem" ] && [ -s "/etc/sandcastle/tls/$host/key.pem" ]; then
+    parent="${host#*.}"
+    if [ -n "$PROJECT_DOMAIN" ] && [ "$parent" = "$PROJECT_DOMAIN" ] && [ "$parent" != "$host" ] && [ "${host#\*.}" = "$host" ] && [ -s "/etc/sandcastle/tls/$parent/cert.pem" ] && [ -s "/etc/sandcastle/tls/$parent/key.pem" ]; then
+      printf '\n'
+      site_block "$host" "/etc/sandcastle/tls/$parent/cert.pem" "/etc/sandcastle/tls/$parent/key.pem" project
+      RENDERED="$RENDERED $host"
+    elif [ -s "/etc/sandcastle/tls/$host/cert.pem" ] && [ -s "/etc/sandcastle/tls/$host/key.pem" ]; then
       printf '\n'
       site_block "$host" "/etc/sandcastle/tls/$host/cert.pem" "/etc/sandcastle/tls/$host/key.pem"
       RENDERED="$RENDERED $host"
@@ -757,7 +803,11 @@ type CreatePlanV2 struct {
 	SidecarInstance    string     `json:"sidecarInstance"`
 	SidecarImage       string     `json:"sidecarImage"`
 	DefaultProfileUser string     `json:"defaultProfileUser"`
-	SSHPublicKey       string     `json:"sshPublicKey"`
+	// SSHPublicKey holds the tenant's authorized keys, one per line (the
+	// meta.KeyV2SSHKey value); see MergeTenantSSHKeys.
+	SSHPublicKey string `json:"sshPublicKey"`
+	// Members are the Shared Tenant's Tenant Members (meta.KeyV2Members).
+	Members []string `json:"members,omitempty"`
 	// ProjectDomain is the app project's Project Domain (ADR-0027) when the
 	// plan renders one project's profile; empty for private projects and for
 	// tenant creation (a fresh tenant's initial project has no domain).
@@ -819,9 +869,15 @@ func PlanCreateV2(admin config.Admin, request CreateRequest) (CreatePlanV2, erro
 	if err := naming.ValidateUnixUsername(unixUser); err != nil {
 		return CreatePlanV2{}, err
 	}
-	sshPublicKey := strings.TrimSpace(request.SSHPublicKey)
-	if sshPublicKey == "" {
-		sshPublicKey = strings.TrimSpace(request.ExistingSSHKey)
+	sshPublicKey := MergeTenantSSHKeys(request.SSHPublicKey, request.ExistingSSHKey)
+	members := meta.ParseMembers(strings.Join(append(append([]string{}, request.Members...), request.ExistingMembers...), ","))
+	for _, member := range members {
+		if err := naming.ValidateGitHubUsernameTenantName(member); err != nil {
+			return CreatePlanV2{}, TerminalProvisionError{Err: fmt.Errorf("tenant member %q: %w", member, err)}
+		}
+		if member == ref.Tenant {
+			return CreatePlanV2{}, TerminalProvisionError{Err: fmt.Errorf("tenant member %q names the tenant itself; a Personal Tenant needs no member entry for its owner", member)}
+		}
 	}
 	requestedSuffix := strings.TrimSpace(request.DNSSuffix)
 	existingSuffix := strings.TrimSpace(request.ExistingDNSSuffix)
@@ -905,6 +961,7 @@ func PlanCreateV2(admin config.Admin, request CreateRequest) (CreatePlanV2, erro
 		SidecarImage:        admin.Images.Base,
 		DefaultProfileUser:  unixUser,
 		SSHPublicKey:        sshPublicKey,
+		Members:             members,
 		ImageAliases:        uniqueImageAliases(admin.Images.Base, admin.Images.AI, admin.Images.Dev),
 		DNSFiles:            dnsFiles,
 		TenantCA: TenantCA{

@@ -231,14 +231,12 @@ func execInstanceScript(server machineCertificatePushServer, name, script, what 
 	return nil
 }
 
-// machineCertificateInstallScript is the one-exec swap + refresh of spec
-// §4.4: both files into place, the hostname listed (appended if the file
-// does not name it yet — the reconciler owns the file and will push it whole
-// when the set changes, but a certificate for a name is proof enough that
-// the name is the machine's), then caddy-setup --refresh renders and reloads.
+// machineCertificateInstallScript swaps both files and refreshes Caddy.
+// The authoritative hostname list is pushed separately: a certificate storage
+// directory (especially a Project Domain) is not an implicit machine hostname.
 func machineCertificateInstallScript(hostname string) string {
-	return fmt.Sprintf("mv -f %[1]s.new %[1]s && mv -f %[2]s.new %[2]s && (grep -qxF %[3]s %[4]s 2>/dev/null || echo %[3]s >> %[4]s) && %[5]s %[6]s",
-		tenant.MachineTLSHostCertPath(hostname), tenant.MachineTLSHostKeyPath(hostname), hostname, tenant.MachineHostnamesPath, tenant.CaddySetupCommand, tenant.CaddySetupRefreshFlag)
+	return fmt.Sprintf("mv -f %[1]s.new %[1]s && mv -f %[2]s.new %[2]s && %[3]s %[4]s",
+		certificateShellPath(tenant.MachineTLSHostCertPath(hostname)), certificateShellPath(tenant.MachineTLSHostKeyPath(hostname)), tenant.CaddySetupCommand, tenant.CaddySetupRefreshFlag)
 }
 
 // PushMachineHostnames writes the machine's whole public-name set to
@@ -262,4 +260,20 @@ func pushMachineHostnames(server machineCertificatePushServer, name string, host
 		return fmt.Errorf("write %s: %w", tenant.MachineHostnamesPath, err)
 	}
 	return execInstanceScript(server, name, tenant.CaddySetupCommand+" "+tenant.CaddySetupRefreshFlag, "refresh caddy")
+}
+
+// Project-domain selection is separate from the hostname list: the apex is
+// certificate storage, never an implicit public name of each machine.
+func (s ZoneMachineServer) PushMachineProjectDomain(ctx context.Context, project, name, domain string) error {
+	server := s.Server.UseProject(project)
+	if err := server.CreateInstanceFile(name, tenant.MachineProjectDomainPath, incus.InstanceFileArgs{
+		Content: strings.NewReader(domain + "\n"), Type: "file", Mode: 0o644, UID: 0, GID: 0, WriteMode: "overwrite",
+	}); err != nil {
+		return err
+	}
+	return execInstanceScript(server, name, tenant.CaddySetupCommand+" "+tenant.CaddySetupRefreshFlag, "refresh project certificate selection")
+}
+
+func certificateShellPath(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
 }

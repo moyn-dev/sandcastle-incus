@@ -134,7 +134,7 @@ func TestProjectSetDomainWiring(t *testing.T) {
 	if strings.Join(stub.calls, ",") != "set-domain zp baum.hase.de false" {
 		t.Fatalf("calls = %v", stub.calls)
 	}
-	if strings.TrimSpace(stdout) != "claimed project domain baum.hase.de (zone hase.de) for project zp" {
+	if strings.TrimSpace(stdout) != "claimed project domain baum.hase.de (zone hase.de) for project zp — one project certificate for baum.hase.de, *.baum.hase.de" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
@@ -190,7 +190,7 @@ func TestProjectUnsetDomainWiring(t *testing.T) {
 		authProjects: stub,
 		adminConfig:  scconfig.Admin{Remote: "sc-demo", AuthHostname: "https://idefix.example.dev", AuthToken: "tok", Tenant: "demo"},
 	}, "project", "unset-domain", "zp")
-	if err != nil || strings.Join(stub.calls, ",") != "unset-domain zp false" || strings.TrimSpace(stdout) != "released project domain baum.hase.de from project zp" {
+	if err != nil || strings.Join(stub.calls, ",") != "unset-domain zp false" || strings.TrimSpace(stdout) != "released project domain baum.hase.de from project zp — drop project certificate" {
 		t.Fatalf("unset: %v %v %q", err, stub.calls, stdout)
 	}
 	stub.calls, stub.released = nil, ""
@@ -271,7 +271,7 @@ func TestProjectStatusRendersDomainAndMachineTable(t *testing.T) {
 	if strings.TrimSpace(stdout) != want {
 		t.Fatalf("stdout =\n%s\nwant\n%s", stdout, want)
 	}
-	if strings.Join(stub.calls, ",") != "get-domain zp" {
+	if strings.Join(stub.calls, ",") != "get-domain zp,get-domain zp" {
 		t.Fatalf("calls = %v", stub.calls)
 	}
 
@@ -387,10 +387,10 @@ func TestFormatProjectDomainResult(t *testing.T) {
 		result authapp.ProjectDomainResult
 		want   string
 	}{
-		{"set-domain", authapp.ProjectDomainResult{Project: "zp", Domain: "baum.hase.de", Zone: "hase.de"}, "claimed project domain baum.hase.de (zone hase.de) for project zp"},
-		{"set-domain", authapp.ProjectDomainResult{Project: "zp", Domain: "baum.hase.de", Zone: "hase.de", DryRun: true}, "[dry-run] would have: claimed project domain baum.hase.de (zone hase.de) for project zp"},
+		{"set-domain", authapp.ProjectDomainResult{Project: "zp", Domain: "baum.hase.de", Zone: "hase.de"}, "claimed project domain baum.hase.de (zone hase.de) for project zp — one project certificate for baum.hase.de, *.baum.hase.de"},
+		{"set-domain", authapp.ProjectDomainResult{Project: "zp", Domain: "baum.hase.de", Zone: "hase.de", DryRun: true}, "[dry-run] would have: claimed project domain baum.hase.de (zone hase.de) for project zp — one project certificate for baum.hase.de, *.baum.hase.de"},
 		{"set-domain", authapp.ProjectDomainResult{Project: "zp", Domain: "baum.hase.de", AlreadyClaimed: true}, `project domain "baum.hase.de" already claimed by this project`},
-		{"unset-domain", authapp.ProjectDomainResult{Project: "zp", Released: "baum.hase.de"}, "released project domain baum.hase.de from project zp"},
+		{"unset-domain", authapp.ProjectDomainResult{Project: "zp", Released: "baum.hase.de"}, "released project domain baum.hase.de from project zp — drop project certificate"},
 		{"delete", authapp.ProjectDomainResult{Project: "zp"}, "deleted project zp"},
 		{"delete", authapp.ProjectDomainResult{Project: "zp", Released: "baum.hase.de", DryRun: true}, "[dry-run] would have: deleted project zp and released project domain baum.hase.de"},
 	}

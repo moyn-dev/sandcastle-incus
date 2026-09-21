@@ -96,7 +96,7 @@ func (c TenantCreator) SetProjectDomainV2(_ context.Context, installPrefix strin
 		Bridge:             cfg[keyV2Bridge],
 		StoragePool:        cfg[keyV2Pool],
 		DefaultProfileUser: cfg[keyV2User],
-		SSHPublicKey:       cfg[keyV2SSHKey],
+		SSHPublicKey:       tenantV2AuthorizedKeys(server, cfg[keyV2Prefix], cfg),
 		DNSSuffix:          cfg[keyV2Suffix],
 		DNSAddress:         dnsAddress,
 		ProjectDomain:      domain,

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
@@ -42,9 +41,8 @@ type MachineCertificateView struct {
 }
 
 // machineCertificatesAPI is POST /api/machine-certificates (spec §3.4):
-// records a pending machine_certificates row for <machine>.<project domain>
-// — or reports the retained certificate — for a zone-mode machine `sc create`
-// just made. Nothing is ordered here; ordering is the reconciler's.
+// remains compatible with older clients but returns state=project without
+// creating a machine row. Project issuance belongs to the domain claim.
 func (h handler) machineCertificatesAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -91,36 +89,11 @@ func (h handler) machineCertificatesAPI(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusNotFound, fmt.Sprintf("project %q has no project domain", project))
 		return
 	}
-	now := timeNow()
-	hostname := strings.ToLower(machine + "." + strings.Trim(domain, "."))
-	row, err := requestMachineCertificate(r.Context(), h.db, machineCertificateRequest{
-		Hostname:     hostname,
-		Tenant:       tenantName,
-		Project:      project,
-		Machine:      machine,
-		Zone:         zone,
-		DirectoryURL: h.acmeDirectory,
-	}, now)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	view := MachineCertificateView{Hostname: row.Hostname, State: machineCertificateState(row, h.acmeDirectory, now)}
+	// Older clients still call this endpoint after create. No machine row is
+	// created: the project claim owns its order independently of machines.
+	view := MachineCertificateView{Hostname: strings.ToLower(machine + "." + domain), State: "project"}
+	h.kickZoneReconcile()
 	w.Header().Set("Content-Type", "application/json")
-	if view.State == machineCertStatePending {
-		count, err := zoneIssuanceCount(r.Context(), h.db, zone, now.Add(-7*24*time.Hour))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if count >= machineCertZoneWeeklyBudget {
-			view.Reason = certFailureRateLimited
-			view.Error = fmt.Sprintf("rate-limited — zone %s has used its %d certificates for the last 7 days; the reconciler orders when the window frees", zone, machineCertZoneWeeklyBudget)
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(view)
-			return
-		}
-	}
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(view)
 }

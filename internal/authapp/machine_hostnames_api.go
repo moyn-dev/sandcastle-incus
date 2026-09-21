@@ -56,9 +56,10 @@ type MachineHostnameView struct {
 
 // MachineHostnamesResult is the body of every hostnames endpoint success.
 type MachineHostnamesResult struct {
-	Tenant  string `json:"tenant"`
-	Project string `json:"project"`
-	Machine string `json:"machine"`
+	CertificateDecision string `json:"certificateDecision,omitempty"`
+	Tenant              string `json:"tenant"`
+	Project             string `json:"project"`
+	Machine             string `json:"machine"`
 	// Hostname is the name a POST/DELETE acted on.
 	Hostname string `json:"hostname,omitempty"`
 	Zone     string `json:"zone,omitempty"`
@@ -243,6 +244,17 @@ func (h handler) machineHostnameAdd(w http.ResponseWriter, r *http.Request, user
 		alreadyHeld = true
 	}
 	result.Hostname, result.Zone, result.AlreadyHeld = row.Hostname, row.Zone, alreadyHeld
+	covered, err := projectCertificateCovers(r.Context(), h.db, tenantName, project, row.Hostname)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	result.CertificateDecision = "per-name"
+	result.Certificate = &MachineCertificateView{Hostname: row.Hostname, State: "pending"}
+	if covered {
+		result.CertificateDecision = "project"
+		result.Certificate.State = "project"
+	}
 	if request.DryRun {
 		result.Hostnames, err = h.machineHostnamesView(r.Context(), tenantName, project, machine)
 		if err != nil {
@@ -258,21 +270,23 @@ func (h handler) machineHostnameAdd(w http.ResponseWriter, r *http.Request, user
 	}
 	// The pending Machine Certificate row rides the same request path
 	// `sc create` uses for the derived name; nothing is ordered here.
-	now := timeNow()
-	certRow, err := requestMachineCertificate(r.Context(), h.db, machineCertificateRequest{
-		Hostname:     row.Hostname,
-		Tenant:       tenantName,
-		Project:      project,
-		Machine:      machine,
-		Zone:         row.Zone,
-		DirectoryURL: h.acmeDirectory,
-	}, now)
-	if err != nil {
-		h.releaseHostnameAfterFailure(r.Context(), tenantName, project, machine, row.Hostname, alreadyHeld)
-		writeAPIError(w, http.StatusInternalServerError, fmt.Errorf("record machine certificate: %w", err))
-		return
+	if !covered {
+		now := timeNow()
+		certRow, err := requestMachineCertificate(r.Context(), h.db, machineCertificateRequest{
+			Hostname:     row.Hostname,
+			Tenant:       tenantName,
+			Project:      project,
+			Machine:      machine,
+			Zone:         row.Zone,
+			DirectoryURL: h.acmeDirectory,
+		}, now)
+		if err != nil {
+			h.releaseHostnameAfterFailure(r.Context(), tenantName, project, machine, row.Hostname, alreadyHeld)
+			writeAPIError(w, http.StatusInternalServerError, fmt.Errorf("record machine certificate: %w", err))
+			return
+		}
+		result.Certificate = &MachineCertificateView{Hostname: certRow.Hostname, State: machineCertificateState(certRow, h.acmeDirectory, now)}
 	}
-	result.Certificate = &MachineCertificateView{Hostname: certRow.Hostname, State: machineCertificateState(certRow, h.acmeDirectory, now)}
 	if !request.BeforeCreate {
 		err = svclog.Span(r.Context(), "machine.hostname-add", func() error {
 			return h.stampMachinePublicHostnames(r.Context(), tenantName, project, machine)
@@ -336,7 +350,15 @@ func (h handler) machineHostnameRemove(w http.ResponseWriter, r *http.Request, u
 		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
-	result := MachineHostnamesResult{Tenant: tenantName, Project: project, Machine: machine, Hostname: norm, DryRun: dryRun}
+	result := MachineHostnamesResult{Tenant: tenantName, Project: project, Machine: machine, Hostname: norm, DryRun: dryRun, CertificateDecision: "per-name certificate retained"}
+	covered, err := projectCertificateCovers(r.Context(), h.db, tenantName, project, norm)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if covered {
+		result.CertificateDecision = "project certificate unchanged; no per-name certificate"
+	}
 	if dryRun {
 		held, err := MachineHostnamesOf(r.Context(), h.db, tenantName, project, machine)
 		if err != nil {

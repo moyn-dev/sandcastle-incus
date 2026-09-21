@@ -24,12 +24,19 @@ type GrantRequest struct {
 	User     string
 	Projects []string
 	Personal bool
+	// AppProjects are the tenant's app project SHORT names to grant beside the
+	// infra project. Empty means the historical default project only; pass the
+	// live tenant's list (tenant.Summary.ProjectShortNames) so a grant covers
+	// every project the tenant has, whatever its initial project was named.
+	AppProjects []string
 }
 
 type TenantAccessRequest struct {
 	Tenant   string
 	User     string
 	Personal bool
+	// AppProjects: see GrantRequest.AppProjects.
+	AppProjects []string
 }
 
 type TenantUsersPlan struct {
@@ -82,6 +89,10 @@ func PlanGrant(admin config.Admin, request GrantRequest) (UserPlan, error) {
 	if err := admin.Validate(); err != nil {
 		return UserPlan{}, err
 	}
+	// The trust entry a device login enrolled is named per install
+	// (sandcastle-<prefix>-<user> on a --prefix install); the default install
+	// keeps the historical sandcastle-<user>, so this is a no-op there.
+	base.CertificateName = RestrictedInstallName(admin.IncusProjectPrefix, request.User)
 	seenProjects := map[string]bool{}
 	projects := make([]string, 0, len(request.Projects))
 	for _, raw := range request.Projects {
@@ -89,7 +100,7 @@ func PlanGrant(admin config.Admin, request GrantRequest) (UserPlan, error) {
 		if err != nil {
 			return UserPlan{}, err
 		}
-		for _, project := range tenantAccessProjects(name) {
+		for _, project := range tenantAccessProjects(name, request.AppProjects) {
 			if seenProjects[project] {
 				continue
 			}
@@ -109,11 +120,17 @@ func PlanGrant(admin config.Admin, request GrantRequest) (UserPlan, error) {
 // apps live in `<prefix>-<tenant>-<project>`. The v1 shape granted
 // `<project>-infra` and `<project>-native` as well; neither project exists in a
 // v2 tenant, so granting them made Incus reject the whole restriction list.
-func tenantAccessProjects(infraProject string) []string {
-	return []string{
-		infraProject,
-		infraProject + "-" + naming.DefaultProjectName,
+func tenantAccessProjects(infraProject string, appProjects []string) []string {
+	projects := []string{infraProject}
+	if len(appProjects) == 0 {
+		return append(projects, infraProject+"-"+naming.DefaultProjectName)
 	}
+	for _, short := range appProjects {
+		if short = strings.TrimSpace(short); short != "" {
+			projects = append(projects, infraProject+"-"+short)
+		}
+	}
+	return projects
 }
 
 func PlanTenantGrant(admin config.Admin, request TenantAccessRequest) (UserPlan, error) {
@@ -270,8 +287,50 @@ func planTenantAccess(admin config.Admin, request TenantAccessRequest) (UserPlan
 		return UserPlan{}, err
 	}
 	return PlanGrant(admin, GrantRequest{
-		User:     request.User,
-		Projects: []string{request.Tenant},
-		Personal: request.Personal,
+		User:        request.User,
+		Projects:    []string{request.Tenant},
+		Personal:    request.Personal,
+		AppProjects: request.AppProjects,
 	})
+}
+
+// TenantMemberManager is the optional grant/revoke variant for Tenant Members
+// of a Shared Tenant: it addresses the member's live device certificates by
+// name OR, under shared client identity, by the member's own Personal Tenant
+// projects (memberNamespace = <prefix>-<member>). Implemented by
+// incusx.TrustManager.
+type TenantMemberManager interface {
+	GrantTenantMember(ctx context.Context, plan UserPlan, memberNamespace string) error
+	RevokeTenantMember(ctx context.Context, plan UserPlan, memberNamespace string) error
+}
+
+// MemberNamespace is the infra project of a member's Personal Tenant on an
+// install — the anchor by which the member's device certificates are found.
+func MemberNamespace(admin config.Admin, member string) string {
+	ns, err := naming.V2TenantInfraProjectName(naming.NormalizeV2Prefix(admin.IncusProjectPrefix), strings.ToLower(strings.TrimSpace(member)))
+	if err != nil {
+		return ""
+	}
+	return ns
+}
+
+// GrantMember grants via TenantMemberManager when the manager offers it,
+// else the plain name-based Grant.
+func GrantMember(ctx context.Context, manager interface {
+	Grant(context.Context, UserPlan) error
+}, admin config.Admin, plan UserPlan, member string) error {
+	if mm, ok := manager.(TenantMemberManager); ok {
+		return mm.GrantTenantMember(ctx, plan, MemberNamespace(admin, member))
+	}
+	return manager.Grant(ctx, plan)
+}
+
+// RevokeMember is GrantMember's counterpart.
+func RevokeMember(ctx context.Context, manager interface {
+	Revoke(context.Context, UserPlan) error
+}, admin config.Admin, plan UserPlan, member string) error {
+	if mm, ok := manager.(TenantMemberManager); ok {
+		return mm.RevokeTenantMember(ctx, plan, MemberNamespace(admin, member))
+	}
+	return manager.Revoke(ctx, plan)
 }

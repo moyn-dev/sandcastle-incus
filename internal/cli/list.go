@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/domain"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	machine "github.com/thieso2/sandcastle-incus/internal/machine"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
@@ -232,7 +233,7 @@ func listMachinesViaCache(ctx context.Context, config commandConfig, request lis
 			logListCacheFallback(config, "no configured Auth Hostname")
 			return listPayload{}, false
 		}
-		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	}
 	tenantName, projectFilter := splitListTenantAndProject(config, request)
 	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
@@ -427,7 +428,16 @@ func listConfigForRemote(base commandConfig, remote string) (commandConfig, func
 	return cfg, restore, nil
 }
 
-func listMachines(ctx context.Context, config commandConfig, request listMachinesRequest) (listPayload, error) {
+func listMachines(ctx context.Context, config commandConfig, request listMachinesRequest) (result listPayload, err error) {
+	defer func() {
+		if err == nil {
+			enrichProjectCertificates(ctx, config, &result)
+		}
+	}()
+	return listMachinesRaw(ctx, config, request)
+}
+
+func listMachinesRaw(ctx context.Context, config commandConfig, request listMachinesRequest) (listPayload, error) {
 	tenantName := strings.TrimSpace(config.adminConfig.Tenant)
 	projectFilter := strings.TrimSpace(request.Project)
 	if scopedTenant, scopedProject, ok := strings.Cut(projectFilter, "/"); ok {
@@ -955,7 +965,16 @@ func machineTypeShort(instanceType string) string {
 // machine the reconciler has not stamped yet is pending — `sc create`
 // returns before any certificate exists. An unrecognised state is shown
 // verbatim rather than guessed at.
-func machineCertCell(machine meta.Machine) string {
+func machineCertCell(machine meta.Machine) (cell string) {
+	defer func() {
+		if machine.ProjectCertState != "" {
+			cell += " (project " + machine.ProjectCertState
+			if machine.ProjectCertNotAfter != "" {
+				cell += "; expires " + machine.ProjectCertNotAfter
+			}
+			cell += ")"
+		}
+	}()
 	if !machine.HasPublicHostname() {
 		return "-"
 	}
@@ -1059,4 +1078,46 @@ func formatTenantResources(result tenantResourcesPayload) string {
 	}
 	_ = table.Flush()
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// Resolve shared state at read time; instance keys deliberately contain no
+// expiry, so renewal does not require rewriting every machine's metadata.
+func enrichProjectCertificates(ctx context.Context, config commandConfig, result *listPayload) {
+	if !projectAuthAppAvailable(config, "") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, machineCertificateRequestTimeout)
+	defer cancel()
+	for _, project := range result.Tenant.Projects {
+		if project.Domain == "" {
+			continue
+		}
+		cert, err := projectAuthClient(config).GetProjectDomain(ctx, project.Name)
+		if err != nil || cert.CertState == "" {
+			continue
+		}
+		for i := range result.Machines {
+			m := &result.Machines[i]
+			if m.Project != project.Name {
+				continue
+			}
+			if m.CertStates == nil {
+				m.CertStates = map[string]string{}
+			}
+			covered := false
+			for _, name := range m.PublicNames() {
+				if domain.CoveredByProjectCertificate(name, project.Domain) {
+					m.CertStates[name] = cert.CertState
+					covered = true
+				}
+			}
+			if covered {
+				m.ProjectCertState, m.ProjectCertNotAfter = cert.CertState, cert.CertNotAfter
+				m.CertState = meta.WorstCertState(m.CertStates, m.PublicNames())
+				if cert.CertNotAfter != "" && (m.CertNotAfter == "" || cert.CertNotAfter < m.CertNotAfter) {
+					m.CertNotAfter = cert.CertNotAfter
+				}
+			}
+		}
+	}
 }

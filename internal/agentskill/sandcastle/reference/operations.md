@@ -78,122 +78,51 @@ cannot. Per-project settings: `set-cloud-identity` / `unset-cloud-identity`
 (default Cloud Identity Config for new machines) and
 `set-docker-autostart <name> on|off`.
 
-### Project Domains (ADR-0027)
+### Project Domains and certificates
 
 ```bash
-sc project create zp --domain baum.hase.de   # claim + create; the admin must have registered hase.de
-sc project set-domain zp baum.hase.de        # claim for an existing project, or replace its domain
-sc project unset-domain zp                   # release it; new machines are private again
-sc project status zp                         # Domain: baum.hase.de   (zone hase.de) + MACHINE/PUBLIC NAME/CERT table
+sc project set-domain zp baum.hase.de [--dry-run]
+sc project status zp --json
+sc project unset-domain zp [--dry-run]
+sc create zp:web --alias admin-web --alias console-web [--dry-run]
+sc hostname add zp:web admin-web.baum.hase.de [--dry-run]
+sc hostname list zp:web
+sc hostname remove zp:web admin-web.baum.hase.de [--dry-run]
+sc hostname add zp:web '*.web.baum.hase.de' [--dry-run]
+sc create zp:other --hostname web12.tc42.uk --fqdn shop.tc42.uk [--dry-run]
+sc delete zp:web --dry-run
 ```
 
-- Every machine created in the project **after** the claim gets the derived
-  Machine Public Hostname `<machine>.<domain>` beside its private name;
-  machines created before keep only their private name until the follow-on
-  slices of #172 re-derive names. See "Explicit machine hostnames" below for
-  the rest of a machine's public-name set.
-- Claims are install-wide and first-come. Refusals are verbatim: a cross-tenant
-  overlap never names the owner (`… overlaps a domain already claimed on this
-  install; choose another`); a same-tenant overlap does (`… overlaps "<d>"
-  claimed by project "<p>" in this tenant`); a Public Route hostname or the
-  install's own names give `… is reserved by this install`; no zone gives
-  `no Public DNS Zone covers <domain> — ask your admin`; the apex gives `… is a
-  zone apex; claim at least one label below <zone>`.
-- `set-domain`/`unset-domain` are allowed with machines in the project (ADR-0028
-  slice 3): the zone reconciler re-derives every machine's `<m>.<domain>` —
-  list key, A records, a fresh certificate, the hostnames file — within a
-  minute; the replaced/released domain's records and certificate rows go with
-  the claim; explicit hostnames are untouched. Re-claiming the same domain is a
-  no-op.
-- The verbs need `sc login`; on a broker-only install they print `--domain is
-  not available on this install`. All take `--dry-run`.
-- `sc create` in a project with a domain stamps the set
-  `user.sandcastle.v2.public-hostnames` (derived `<machine>.<domain>` + any
-  `--hostname`) on the instance in the create call and prints the usual `DNS:`
-  line followed by one `Public name: <h> (A record pending, certificate pending
-  — see: sc project status <p>)` line per name; `--bare` adds `HTTPS:
-  https://<m>.<p>.<suffix>   (Caddy with the tenant-CA leaf, …)` and `HTTPS
-  (public): https://<h>   (Let's Encrypt; served once the certificate lands)`;
-  a Dev Image machine prints `(A record pending; no Caddy — no certificate)`.
-  Read the set back with `sc ls` (FQDN + CERT columns), `sc hostname list`, or
-  `sc incus config get <m> user.sandcastle.v2.public-hostnames` — never guess
-  it from the project's current domain.
-- On the machine (ADR-0028, one contract for every machine): `caddy-setup`
-  (payload) fetches the **private** leaf from the sidecar into
-  `/etc/sandcastle/tls/{cert,key}.pem`, seeds `/etc/sandcastle/hostnames` from
-  `PUBLIC_HOSTNAMES=` in `/etc/sandcastle/machine.env` (once; the Auth App owns
-  the file afterwards), renders the private site block plus one block per
-  listed name whose `/etc/sandcastle/tls/<name>/{cert,key}.pem` both exist,
-  validates, enables + starts Caddy, and writes the Caddy Setup Marker
-  `/etc/sandcastle/caddy.ready` last (`PRIVATE=<m>.<p>.<suffix>`, one
-  `PUBLIC=<name>` per rendered block, `RENDERED=<unix ts>`). Caddy is always
-  running; a public name is served as soon as its certificate lands and
-  `sandcastle-caddy-setup --refresh` (execed by the reconciler after every
-  push; safe to run by hand) re-renders. Validation, systemd start, and reload
-  execute through `/.sc/platform/sbin/caddy`; the rendered Caddyfile and the
-  certificate/key files remain Machine-local.
-- The Auth App's zone reconciler (30 s + instance events + a kick from every
-  `sc hostname add|remove` / `set-domain` / `unset-domain`) does the rest with
-  no operator step, **per (machine, public name)** — the derived `<m>.<d>` plus
-  every explicit hostname: public `A` records for `<name>` and `*.<name>`
-  (DNS-only, tenant-bridge IP; stopped machines keep them, deleted ones lose
-  the records of all their names), one Let's Encrypt order per name via DNS-01
-  (max 4 at once, backoff 1m → 6h on failure, ARI-timed renewal with a fresh
-  key; adding a name never reissues the others), the cert + key push into
-  `/etc/sandcastle/tls/<name>/` once a per-name marker exists
-  (`instance-started` re-pushes a stopped machine within seconds), a push of
-  `/etc/sandcastle/hostnames` whole whenever the machine's file does not list
-  exactly its set (add, remove, re-derived domain, empty first-boot seed), a
-  per-pass fingerprint drift check per name, and the mirror into
-  `user.sandcastle.v2.cert-state` (per name: `host=state,…`) /
-  `cert-not-after` (earliest) that `sc ls` (worst state) and `sc project
-  status` (one row per name) read. Freeform `incus launch` machines get their
-  list key stamped on first sight and are treated the same; a Dev Image
-  machine gets A records but no certificate (no Caddy, no marker). Deleting a
-  machine or removing a hostname retains its certificate row until expiry, so
-  the same name reuses the certificate without a new order. Diagnosis:
-  `reference/troubleshooting.md`.
-- `sc connect` dials the bridge IP; `known_hosts` records the private names
-  and every public name, and `HostKeyAlias` stays the Machine Private Hostname
-  (ADR-0028; slice 2 of #172 finalizes SSH naming).
-
-### Explicit machine hostnames (ADR-0028)
-
-```bash
-sc create zp:web --hostname web12.tc42.uk --fqdn shop.tc42.uk   # claimed BEFORE the instance exists; a refusal creates nothing
-sc hostname add zp:web api.tc42.uk [--dry-run]                  # claim + certificate row + instance key rewritten
-sc hostname list zp:web                                         # PUBLIC NAME / KIND (derived|explicit) / ZONE
-sc hostname remove zp:web api.tc42.uk [--dry-run]               # release (alias rm); the derived name is not removable per machine
-sc ls                                                           # FQDN = first public name + "(+N)"; --json carries publicHostnames
-sc incus config get web user.sandcastle.v2.public-hostnames     # the sorted list the Auth App maintains
-```
-
-- A machine's public names are a **set**: the derived `<m>.<domain>` (when
-  the project has a domain) plus explicit names under any registered Public
-  DNS Zone — apex-level names (`web12.tc42.uk`) included, in a project with or
-  without a domain. Each is an install-wide, first-come reservation of itself
-  plus its wildcard subtree, with its own certificate (`name` + `*.name`).
-- Refusals are verbatim and mirror Project Domains: cross-tenant `machine
-  hostname "<h>" overlaps a name already claimed on this install; choose
-  another`; same tenant `… overlaps "<x>" held by machine "<p>:<m>" in this
-  tenant` / `… overlaps project domain "<d>" claimed by project "<p>" in this
-  tenant`; routes and install names `… is reserved by this install`; the zone
-  apex `… is a zone apex; use at least one label below <zone>`; no zone `no
-  Public DNS Zone covers <h> — ask your admin`. The reverse checks refuse a
-  Project Domain or a custom Public Route that overlaps a hostname.
-- Needs `sc login`: `--hostname is not available on this install (log in to
-  an Auth App with sc login)` otherwise. `sc project delete` releases the
-  project's hostnames; a machine deleted out-of-band is pruned by the 5-minute
-  loop; `sc-adm public-dns-zone remove` is refused while hostnames are held.
-- Every name — derived or explicit — gets its own A records, certificate and
-  Caddy site block from the zone reconciler (above); `sc hostname add` shows
-  up on the machine within seconds (hostnames file), records within a minute,
-  the certificate within about five. `sc hostname remove` deletes the name's
-  records at once and keeps its certificate row for a re-add.
-
-`--write-remote` on `sc project create` adds a separate directly-addressable
-incus remote for the project. It is off by default — the install's single remote
-plus `sc project switch` already covers projects.
+- Each Project Domain owns one DNS-01 certificate for the domain and its
+  one-label wildcard, renewed with ARI independently of the machine fleet.
+  Status reports `certState`, `certNotAfter`, and `sans`; omitting the project
+  on status/set-domain/unset-domain selects the current project.
+- Derived names and one-label aliases use that certificate. Create reports
+  `served by project certificate`; instance metadata is `cert-state=project`
+  with no expiry. `sc ls` resolves shared state and expiry from the Auth App.
+- Aliases are explicit reservations in the machine's own domain; `--alias`
+  accepts one label and is repeatable. The derived name cannot be removed.
+  Deeper names, outside names and zone apex names retain per-name orders
+  (subject to reservation conflicts). Explicit wildcards order only that SAN.
+  Cross-project overlaps remain forbidden. `--hostname`/`--fqdn` still claim
+  before creation, and a failed create releases its claims.
+- The reconciler creates A records, pushes the hostname list, and distributes
+  `/etc/sandcastle/tls/<domain>/{cert,key}.pem` on start and renewal to each
+  machine with a Caddy setup marker. `/etc/sandcastle/project-domain` selects
+  the shared directory; `caddy-setup --refresh` serves exact one-label names
+  using it. Per-name directories remain for other names. Tenant-CA private
+  names and `/etc/sandcastle/tls/{cert,key}.pem` are unchanged.
+- `incus copy` needs no metadata overrides: the reconciler re-derives the
+  destination name, removes copied source aliases and certificate metadata,
+  and converges DNS. Delete removes records and has no derived-name/alias
+  certificate row to retain. Old derived-name certificates expire without
+  renewal or revocation; outside-domain per-name retention is unchanged.
+- Unsetting/replacing a domain drops its project certificate and clears the
+  machine's shared-directory selector. Upgrade the Auth App and shared
+  platform payload together with the CLI; a CLI-only upgrade cannot change
+  issuance or Caddy rendering. All affected mutations have `--dry-run`.
+- `sc connect` still dials the bridge IP; private names remain the SSH
+  `HostKeyAlias`, and `known_hosts` includes public names.
 
 ## Machine Tunnels and Tailnet HTTPS
 
@@ -374,6 +303,38 @@ sc remote add <name> <join-token> --tenant <tenant>
   `--dns-suffix` on the same tenant is refused.
 - Login shells out to the `incus` client, which must be installed
   (`incus-client` on Debian/Ubuntu).
+
+## Shared tenants
+
+```bash
+sc tenant list                                    # Role: owner | member
+sc tenant switch moyn-dev                         # member: enrols remote "<dns-suffix>" at the tenant
+                                                  # sidecar's tailnet IP, pins its default project
+sc tenant switch thieso2                          # back to the personal tenant (re-activates its remote)
+sc-adm tenant create moyn-dev --member thieso2 --member skorfmann \
+    --tailscale-authkey … --dns-suffix moyn       # admin: Shared Tenant with two members
+sc-adm tenant grant moyn-dev alice                # admin: add a member later (cert scope over every
+                                                  # project, membership metadata, profiles, running machines)
+sc-adm tenant revoke moyn-dev alice
+sc-adm tenant users moyn-dev
+sc-adm tenant add-ssh-key moyn-dev "ssh-ed25519 …"     # extra keys; set-ssh-key replaces the list,
+sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuses to drop the last key
+```
+
+- **Prerequisite**: every member has already run `sc login` on the install
+  (their Personal Tenant carries the login SSH key the shared machines
+  authorize) and is on the tenant's tailnet. `create --member` and
+  `tenant grant` refuse a user without a Personal Tenant.
+- Membership lives on the tenant's infra project (`user.sandcastle.v2.members`);
+  the tenant's own keys are one per line in `user.sandcastle.v2.sshkey`.
+- After `sc tenant switch <shared>`, every `sc` command (machines, projects,
+  hostnames, certificates, shares) acts on that tenant: the CLI sends the
+  Current Tenant as `X-Sandcastle-Tenant` to the auth-app.
+- A member's key rotation at login re-renders the shared tenants' profiles
+  and enrols the new key on their running machines; a new machine created
+  while the profile is stale can be repaired with `sc fix --only ssh-key`.
+- Login itself is unchanged: it provisions the caller's Personal Tenant and
+  never switches to a shared one.
 
 ## Cloud identity
 

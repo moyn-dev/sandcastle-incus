@@ -257,6 +257,10 @@ func (h handler) devicePoll(w http.ResponseWriter, r *http.Request) {
 			warning = fmt.Sprintf("SSH key was saved but not written to every existing machine: %v", err)
 			svclog.Logf(r.Context(), "device poll: %s", warning)
 		}
+		// Shared Tenants the user is a member of authorize this key too.
+		if err := h.reconcileMemberSSHKeys(r.Context(), login.UserKey, stored.PublicKey); err != nil {
+			svclog.Logf(r.Context(), "shared tenant key reconcile for %s: %v", login.UserKey, err)
+		}
 		sshFingerprint = stored.Fingerprint
 	} else if login.Status == DeviceStatusApproved && login.UserKey != "" {
 		if stored, err := GetUserSSHKey(r.Context(), h.db, login.UserKey); err == nil {

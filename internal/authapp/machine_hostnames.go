@@ -166,9 +166,15 @@ func (e *RouteInsideMachineHostnameError) Error() string {
 const machineHostnameMaxLength = 253 - len("*.")
 
 // NormalizeMachineHostname is the shared client/server normalization:
-// lowercase, trim, one trailing dot, ASCII labels, no `_`/`*` labels.
+// lowercase, trim, one trailing dot, ASCII labels, optional leading wildcard.
 func NormalizeMachineHostname(value string) (string, error) {
-	return domain.NormalizeMachineHostname(value)
+	wildcard := strings.HasPrefix(strings.TrimSpace(value), "*.")
+	value = strings.TrimPrefix(strings.TrimSpace(value), "*.")
+	name, err := domain.NormalizeMachineHostname(value)
+	if wildcard && err == nil {
+		name = "*." + name
+	}
+	return name, err
 }
 
 // ClaimMachineHostnameRequest is the input of ClaimMachineHostname.
@@ -247,6 +253,29 @@ func ClaimMachineHostname(ctx context.Context, db *sql.DB, req ClaimMachineHostn
 				return &MachineHostnameAlreadyHeldError{Hostname: norm}
 			}
 		}
+		claims := reg.claims[:0]
+		for _, c := range reg.claims {
+			if c.Tenant == tenantName && c.Project == project && strings.HasSuffix(strings.TrimPrefix(norm, "*."), "."+c.Domain) {
+				if norm == machine+"."+c.Domain {
+					return &HostnameClaimError{Hostname: norm, Existing: c.Domain, Project: project, Class: HostnameClaimConflictDomain, SameTenant: true}
+				}
+				continue
+			}
+			claims = append(claims, c)
+		}
+		reg.claims = claims
+		// A wildcard and deeper names on the same machine may coexist. Keep
+		// exact/base conflicts and every other machine's reservation intact.
+		hostnames := reg.hostnames[:0]
+		for _, existing := range reg.hostnames {
+			same := existing.Tenant == tenantName && existing.Project == project && existing.Machine == machine
+			wildcard := strings.HasPrefix(norm, "*.") || strings.HasPrefix(existing.Hostname, "*.")
+			if same && wildcard && strings.TrimPrefix(norm, "*.") != strings.TrimPrefix(existing.Hostname, "*.") {
+				continue
+			}
+			hostnames = append(hostnames, existing)
+		}
+		reg.hostnames = hostnames
 		if err := scanMachineHostnameConflicts(norm, tenantName, reg); err != nil {
 			return err
 		}
@@ -277,8 +306,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 // validateMachineHostname runs the zone lookup (unique longest-suffix
 // match), the apex rule and the length budget on a normalized hostname and
 // returns the covering zone. Unlike a Project Domain, a hostname may sit
-// directly under the zone apex (`web12.tc42.uk`, ADR-0028 decision 2); only
-// the apex itself is refused.
+// directly under the zone apex (`web12.tc42.uk`) or at the zone apex itself.
 func validateMachineHostname(norm string, zones []string, adminView bool) (string, error) {
 	zone := ""
 	for _, candidate := range zones {
@@ -291,9 +319,7 @@ func validateMachineHostname(norm string, zones []string, adminView bool) (strin
 	if zone == "" {
 		return "", &MachineHostnameError{Hostname: norm, Kind: "no-zone", Zones: zones, AdminView: adminView}
 	}
-	if norm == zone {
-		return "", &MachineHostnameError{Hostname: norm, Kind: "apex", Zone: zone}
-	}
+
 	if len(norm) > machineHostnameMaxLength {
 		return "", &MachineHostnameError{Hostname: norm, Kind: "too-long"}
 	}
@@ -305,6 +331,7 @@ func validateMachineHostname(norm string, zones []string, adminView bool) (strin
 // hostnames first (their text never names an owner), then Project Domains
 // (equal, above or below), then other hostnames (equal, above or below).
 func scanMachineHostnameConflicts(h, tenantName string, reg installReservations) error {
+	h = strings.TrimPrefix(h, "*.")
 	for _, reserved := range []string{reg.authHostname, reg.routeBaseDomain} {
 		reserved = normalizeHostname(reserved)
 		if reserved == "" {
@@ -332,13 +359,14 @@ func scanMachineHostnameConflicts(h, tenantName string, reg installReservations)
 		}
 	}
 	for _, existing := range reg.hostnames {
+		existingName := strings.TrimPrefix(existing.Hostname, "*.")
 		class := ""
 		switch {
-		case existing.Hostname == h:
+		case existingName == h:
 			class = HostnameClaimConflictExact
-		case strings.HasSuffix(existing.Hostname, "."+h):
+		case strings.HasSuffix(existingName, "."+h):
 			class = HostnameClaimConflictAncestor
-		case strings.HasSuffix(h, "."+existing.Hostname):
+		case strings.HasSuffix(h, "."+existingName):
 			class = HostnameClaimConflictDescendant
 		default:
 			continue
@@ -353,7 +381,8 @@ func scanMachineHostnameConflicts(h, tenantName string, reg installReservations)
 // every hostname it equals, covers, or sits inside.
 func scanProjectDomainHostnameConflicts(d, tenantName string, hostnames []MachineHostname) error {
 	for _, existing := range hostnames {
-		if existing.Hostname == d || strings.HasSuffix(existing.Hostname, "."+d) || strings.HasSuffix(d, "."+existing.Hostname) {
+		existingName := strings.TrimPrefix(existing.Hostname, "*.")
+		if existingName == d || strings.HasSuffix(existingName, "."+d) || strings.HasSuffix(d, "."+existingName) {
 			return &DomainClaimError{Domain: d, Existing: existing.Hostname, Project: existing.Project, Machine: existing.Machine, Class: DomainClaimConflictHostname, SameTenant: existing.Tenant == tenantName}
 		}
 	}
@@ -373,7 +402,8 @@ func RouteHostnameInsideMachineHostname(ctx context.Context, db *sql.DB, hostnam
 		return err
 	}
 	for _, existing := range rows {
-		if h == existing.Hostname || strings.HasSuffix(h, "."+existing.Hostname) {
+		existingName := strings.TrimPrefix(existing.Hostname, "*.")
+		if h == existingName || strings.HasSuffix(h, "."+existingName) {
 			return &RouteInsideMachineHostnameError{Hostname: h, Existing: existing.Hostname}
 		}
 	}

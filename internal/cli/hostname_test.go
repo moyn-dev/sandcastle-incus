@@ -136,7 +136,7 @@ func TestHostnameAddRemoveListRideTheAuthApp(t *testing.T) {
 	if err := remove.Execute(); err != nil {
 		t.Fatalf("remove dry run: %v", err)
 	}
-	if strings.Join(stub.calls, ",") != "remove demo zp:web web12.tc42.uk dry=true" || !strings.HasPrefix(stdout.String(), "[dry-run] would have: released web12.tc42.uk from machine zp:web\n") {
+	if strings.Join(stub.calls, ",") != "remove demo zp:web web12.tc42.uk dry=true" || !strings.HasPrefix(stdout.String(), "[dry-run] would have: released web12.tc42.uk from machine zp:web; project certificate unchanged, per-name certificate retained\n") {
 		t.Fatalf("remove dry run: calls=%v stdout=%q", stub.calls, stdout.String())
 	}
 	stdout.Reset()
@@ -170,7 +170,7 @@ func TestHostnameVerbsRefuseMalformedLocallyAndPrintServerErrorsVerbatim(t *test
 	stub := &stubAuthHostnames{refuse: map[string]error{"web12.tc42.uk": errors.New(`machine hostname "web12.tc42.uk" overlaps a name already claimed on this install; choose another`)}}
 	config, _ := hostnameTestConfig(t, stub)
 	opts := &rootOptions{output: outputText}
-	for _, hostname := range []string{"_x.tc42.uk", "*.tc42.uk", "bad name"} {
+	for _, hostname := range []string{"_x.tc42.uk", "*.*.tc42.uk", "bad name"} {
 		add := newHostnameCommand(config, opts)
 		add.SetArgs([]string{"add", "zp:web", hostname})
 		if err := add.Execute(); err == nil || !strings.HasPrefix(err.Error(), "invalid machine hostname") {
@@ -256,5 +256,31 @@ func TestCreateHostnameFlagsAreOneListAndNeedALogin(t *testing.T) {
 	flag := command.Flags().Lookup("hostname")
 	if flag == nil || flag.Value.String() != "[web12.tc42.uk api.tc42.uk]" {
 		t.Fatalf("--hostname/--fqdn list = %v", flag)
+	}
+}
+
+func TestCreateAliasesDryRunAndValidation(t *testing.T) {
+	stub := &stubAuthHostnames{}
+	config, stdout := hostnameTestConfig(t, stub)
+	summary := tenant.Summary{Tenant: "demo", Projects: []meta.Project{{Name: "zp", Domain: "baum.hase.de"}}}
+	opts := &rootOptions{output: outputText}
+	err := runCreateMachineV2(context.Background(), config, opts, summary, "zp:new", createV2Options{DryRun: true, Aliases: []string{"admin-new", "console-new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.calls) != 2 || !strings.Contains(stub.calls[0], "admin-new.baum.hase.de dry=true before=true") || !strings.Contains(stub.calls[1], "console-new.baum.hase.de dry=true before=true") {
+		t.Fatalf("claims: %v", stub.calls)
+	}
+	if !strings.Contains(stdout.String(), "served by project certificate") {
+		t.Fatalf("plan: %s", stdout.String())
+	}
+	for _, label := range []string{"a.b", "*", ""} {
+		if err := runCreateMachineV2(context.Background(), config, opts, summary, "zp:new", createV2Options{DryRun: true, Aliases: []string{label}}); err == nil {
+			t.Fatalf("invalid alias accepted: %q", label)
+		}
+	}
+	summary.Projects[0].Domain = ""
+	if err := runCreateMachineV2(context.Background(), config, opts, summary, "zp:new", createV2Options{DryRun: true, Aliases: []string{"admin"}}); err == nil {
+		t.Fatal("alias without domain accepted")
 	}
 }

@@ -2,6 +2,7 @@ package incusx
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -291,5 +292,37 @@ func TestTrustManagerGrantAllDeadEntriesErrors(t *testing.T) {
 	}
 	if len(server.updatedFingerprints) != 0 {
 		t.Fatalf("updated = %v, want none", server.updatedFingerprints)
+	}
+}
+
+func TestGrantTenantMemberFallsBackToTheMembersPersonalTenantHolder(t *testing.T) {
+	// Shared client identity: skorfmann's login on a client thieso2 enrolled
+	// first left ONE entry, named after thieso2, holding both personal tenants.
+	server := &fakeTrustServer{certificates: []api.Certificate{
+		{Fingerprint: "dead", CertificatePut: api.CertificatePut{Name: "sandcastle-sh-skorfmann", Type: api.CertificateTypeClient, Restricted: true}},
+		{Fingerprint: "live", CertificatePut: api.CertificatePut{Name: "sandcastle-sh-thieso2", Type: api.CertificateTypeClient, Restricted: true, Projects: []string{"sh-thieso2", "sh-thieso2-default", "sh-skorfmann", "sh-skorfmann-default"}}},
+		{Fingerprint: "other", CertificatePut: api.CertificatePut{Name: "sandcastle-sh-mallory", Type: api.CertificateTypeClient, Restricted: true, Projects: []string{"sh-mallory"}}},
+	}}
+	manager := TrustManager{Server: server}
+	plan := usertrust.UserPlan{User: "skorfmann", CertificateName: "sandcastle-sh-skorfmann", Projects: []string{"sh-moyn-dev", "sh-moyn-dev-default"}}
+	if err := manager.GrantTenantMember(context.Background(), plan, "sh-skorfmann"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(server.updatedFingerprints, []string{"live"}) {
+		t.Fatalf("updated = %v, want only the live holder (never the dead same-named entry, never another user's)", server.updatedFingerprints)
+	}
+	if !slices.Contains(server.updated.Projects, "sh-moyn-dev-default") || !slices.Contains(server.updated.Projects, "sh-skorfmann") {
+		t.Fatalf("projects = %v", server.updated.Projects)
+	}
+	server.updatedFingerprints = nil
+	if err := manager.RevokeTenantMember(context.Background(), plan, "sh-skorfmann"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(server.updatedFingerprints, []string{"live"}) || slices.Contains(server.updated.Projects, "sh-moyn-dev") {
+		t.Fatalf("revoke updated = %v projects = %v", server.updatedFingerprints, server.updated.Projects)
+	}
+	// No live entry at all: a clear refusal naming the prerequisite.
+	if err := manager.GrantTenantMember(context.Background(), usertrust.UserPlan{User: "nobody", CertificateName: "sandcastle-sh-nobody", Projects: plan.Projects}, "sh-nobody"); err == nil || !strings.Contains(err.Error(), "sc login") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -30,16 +30,20 @@ type Summary struct {
 	DNSSuffix    string `json:"dnsSuffix,omitempty"`
 	// DefaultProject is the short name of the tenant's initial project (issue
 	// #93), read from the kind=infra project metadata. Empty ⇒ "default".
-	DefaultProject  string                    `json:"defaultProject,omitempty"`
-	PrivateCIDR     string                    `json:"privateCIDR,omitempty"`
-	DNSAddress      string                    `json:"dnsAddress,omitempty"`
-	DefaultTemplate string                    `json:"defaultTemplate,omitempty"`
-	SSHPublicKey    string                    `json:"sshPublicKey,omitempty"`
-	Projects        []meta.Project            `json:"projects,omitempty"`
-	Status          string                    `json:"status"`
-	Tailscale       meta.Tailscale            `json:"tailscale,omitempty"`
-	PublicRoutes    []meta.PublicRoute        `json:"publicRoutes,omitempty"`
-	StorageShares   []meta.TenantStorageShare `json:"storageShares,omitempty"`
+	DefaultProject  string `json:"defaultProject,omitempty"`
+	PrivateCIDR     string `json:"privateCIDR,omitempty"`
+	DNSAddress      string `json:"dnsAddress,omitempty"`
+	DefaultTemplate string `json:"defaultTemplate,omitempty"`
+	SSHPublicKey    string `json:"sshPublicKey,omitempty"`
+	// Members are the Tenant Members of a Shared Tenant (normalized user
+	// keys, meta.KeyV2Members on the infra project); empty for a Personal
+	// Tenant, which belongs to the user whose key names it.
+	Members       []string                  `json:"members,omitempty"`
+	Projects      []meta.Project            `json:"projects,omitempty"`
+	Status        string                    `json:"status"`
+	Tailscale     meta.Tailscale            `json:"tailscale,omitempty"`
+	PublicRoutes  []meta.PublicRoute        `json:"publicRoutes,omitempty"`
+	StorageShares []meta.TenantStorageShare `json:"storageShares,omitempty"`
 }
 
 func List(ctx context.Context, store IncusTenantStore) ([]Summary, error) {
@@ -86,12 +90,14 @@ func v2Summaries(projects []IncusProject, installPrefix string) []Summary {
 	suffixByInfra := map[string]string{}
 	userByInfra := map[string]string{}
 	defaultProjectByInfra := map[string]string{}
+	membersByInfra := map[string][]string{}
 	for _, incusProject := range projects {
 		if meta.IsManaged(incusProject.Config) && incusProject.Config[meta.KeyKind] == meta.KindInfra {
 			cidrByInfra[incusProject.Name] = strings.TrimSpace(incusProject.Config[meta.KeyV2CIDR])
 			suffixByInfra[incusProject.Name] = strings.TrimSpace(incusProject.Config[meta.KeyV2Suffix])
 			userByInfra[incusProject.Name] = strings.TrimSpace(incusProject.Config[meta.KeyV2User])
 			defaultProjectByInfra[incusProject.Name] = strings.TrimSpace(incusProject.Config[meta.KeyV2DefaultProject])
+			membersByInfra[incusProject.Name] = meta.ParseMembers(incusProject.Config[meta.KeyV2Members])
 		}
 	}
 	byInfra := map[string]*Summary{}
@@ -138,6 +144,7 @@ func v2Summaries(projects []IncusProject, installPrefix string) []Summary {
 				UnixUser:       userByInfra[infraName],
 				DNSSuffix:      firstNonEmptyString(suffixByInfra[infraName], tenantName),
 				DefaultProject: defaultProjectByInfra[infraName],
+				Members:        membersByInfra[infraName],
 				PrivateCIDR:    cidrByInfra[infraName],
 				DNSAddress:     dnsAddressFromCIDR(cidrByInfra[infraName]),
 				Status:         "managed",
@@ -162,6 +169,45 @@ func v2Summaries(projects []IncusProject, installPrefix string) []Summary {
 		summaries = append(summaries, *summary)
 	}
 	return summaries
+}
+
+// IsMember reports whether userKey (normalized) is a Tenant Member of a
+// Shared Tenant — granted Tenant Access without being the tenant's owner.
+func (s Summary) IsMember(userKey string) bool {
+	userKey = strings.ToLower(strings.TrimSpace(userKey))
+	if userKey == "" {
+		return false
+	}
+	for _, member := range s.Members {
+		if member == userKey {
+			return true
+		}
+	}
+	return false
+}
+
+// Accessible reports whether userKey holds Tenant Access: a Personal Tenant
+// belongs to the user whose key names it, and a Shared Tenant admits its
+// Tenant Members. This is THE access rule the Auth App applies to every
+// tenant-plane request and to `sc tenant list`/`switch`.
+func (s Summary) Accessible(userKey string) bool {
+	userKey = strings.ToLower(strings.TrimSpace(userKey))
+	if userKey == "" {
+		return false
+	}
+	return s.Tenant == userKey || s.IsMember(userKey)
+}
+
+// ProjectShortNames lists the tenant's app project short names, sorted.
+func (s Summary) ProjectShortNames() []string {
+	names := make([]string, 0, len(s.Projects))
+	for _, project := range s.Projects {
+		if name := strings.TrimSpace(project.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // V2IncusProjectName maps a v2 tenant summary and a short project name to the
@@ -202,7 +248,9 @@ type ProvisionReuse struct {
 	DefaultProject string
 	UnixUser       string
 	SSHPublicKey   string
-	OccupiedCIDRs  []string
+	// Members are the tenant's stored Tenant Members (meta.KeyV2Members).
+	Members       []string
+	OccupiedCIDRs []string
 	// Projects is the tenant's EXISTING app projects (full Incus names,
 	// <prefix>-<tenant>-<short>), sorted. A re-login's enrollment token must be
 	// scoped to ALL of them, not just the default project — otherwise a fresh
@@ -273,6 +321,7 @@ func ProvisionReuseInputs(ctx context.Context, store IncusTenantStore, installPr
 				reuse.DefaultProject = strings.TrimSpace(incusProject.Config[meta.KeyV2DefaultProject])
 				reuse.UnixUser = strings.TrimSpace(incusProject.Config[meta.KeyV2User])
 				reuse.SSHPublicKey = strings.TrimSpace(incusProject.Config[meta.KeyV2SSHKey])
+				reuse.Members = meta.ParseMembers(incusProject.Config[meta.KeyV2Members])
 			}
 		default:
 			continue

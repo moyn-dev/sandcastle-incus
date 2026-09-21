@@ -82,7 +82,7 @@ func TestPushMachineCertificate_FilesAndOneExec(t *testing.T) {
 	if len(server.execs) != 1 {
 		t.Fatalf("execs = %v, want one", server.execs)
 	}
-	want := "/bin/sh -c mv -f /etc/sandcastle/tls/web12.tc42.uk/cert.pem.new /etc/sandcastle/tls/web12.tc42.uk/cert.pem && mv -f /etc/sandcastle/tls/web12.tc42.uk/key.pem.new /etc/sandcastle/tls/web12.tc42.uk/key.pem && (grep -qxF web12.tc42.uk /etc/sandcastle/hostnames 2>/dev/null || echo web12.tc42.uk >> /etc/sandcastle/hostnames) && /usr/local/sbin/sandcastle-caddy-setup --refresh"
+	want := "/bin/sh -c mv -f '/etc/sandcastle/tls/web12.tc42.uk/cert.pem'.new '/etc/sandcastle/tls/web12.tc42.uk/cert.pem' && mv -f '/etc/sandcastle/tls/web12.tc42.uk/key.pem'.new '/etc/sandcastle/tls/web12.tc42.uk/key.pem' && /usr/local/sbin/sandcastle-caddy-setup --refresh"
 	if server.execs[0] != want {
 		t.Fatalf("exec = %q\nwant  %q", server.execs[0], want)
 	}

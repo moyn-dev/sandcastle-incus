@@ -61,8 +61,11 @@ type ProjectDomainRequest struct {
 
 // ProjectDomainResult is the body of the domain endpoints' successes.
 type ProjectDomainResult struct {
-	Tenant  string `json:"tenant"`
-	Project string `json:"project"`
+	CertState    string   `json:"certState,omitempty"`
+	CertNotAfter string   `json:"certNotAfter,omitempty"`
+	SANs         []string `json:"sans,omitempty"`
+	Tenant       string   `json:"tenant"`
+	Project      string   `json:"project"`
 	// Domain is the claimed Project Domain ("" after unset-domain).
 	Domain string `json:"domain,omitempty"`
 	Zone   string `json:"zone,omitempty"`
@@ -95,10 +98,15 @@ const projectDomainsUnavailableMessage = "project domains are not available on t
 // row if Incus fails (compensation). A dry run with no domain only validates
 // the project name.
 func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request, user User, project string, request ProjectCreateRequest) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
 	domainValue := strings.TrimSpace(request.Domain)
 	if domainValue == "" {
 		// --dry-run without --domain: the name passed validation above.
-		writeJSON(w, http.StatusOK, projectbroker.ProjectResult{Tenant: user.UserKey, Project: project, DryRun: true})
+		writeJSON(w, http.StatusOK, projectbroker.ProjectResult{Tenant: tenantName, Project: project, DryRun: true})
 		return
 	}
 	if h.projectDomains == nil {
@@ -111,7 +119,7 @@ func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request,
 	}
 	claim, _, err := ClaimProjectDomain(r.Context(), h.db, ClaimProjectDomainRequest{
 		Domain:          domainValue,
-		Tenant:          user.UserKey,
+		Tenant:          tenantName,
 		Project:         project,
 		UserKey:         user.UserKey,
 		AuthHostname:    h.authHostname,
@@ -130,18 +138,18 @@ func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if request.DryRun {
-		writeJSON(w, http.StatusOK, projectbroker.ProjectResult{Tenant: user.UserKey, Project: project, Domain: claim.Domain, Zone: claim.Zone, DryRun: true})
+		writeJSON(w, http.StatusOK, projectbroker.ProjectResult{Tenant: tenantName, Project: project, Domain: claim.Domain, Zone: claim.Zone, DryRun: true})
 		return
 	}
 	clientCertificatePEM, _ := GetUserClientCertificate(r.Context(), h.db, user.UserKey)
 	var result projectbroker.ProjectResult
 	err = svclog.Span(r.Context(), "project.create", func() error {
 		var createErr error
-		result, createErr = h.projectDomains.CreateTenantProjectWithDomain(r.Context(), user.UserKey, project, clientCertificatePEM, claim.Domain)
+		result, createErr = h.projectDomains.CreateTenantProjectWithDomain(r.Context(), tenantName, project, clientCertificatePEM, claim.Domain)
 		return createErr
 	})
 	if err != nil {
-		if _, _, releaseErr := ReleaseProjectDomainClaim(r.Context(), h.db, user.UserKey, project); releaseErr != nil {
+		if _, _, releaseErr := ReleaseProjectDomainClaim(r.Context(), h.db, tenantName, project); releaseErr != nil {
 			err = fmt.Errorf("%w (and could not release the project domain claim: %v)", err, releaseErr)
 		}
 		writeAPIError(w, http.StatusInternalServerError, err)
@@ -149,6 +157,8 @@ func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request,
 	}
 	result.Domain = claim.Domain
 	result.Zone = claim.Zone
+	h.extendMemberCertificates(r, tenantName, user.UserKey, result.IncusProject)
+	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -182,14 +192,20 @@ func (h handler) projectAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handler) projectDomainGet(w http.ResponseWriter, r *http.Request, user User, project string) {
-	claim, found, err := GetProjectDomainClaim(r.Context(), h.db, user.UserKey, project)
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
+	claim, found, err := GetProjectDomainClaim(r.Context(), h.db, tenantName, project)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
 	}
-	result := ProjectDomainResult{Tenant: user.UserKey, Project: project}
+	result := ProjectDomainResult{Tenant: tenantName, Project: project}
 	if found {
 		result.Domain, result.Zone = claim.Domain, claim.Zone
+		h.projectCertificateStatus(r.Context(), &result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -201,6 +217,11 @@ func (h handler) projectDomainGet(w http.ResponseWriter, r *http.Request, user U
 // and certificate rows go with the claim (onProjectDomainReleased).
 
 func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user User, project string) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
 	if h.projectDomains == nil {
 		writeAPIError(w, http.StatusNotImplemented, errors.New(projectDomainsUnavailableMessage))
 		return
@@ -216,7 +237,7 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 	}
 	claim, previous, err := ClaimProjectDomain(r.Context(), h.db, ClaimProjectDomainRequest{
 		Domain:          request.Domain,
-		Tenant:          user.UserKey,
+		Tenant:          tenantName,
 		Project:         project,
 		UserKey:         user.UserKey,
 		AuthHostname:    h.authHostname,
@@ -224,11 +245,15 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 		AdminView:       user.SandcastleAdmin,
 		DryRun:          request.DryRun,
 	})
-	result := ProjectDomainResult{Tenant: user.UserKey, Project: project, DryRun: request.DryRun}
+	result := ProjectDomainResult{Tenant: tenantName, Project: project, DryRun: request.DryRun}
 	if err != nil {
 		var already *ProjectDomainAlreadyClaimedError
 		if errors.As(err, &already) {
 			result.Domain, result.Zone, result.AlreadyClaimed = claim.Domain, claim.Zone, true
+			h.projectCertificateStatus(r.Context(), &result)
+			if !request.DryRun {
+				h.kickZoneReconcile()
+			}
 			writeJSON(w, http.StatusOK, result)
 			return
 		}
@@ -236,18 +261,20 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 		return
 	}
 	result.Domain, result.Zone = claim.Domain, claim.Zone
+	result.CertState = "pending"
+	result.SANs = machineCertificateHostnames(claim.Domain)
 	if request.DryRun {
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
 	err = svclog.Span(r.Context(), "project.set-domain", func() error {
-		return h.projectDomains.SetProjectDomain(r.Context(), user.UserKey, project, claim.Domain)
+		return h.projectDomains.SetProjectDomain(r.Context(), tenantName, project, claim.Domain)
 	})
 	if err != nil {
 		// Compensation: the reservation must not outlive a failed Incus write.
 		// The previous claim (a replaced domain) is put back best-effort so
 		// the project's DB and Incus state stay aligned.
-		if _, _, releaseErr := ReleaseProjectDomainClaim(r.Context(), h.db, user.UserKey, project); releaseErr != nil {
+		if _, _, releaseErr := ReleaseProjectDomainClaim(r.Context(), h.db, tenantName, project); releaseErr != nil {
 			err = fmt.Errorf("%w (and could not release the project domain claim: %v)", err, releaseErr)
 		} else if previous != nil {
 			if restoreErr := restoreProjectDomainClaim(r.Context(), h.db, *previous); restoreErr != nil {
@@ -270,13 +297,18 @@ func (h handler) projectDomainSet(w http.ResponseWriter, r *http.Request, user U
 }
 
 func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user User, project string, dryRun bool) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
 	if h.projectDomains == nil {
 		writeAPIError(w, http.StatusNotImplemented, errors.New(projectDomainsUnavailableMessage))
 		return
 	}
-	result := ProjectDomainResult{Tenant: user.UserKey, Project: project, DryRun: dryRun}
+	result := ProjectDomainResult{Tenant: tenantName, Project: project, DryRun: dryRun}
 	if dryRun {
-		claim, found, err := GetProjectDomainClaim(r.Context(), h.db, user.UserKey, project)
+		claim, found, err := GetProjectDomainClaim(r.Context(), h.db, tenantName, project)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, err)
 			return
@@ -287,7 +319,7 @@ func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
-	claim, found, err := ReleaseProjectDomainClaim(r.Context(), h.db, user.UserKey, project)
+	claim, found, err := ReleaseProjectDomainClaim(r.Context(), h.db, tenantName, project)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
@@ -301,7 +333,7 @@ func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user
 	// Unset the Incus key even without a row: this is how an "Incus key
 	// without row" project (logged by the GC) is repaired by its tenant.
 	err = svclog.Span(r.Context(), "project.unset-domain", func() error {
-		return h.projectDomains.SetProjectDomain(r.Context(), user.UserKey, project, "")
+		return h.projectDomains.SetProjectDomain(r.Context(), tenantName, project, "")
 	})
 	if err != nil {
 		// The claim is already released; a failure here is repaired by the
@@ -318,6 +350,11 @@ func (h handler) projectDomainUnset(w http.ResponseWriter, r *http.Request, user
 // [Cloudflare records + certificate rows: onProjectDomainReleased, slice 6] →
 // Incus. A failure after the claim is released is repaired by the GC.
 func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User, project string, dryRun bool) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
 	if h.projectDomains == nil {
 		writeAPIError(w, http.StatusNotImplemented, errors.New("project deletion is not available on this deployment"))
 		return
@@ -326,9 +363,9 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		writeAPIError(w, http.StatusBadRequest, errors.New("default project cannot be deleted"))
 		return
 	}
-	result := ProjectDomainResult{Tenant: user.UserKey, Project: project, DryRun: dryRun}
+	result := ProjectDomainResult{Tenant: tenantName, Project: project, DryRun: dryRun}
 	if dryRun {
-		claim, found, err := GetProjectDomainClaim(r.Context(), h.db, user.UserKey, project)
+		claim, found, err := GetProjectDomainClaim(r.Context(), h.db, tenantName, project)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, err)
 			return
@@ -339,7 +376,7 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
-	claim, found, err := ReleaseProjectDomainClaim(r.Context(), h.db, user.UserKey, project)
+	claim, found, err := ReleaseProjectDomainClaim(r.Context(), h.db, tenantName, project)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
@@ -352,7 +389,7 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 	}
 	// The project's machines go with it: their explicit Machine Public
 	// Hostnames (ADR-0028) are released the same way, before Incus.
-	hostnames, err := ReleaseMachineHostnamesOfProject(r.Context(), h.db, user.UserKey, project)
+	hostnames, err := ReleaseMachineHostnamesOfProject(r.Context(), h.db, tenantName, project)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
@@ -363,7 +400,7 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		}
 	}
 	err = svclog.Span(r.Context(), "project.delete", func() error {
-		return h.projectDomains.DeleteTenantProject(r.Context(), user.UserKey, project)
+		return h.projectDomains.DeleteTenantProject(r.Context(), tenantName, project)
 	})
 	if err != nil {
 		writeAPIError(w, projectDomainErrorStatus(err), err)

@@ -69,7 +69,7 @@ func requestMachineCertificate(ctx context.Context, config commandConfig, tenant
 		if baseURL == "" || token == "" {
 			return machineCertificateOutcome{Reason: "auth-app-unreachable", Message: "not logged in to an Auth App (run sc login)"}
 		}
-		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	}
 	ctx, cancel := context.WithTimeout(ctx, machineCertificateRequestTimeout)
 	defer cancel()
@@ -92,6 +92,8 @@ func formatPublicNameLine(publicHostname, project string, devImage bool, outcome
 	}
 	detail := fmt.Sprintf("certificate pending — see: sc project status %s", project)
 	switch {
+	case outcome.State == "project":
+		detail = "served by project certificate"
 	case outcome.Reason == "auth-app-unreachable":
 		detail = "certificate pending: Auth App unreachable — retried by the reconciler"
 	case outcome.Reason != "":

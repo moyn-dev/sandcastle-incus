@@ -14,6 +14,7 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var homeShare bool
 	var bare bool
 	var hostnames []string
+	var aliases []string
 	command := &cobra.Command{
 		Use:   "create [[remote:]project:]machine",
 		Short: "Create a Sandcastle container machine",
@@ -35,6 +36,7 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 				HomeShare: homeShare,
 				Bare:      bare,
 				Hostnames: hostnames,
+				Aliases:   aliases,
 			})
 		},
 	}
@@ -56,6 +58,7 @@ func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	// Both flags append to ONE list (a plain StringArrayVar per flag would
 	// let the second flag's first value replace the first flag's), so
 	// --hostname and --fqdn mix freely.
+	command.Flags().Var(&appendStringFlag{target: &aliases}, "alias", "one-label alias under the Project Domain (repeatable; uses the project certificate)")
 	command.Flags().Var(&appendStringFlag{target: &hostnames}, "hostname", "explicit public hostname under a registered Public DNS Zone (repeatable; alias --fqdn); claimed before the machine is created")
 	command.Flags().Var(&appendStringFlag{target: &hostnames}, "fqdn", "alias of --hostname")
 	return command

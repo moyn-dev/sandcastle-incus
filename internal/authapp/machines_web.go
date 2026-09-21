@@ -100,8 +100,9 @@ func (h handler) accessibleTenantSummaries(r *http.Request, user User) ([]tenant
 	normalized := NormalizeGitHubUsername(user.UserKey)
 	accessible := make([]tenant.Summary, 0, len(summaries))
 	for _, summary := range summaries {
-		// A personal tenant belongs to the user whose key names it.
-		if summary.Tenant == normalized {
+		// A Personal Tenant belongs to the user whose key names it; a Shared
+		// Tenant admits its Tenant Members (Tenant Metadata, KeyV2Members).
+		if summary.Accessible(normalized) {
 			accessible = append(accessible, summary)
 		}
 	}

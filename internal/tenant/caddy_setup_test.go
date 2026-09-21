@@ -121,7 +121,7 @@ var bashismWordStart = regexp.MustCompile(`(^|[\s=(])\$'`)
 // bashismAllowed lists the `${` forms that are POSIX (the only ${…}
 // expansions the scripts use); everything else under `${` is suspect
 // (`${x//…}`, `${x^^}`, `${arr[@]}`, `${x:1:2}`).
-var bashismAllowed = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}|\$\{[0-9]+(:-[^}]*)?\}`)
+var bashismAllowed = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*|#[^}]*)?\}|\$\{[0-9]+(:-[^}]*|#[^}]*)?\}`)
 
 func assertPOSIXSh(t *testing.T, name, script string) {
 	t.Helper()
@@ -679,5 +679,36 @@ func TestGeneralizeDropsPublicNameMaterial(t *testing.T) {
 		if !strings.Contains(machineGeneralizeScript, want) {
 			t.Fatalf("generalize lacks %q:\n%s", want, machineGeneralizeScript)
 		}
+	}
+}
+
+func TestCaddySetupProjectCertificateSelection(t *testing.T) {
+	r := newCaddySetupRoot(t, derivedEnv)
+	r.run(false)
+	r.write("etc/sandcastle/project-domain", "baum.hase.de\n")
+	r.write("etc/sandcastle/hostnames", "web.baum.hase.de\nadmin-web.baum.hase.de\ndeep.web.baum.hase.de\n*.web.baum.hase.de\noutside.tc42.uk\n")
+	r.certDir("baum.hase.de", "PROJECT-CERT", "PROJECT-KEY")
+	r.certDir("web.baum.hase.de", "OLD-CERT", "OLD-KEY")
+	r.certDir("*.web.baum.hase.de", "WILDCARD-CERT", "WILDCARD-KEY")
+	r.certDir("outside.tc42.uk", "OUTSIDE-CERT", "OUTSIDE-KEY")
+	r.run(true)
+	got := r.read("etc/caddy/Caddyfile")
+	for _, name := range []string{"web.baum.hase.de", "admin-web.baum.hase.de"} {
+		want := r.rebased(name + " {\n    tls /etc/sandcastle/tls/baum.hase.de/cert.pem /etc/sandcastle/tls/baum.hase.de/key.pem")
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing shared block %s: %s", name, got)
+		}
+	}
+	if strings.Contains(got, "deep.web.baum.hase.de") || strings.Contains(got, "*.*.") {
+		t.Fatalf("wildcard overreach: %s", got)
+	}
+	if !strings.Contains(got, "*.web.baum.hase.de {") || !strings.Contains(got, "/outside.tc42.uk/cert.pem") {
+		t.Fatalf("missing explicit blocks: %s", got)
+	}
+	r.write("etc/sandcastle/project-domain", "")
+	r.run(true)
+	got = r.read("etc/caddy/Caddyfile")
+	if strings.Contains(got, "/baum.hase.de/cert.pem") || strings.Contains(got, "admin-web.baum.hase.de") {
+		t.Fatalf("released project cert still selected: %s", got)
 	}
 }

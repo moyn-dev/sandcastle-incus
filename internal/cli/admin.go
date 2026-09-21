@@ -6,17 +6,21 @@ import (
 	"os"
 	"strings"
 
+	"context"
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/domain"
 	"github.com/thieso2/sandcastle-incus/internal/images"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
 	"github.com/thieso2/sandcastle-incus/internal/share"
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 	"github.com/thieso2/sandcastle-incus/internal/usertrust"
 	_ "modernc.org/sqlite"
+	"slices"
+	"sort"
 )
 
 func newAdminCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -59,6 +63,8 @@ func newAdminTenantCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 	command.AddCommand(newAdminTenantRevokeCommand(config, opts))
 	command.AddCommand(newAdminTenantUsersCommand(config, opts))
 	command.AddCommand(newAdminTenantSetSSHKeyCommand(config))
+	command.AddCommand(newAdminTenantAddSSHKeyCommand(config))
+	command.AddCommand(newAdminTenantRemoveSSHKeyCommand(config))
 	command.AddCommand(newAdminTenantPayloadSyncCommand(config, opts))
 	return command
 }
@@ -142,7 +148,8 @@ func newAdminTenantStatusCommand(config commandConfig, opts *rootOptions) *cobra
 
 func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cobra.Command {
 	var dryRun bool
-	var sshKey string
+	var sshKeys []string
+	var members []string
 	var tailscaleAuthKey string
 	var sidecarImage string
 	var cidrPool string
@@ -153,8 +160,13 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 	command := &cobra.Command{
 		Use:   "create tenant",
 		Short: "Create a Sandcastle tenant",
-		Args:  cobra.ExactArgs(1),
+		Long: "Create a Sandcastle tenant. A tenant with --member is a Shared Tenant: each member " +
+			"must already have logged in to this install (their Personal Tenant carries the login SSH key " +
+			"the shared machines authorize); members then run `sc tenant switch <tenant>`.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sshKey := strings.Join(sshKeys, "\n")
+			memberList := meta.ParseMembers(strings.Join(members, ","))
 			// Broker plane: route the create through the broker's admin API
 			// instead of opening a direct Incus connection (ADR-0016).
 			if strings.TrimSpace(broker) != "" {
@@ -168,6 +180,7 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 					"tenant":           args[0],
 					"sshPublicKey":     sshKey,
 					"tailscaleAuthKey": tailscaleAuthKey,
+					"members":          strings.Join(memberList, ","),
 					"dnsSuffix":        strings.TrimSpace(dnsSuffix),
 				}, &result); err != nil {
 					return err
@@ -208,9 +221,27 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 				ExistingUnixUser:       reuse.UnixUser,
 				ExistingSSHKey:         reuse.SSHPublicKey,
 				ExistingProjects:       reuse.Projects,
+				Members:                memberList,
+				ExistingMembers:        reuse.Members,
 			})
 			if err != nil {
 				return err
+			}
+			// Shared Tenant prerequisite: every member has a Personal Tenant on
+			// this install — that is where their login SSH key comes from. A
+			// missing member is refused up front rather than producing machines
+			// nobody can log in to. A shared tenant with no key of its own is
+			// fine: the members' keys are the authorized set.
+			if len(plan.Members) > 0 && config.tenantStore != nil {
+				missing, err := missingMemberTenants(cmd.Context(), config.tenantStore, admin.IncusProjectPrefix, plan.Members)
+				if err != nil {
+					return err
+				}
+				if len(missing) > 0 {
+					return fmt.Errorf("member(s) %s have no Personal Tenant on this install; they must run `sc login` here first", strings.Join(missing, ", "))
+				}
+			} else if len(plan.Members) == 0 && strings.TrimSpace(plan.SSHPublicKey) == "" {
+				return fmt.Errorf("--ssh-key is required (or --member for a Shared Tenant, whose members' keys are used)")
 			}
 			if dryRun {
 				return writeOutput(config.stdout, opts.output, formatCreatePlanV2(plan), plan)
@@ -224,10 +255,29 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 			}); err != nil {
 				return err
 			}
+			// Shared Tenant: each member's existing restricted certificate (from
+			// their own login) is extended with the tenant's projects; the
+			// enrollment token below is only for a tenant-named identity.
+			for _, member := range plan.Members {
+				if config.trustManager == nil {
+					break
+				}
+				memberPlan, err := usertrust.PlanTenantGrant(admin, usertrust.TenantAccessRequest{
+					Tenant: plan.Tenant, User: member, AppProjects: []string{plan.DefaultProjectShort},
+				})
+				if err != nil {
+					return err
+				}
+				if err := usertrust.GrantMember(cmd.Context(), config.trustManager, admin, memberPlan, member); err != nil {
+					fmt.Fprintf(config.stderr, "Warning: could not extend %s's certificate with %s: %v\n", member, plan.Tenant, err)
+					continue
+				}
+				fmt.Fprintf(config.stdout, "Member %s granted %v; they can now run: sc tenant switch %s\n", member, memberPlan.Projects, plan.Tenant)
+			}
 			// Mint a restricted Incus Certificate Add Token scoped to the tenant's
 			// projects. The tenant redeems it with their own client, so the private
 			// key never leaves them (ADR-0016).
-			if config.trustManager != nil {
+			if config.trustManager != nil && len(plan.Members) == 0 {
 				tok, err := config.trustManager.CreateToken(cmd.Context(), usertrust.UserPlan{
 					User:            plan.Tenant,
 					CertificateName: usertrust.RestrictedInstallName(plan.Prefix, plan.Tenant),
@@ -247,7 +297,8 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 			return writeOutput(config.stdout, opts.output, formatCreatePlanV2(plan), plan)
 		},
 	}
-	command.Flags().StringVar(&sshKey, "ssh-key", "", "SSH public key baked into the tenant's default project profile")
+	command.Flags().StringArrayVar(&sshKeys, "ssh-key", nil, "SSH public key baked into the tenant's default project profile (repeatable; the first is the tenant's own login key)")
+	command.Flags().StringArrayVar(&members, "member", nil, "GitHub username granted Tenant Access to this Shared Tenant (repeatable; each must have logged in to this install already)")
 	command.Flags().StringVar(&tailscaleAuthKey, "tailscale-authkey", "", "the tenant's Tailscale auth key (joins the sidecar to the tenant's tailnet)")
 	command.Flags().StringVar(&sidecarImage, "sidecar-image", "", "system-container base image (alias or fingerprint) for the sidecar; defaults to the configured base")
 	command.Flags().StringVar(&cidrPool, "cidr-pool", "10.249.0.0/16", "CIDR pool to allocate the tenant's /24 from (must not overlap v1)")
@@ -532,11 +583,18 @@ func newAdminTenantGrantCommand(config commandConfig, opts *rootOptions) *cobra.
 		Use:   "grant tenant user",
 		Short: "Grant tenant access to a restricted user",
 		Args:  cobra.ExactArgs(2),
+		Long: "Grant tenant access to a restricted user. The user's certificate is extended with the " +
+			"tenant's infra project and every app project; on a v2 tenant the user is also recorded as a " +
+			"Tenant Member (Shared Tenants), which re-renders the tenant's profiles with the member's login " +
+			"key. The member must have logged in to this install already; they then run `sc tenant switch`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plan, err := usertrust.PlanTenantGrant(config.adminConfig, usertrust.TenantAccessRequest{
-				Tenant: args[0],
-				User:   args[1],
-			})
+			request := usertrust.TenantAccessRequest{Tenant: args[0], User: args[1]}
+			summary, found := adminTenantSummary(cmd.Context(), config, args[0])
+			if found {
+				request.AppProjects = summary.ProjectShortNames()
+				request.Personal = naming.ValidateTenantName(summary.Tenant) != nil
+			}
+			plan, err := usertrust.PlanTenantGrant(config.adminConfig, request)
 			if err != nil {
 				return err
 			}
@@ -544,8 +602,16 @@ func newAdminTenantGrantCommand(config commandConfig, opts *rootOptions) *cobra.
 				if config.trustManager == nil {
 					return fmt.Errorf("restricted user grant executor is not configured")
 				}
-				if err := config.trustManager.Grant(cmd.Context(), plan); err != nil {
+				if err := usertrust.GrantMember(cmd.Context(), config.trustManager, config.adminConfig, plan, args[1]); err != nil {
 					return err
+				}
+				if found && config.tenantMembers != nil && summary.Tenant != strings.ToLower(strings.TrimSpace(args[1])) {
+					members, err := config.tenantMembers.AddTenantMemberV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, summary.Tenant, args[1])
+					if err != nil {
+						return err
+					}
+					fmt.Fprintf(config.stdout, "Tenant %s members: %s\n", summary.Tenant, strings.Join(members, ", "))
+					fmt.Fprintf(config.stdout, "Next for %s: sc tenant switch %s\n", strings.ToLower(strings.TrimSpace(args[1])), summary.Tenant)
 				}
 			}
 			return writeOutput(config.stdout, opts.output, formatUserPlan(plan), plan)
@@ -562,10 +628,13 @@ func newAdminTenantRevokeCommand(config commandConfig, opts *rootOptions) *cobra
 		Short: "Revoke tenant access from a restricted user",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plan, err := usertrust.PlanTenantRevoke(config.adminConfig, usertrust.TenantAccessRequest{
-				Tenant: args[0],
-				User:   args[1],
-			})
+			request := usertrust.TenantAccessRequest{Tenant: args[0], User: args[1]}
+			summary, found := adminTenantSummary(cmd.Context(), config, args[0])
+			if found {
+				request.AppProjects = summary.ProjectShortNames()
+				request.Personal = naming.ValidateTenantName(summary.Tenant) != nil
+			}
+			plan, err := usertrust.PlanTenantRevoke(config.adminConfig, request)
 			if err != nil {
 				return err
 			}
@@ -573,8 +642,15 @@ func newAdminTenantRevokeCommand(config commandConfig, opts *rootOptions) *cobra
 				if config.trustManager == nil {
 					return fmt.Errorf("restricted user revoke executor is not configured")
 				}
-				if err := config.trustManager.Revoke(cmd.Context(), plan); err != nil {
+				if err := usertrust.RevokeMember(cmd.Context(), config.trustManager, config.adminConfig, plan, args[1]); err != nil {
 					return err
+				}
+				if found && config.tenantMembers != nil && summary.IsMember(args[1]) {
+					members, err := config.tenantMembers.RemoveTenantMemberV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, summary.Tenant, args[1])
+					if err != nil {
+						return err
+					}
+					fmt.Fprintf(config.stdout, "Tenant %s members: %s\n", summary.Tenant, orNone(strings.Join(members, ", ")))
 				}
 			}
 			return writeOutput(config.stdout, opts.output, formatUserPlan(plan), plan)
@@ -600,6 +676,14 @@ func newAdminTenantUsersCommand(config commandConfig, opts *rootOptions) *cobra.
 			result, err := config.trustManager.ListTenantUsers(cmd.Context(), plan)
 			if err != nil {
 				return err
+			}
+			if summary, found := adminTenantSummary(cmd.Context(), config, args[0]); found {
+				for _, member := range summary.Members {
+					if !slices.Contains(result.Users, member) {
+						result.Users = append(result.Users, member)
+					}
+				}
+				sort.Strings(result.Users)
 			}
 			return writeOutput(config.stdout, opts.output, formatTenantUsers(result), result)
 		},
@@ -1286,4 +1370,80 @@ func newAdminMachineWorkloadCommand(config commandConfig, opts *rootOptions) *co
 		Short: "Manage workload identity for machines",
 	}
 	return cmd
+}
+
+// adminTenantSummary resolves a tenant's live summary for the admin grant
+// family (project list, membership); not found is not an error here — the
+// certificate grant still works from the name alone.
+func adminTenantSummary(ctx context.Context, config commandConfig, tenantName string) (tenant.Summary, bool) {
+	if config.tenantStore == nil {
+		return tenant.Summary{}, false
+	}
+	summaries, err := tenant.ListForPrefix(ctx, config.tenantStore, config.adminConfig.IncusProjectPrefix)
+	if err != nil {
+		return tenant.Summary{}, false
+	}
+	return findTenantSummaryForCleanup(summaries, tenantName)
+}
+
+// missingMemberTenants reports which members have no Personal Tenant on this
+// install (the Shared Tenant prerequisite: they must `sc login` first).
+func missingMemberTenants(ctx context.Context, store tenant.IncusTenantStore, prefix string, members []string) ([]string, error) {
+	summaries, err := tenant.ListForPrefix(ctx, store, prefix)
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, member := range members {
+		if _, found := findTenantSummaryForCleanup(summaries, member); !found {
+			missing = append(missing, member)
+		}
+	}
+	return missing, nil
+}
+
+func orNone(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "none"
+	}
+	return value
+}
+
+func newAdminTenantAddSSHKeyCommand(config commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "add-ssh-key tenant key",
+		Short: "Add an SSH public key to a Sandcastle tenant (keeps the existing keys)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if config.tenantMembers == nil {
+				return fmt.Errorf("tenant key manager is not configured")
+			}
+			keys, err := config.tenantMembers.AddTenantSSHKeyV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(config.stdout, "Tenant %s now authorizes %d key(s) on new machines.\n", args[0], len(keys))
+			fmt.Fprintf(config.stdout, "Existing machines keep their current keys; enrol on a running machine with `sc fix --only ssh-key`.\n")
+			return nil
+		},
+	}
+}
+
+func newAdminTenantRemoveSSHKeyCommand(config commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove-ssh-key tenant key",
+		Short: "Remove an SSH public key from a Sandcastle tenant (matched on the key, not its comment)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if config.tenantMembers == nil {
+				return fmt.Errorf("tenant key manager is not configured")
+			}
+			keys, err := config.tenantMembers.RemoveTenantSSHKeyV2(cmd.Context(), config.adminConfig.IncusProjectPrefix, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(config.stdout, "Tenant %s now authorizes %d key(s) on new machines.\n", args[0], len(keys))
+			return nil
+		},
+	}
 }

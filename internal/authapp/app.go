@@ -73,6 +73,23 @@ type MachineSSHKeyReconciler interface {
 	ReconcileUserSSHKey(context.Context, tenant.Summary, string, string) error
 }
 
+// TenantMembershipManager maintains a Shared Tenant's Tenant Members in
+// Tenant Metadata (meta.KeyV2Members) and re-renders its profiles so new
+// machines authorize the members' keys. Implemented by incusx.TenantCreator.
+type TenantMembershipManager interface {
+	AddTenantMemberV2(ctx context.Context, installPrefix string, tenantName string, userKey string) ([]string, error)
+	RemoveTenantMemberV2(ctx context.Context, installPrefix string, tenantName string, userKey string) ([]string, error)
+	// RenderTenantProfilesV2 re-renders every app project's profiles from the
+	// tenant's current key set (a member rotated their login key).
+	RenderTenantProfilesV2(ctx context.Context, installPrefix string, tenantName string) error
+}
+
+// SidecarAddressReader reports a tenant sidecar's tailnet address — what a
+// Tenant Member's Incus remote must point at (the Incus Reach).
+type SidecarAddressReader interface {
+	SidecarTailnetIPV2(ctx context.Context, installPrefix string, tenantName string) (string, error)
+}
+
 type TenantSSHKeyUpdater interface {
 }
 
@@ -96,6 +113,12 @@ type HTTPRunner struct {
 	MachineSSHAccess MachineSSHAccessRevoker
 	ShareStore       share.Store
 	ShareReconciler  ShareReconciler
+	// TenantMembers / SidecarAddresses back Shared Tenants: membership writes
+	// on the web grant and member key rotation at login, and the sidecar
+	// address /api/tenants hands a member so `sc tenant switch` can enrol the
+	// tenant's remote.
+	TenantMembers    TenantMembershipManager
+	SidecarAddresses SidecarAddressReader
 	// Projects performs the privileged project scaffolding for the token-gated
 	// POST /api/projects — the tunnel-friendly tenant plane (no broker port).
 	Projects TenantProjectCreator
@@ -282,6 +305,8 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			MachineSSHAccess:             r.MachineSSHAccess,
 			ShareStore:                   r.ShareStore,
 			ShareReconciler:              r.ShareReconciler,
+			TenantMembers:                r.TenantMembers,
+			SidecarAddresses:             r.SidecarAddresses,
 			Projects:                     r.Projects,
 			ProjectDomains:               r.ProjectDomains,
 			DebugDeviceUser:              plan.DebugDeviceUser,
@@ -884,6 +909,8 @@ type HandlerOptions struct {
 	MachineSSHAccess   MachineSSHAccessRevoker
 	ShareStore         share.Store
 	ShareReconciler    ShareReconciler
+	TenantMembers      TenantMembershipManager
+	SidecarAddresses   SidecarAddressReader
 	// Projects performs the privileged project scaffolding for the token-gated
 	// POST /api/projects — the tunnel-friendly tenant plane (no broker port).
 	Projects            TenantProjectCreator
@@ -979,6 +1006,8 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		machineSSHAccess:      handlerOptions.MachineSSHAccess,
 		shareStore:            handlerOptions.ShareStore,
 		shareReconciler:       handlerOptions.ShareReconciler,
+		tenantMembers:         handlerOptions.TenantMembers,
+		sidecarAddresses:      handlerOptions.SidecarAddresses,
 		projects:              handlerOptions.Projects,
 		debugDeviceUser:       NormalizeGitHubUsername(handlerOptions.DebugDeviceUser),
 		simulateToken:         strings.TrimSpace(handlerOptions.SimulateGitHubToken),
@@ -1123,6 +1152,8 @@ type handler struct {
 	machineSSHAccess      MachineSSHAccessRevoker
 	shareStore            share.Store
 	shareReconciler       ShareReconciler
+	tenantMembers         TenantMembershipManager
+	sidecarAddresses      SidecarAddressReader
 	projects              TenantProjectCreator
 	debugDeviceUser       string
 	simulateToken         string
@@ -1198,17 +1229,26 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 		h.projectCreateWithDomain(w, r, user, project, request)
 		return
 	}
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	clientCertificatePEM, _ := GetUserClientCertificate(r.Context(), h.db, user.UserKey)
 	var result projectbroker.ProjectResult
 	err = svclog.Span(r.Context(), "project.create", func() error {
 		var createErr error
-		result, createErr = h.projects.CreateTenantProject(r.Context(), user.UserKey, project, clientCertificatePEM)
+		result, createErr = h.projects.CreateTenantProject(r.Context(), tenantName, project, clientCertificatePEM)
 		return createErr
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A Shared Tenant's other members must reach the new project too: extend
+	// their certificates by their recorded client identity (best effort — a
+	// member who never recorded one is covered on their next login).
+	h.extendMemberCertificates(r, tenantName, user.UserKey, result.IncusProject)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
 }
@@ -1231,10 +1271,15 @@ func (h handler) sidecarUpdateAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	var result projectbroker.SidecarUpdateResult
 	err = svclog.Span(r.Context(), "sidecar.update", func() error {
 		var updateErr error
-		result, updateErr = h.sidecars.UpdateTenantSidecar(user.UserKey)
+		result, updateErr = h.sidecars.UpdateTenantSidecar(tenantName)
 		return updateErr
 	})
 	if err != nil {

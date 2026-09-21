@@ -1,3 +1,8 @@
+> Project certificate update: [project-certificates.md](project-certificates.md)
+> supersedes the per-derived-name certificate rules, the prohibition on aliases
+> under a machine's own Project Domain, and the zone-apex/wildcard restrictions
+> below. Other reservation, authentication and compensation rules still apply.
+
 # Spec: Machine Public Hostnames — explicit names, one certificate each (addendum to Public DNS Zones)
 
 > Decision record: ADR-0028 (`docs/adr/0028-explicit-machine-public-hostnames.md`), amending

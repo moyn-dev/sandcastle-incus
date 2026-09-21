@@ -3128,3 +3128,86 @@ unpublish, DNS-propagation wait, and a new direct-Machine publish. No command
 may retarget a live hostname automatically. This legacy migration is a separate
 opt-in E2E run using the prior release artifact; it is not part of the fresh
 installation gate above.
+
+
+## Project certificate acceptance (supersedes per-derived-name orders)
+
+Use the disposable `skorfmann/tod0s` project on its confirmed install. Deploy
+updated Auth App and platform payload before testing; record the ACME directory,
+project certificate serial, order-log baseline and test start time. Do not
+switch networks automatically.
+
+1. `sc project set-domain tod0s tod0s.tc42.uk --dry-run` must plan one project
+   certificate; the real command followed by `sc project status tod0s --json`
+   must show SANs `tod0s.tc42.uk` and `*.tod0s.tc42.uk`, state and expiry.
+2. `sc create tod0s:x1 --alias console-x1` must print `served by project
+   certificate`. Serve a test backend on port 3000 and verify HTTPS for
+   `x1.tod0s.tc42.uk` and `console-x1.tod0s.tc42.uk` after first boot. Compare
+   the peer leaf serial/SANs to the project certificate. No derived/alias
+   row or order may appear in the Auth Database or Auth App journal.
+3. Add `admin-x1.tod0s.tc42.uk` with `sc hostname add`; verify the same leaf
+   and no new order. List/remove the alias; removing the derived name must fail.
+4. Use `incus copy x1 x2 --project <actual-incus-project>` with no `-c`
+   overrides, then start x2. Verify destination public names contain only
+   `x2.tod0s.tc42.uk`, raw cert-state is `project`, raw cert-not-after is empty,
+   and `sc ls --json` resolves shared state/expiry. HTTPS uses the same leaf.
+5. `sc delete tod0s:x2 --dry-run` must not mutate. Delete for real and verify
+   its A/wildcard records disappear and no x2 certificate row remains.
+6. Add `'*.x1.tod0s.tc42.uk'` explicitly and verify one per-name wildcard order.
+   Create a separate machine with `--hostname web12.tc42.uk`; verify its
+   per-name order remains. A two-label alias also gets a per-name order.
+7. Verify renewal on a staging deployment: all running machines receive the
+   new project serial; a stopped machine receives it on start without an order.
+   Unset-domain drops the project row and clears the Caddy selector. Private
+   tenant-CA certificate files must remain unchanged throughout.
+
+PASS requires positive journal/DB evidence of the exact order set. A crt.sh
+query can corroborate production issuance, but absence there alone is not
+proof because certificate transparency indexing may lag. Record live timing
+and any unavailable acceptance checks separately from unit tests.
+
+
+## Phase 13 — Shared Tenants (ADR-0029, `docs/spec/shared-tenants.md`) ✅ 13a–13g PASS 2026-09-21
+
+One tenant, several users. Membership is Tenant Metadata (`v2.members` on
+the infra project), every member's login key is authorized on the tenant's
+machines, and every member's certificate covers every project. Automation:
+`scripts/e2e-shared-tenant.sh`, run on the enrolled Tailnet **client** of a
+fresh `--simulate-github-token` install.
+
+**Prerequisites (the feature's own):**
+- Two users have completed `sc login` on the install from the client:
+  `$OWNER` (thieso2, the client's default key) and `$MEMBER` (skorfmann,
+  `--ssh-public-key ~/.ssh/skorfmann_ed25519.pub`, a second key so the
+  machine can be shown to authorize both). Each login leaves a remote named
+  after its DNS suffix (`thieso2sh`, `skorfmannsh`); the script switches
+  users with `sc remote switch <suffix>`.
+- The client and the tenant's sidecar share one tailnet, with a
+  `tag:sandcastle` autoApprover (Prerequisites above).
+- The admin side runs where the admin Incus socket is
+  (`SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:<vm> --"` when the install
+  lives in a VM), with `SANDCASTLE_INCUS_PROJECT_PREFIX=<prefix>`.
+- **Cloudflare ingress hostname depth.** The install's `--auth-hostname`
+  must sit directly under the Cloudflare zone (`sh-shared.tc42.uk`):
+  Cloudflare's universal certificate covers one label, so a deeper name
+  (`x.e2e.sc.tc42.uk`) answers TLS handshake failures from the edge.
+
+```bash
+set -a; . ./.env.sc2; set +a
+SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFIX=sh \
+  scripts/e2e-shared-tenant.sh
+```
+
+| Step | PASS criteria |
+|---|---|
+| **13a** prerequisite | both users list their Personal Tenant; `sc-adm tenant create … --member never-logged-in` is **refused** with ``must run `sc login` `` and creates nothing |
+| **13b** create | `sc-adm tenant create moyn-dev --member $OWNER --member $MEMBER --tailscale-authkey … --dns-suffix moyn` prints `Member <u> granted [<prefix>-moyn-dev <prefix>-moyn-dev-default]` for both; `sc-adm tenant users moyn-dev` lists both; `v2.members` on `<prefix>-moyn-dev` = `skorfmann,thieso2`; the default profile's `ssh_authorized_keys` carries **both** members' keys |
+| **13c** switch | as `$MEMBER`: `sc tenant list` shows `moyn-dev … member`; `sc tenant switch moyn-dev` enrols the Incus remote `moyn` (certificate-based, `https://<sidecar tailnet ip>:8443`, pinned to `<prefix>-moyn-dev-default`), records `remote_tenants/remote_auth_tokens/remote_brokers/installs[moyn]`, sets `remote: moyn`, `tenant: moyn-dev`, `project: default`; a second switch is a no-op |
+| **13d** machine | `sc create web` in the shared tenant; `ssh dev@<ip>` succeeds with **both** the owner's default key and `-i ~/.ssh/skorfmann_ed25519` |
+| **13e** project | `$MEMBER`: `sc project create api` (through the auth-app tenant plane, `X-Sandcastle-Tenant: moyn-dev`); `$OWNER` after `sc tenant switch moyn-dev` sees `web` and creates `api:svc` — the other member's certificate was extended with `<prefix>-moyn-dev-api` |
+| **13f** scoping | `sc tenant switch $OWNER` back: `sc ls` no longer shows the shared machines (personal remote re-activated) |
+| **13g** revoke | `sc-adm tenant revoke moyn-dev $MEMBER` prints `members: $OWNER`; `$MEMBER`'s `sc tenant list` no longer lists it and `sc tenant switch moyn-dev` is refused with `not accessible`; the profile no longer carries the member's key |
+
+Live run 2026-09-21 (`big:sc-shared-e2e`, Incus 7.4, install prefix `sh`,
+Auth Hostname `https://sh-shared.tc42.uk`, client `big:e2e-pdz-client`):
+see `docs/e2e-runs/2026-09-21-phase13-shared-tenants.md`.

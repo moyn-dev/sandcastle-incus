@@ -271,5 +271,8 @@ func machineCertificateCSR(hostnames []string) (*x509.CertificateRequest, *ecdsa
 // Machine Public Hostname and its one-level wildcard (spec §3.5).
 func machineCertificateHostnames(publicHostname string) []string {
 	publicHostname = strings.ToLower(strings.TrimSpace(publicHostname))
+	if strings.HasPrefix(publicHostname, "*.") {
+		return []string{publicHostname}
+	}
 	return []string{publicHostname, "*." + publicHostname}
 }

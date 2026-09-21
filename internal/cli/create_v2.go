@@ -311,6 +311,7 @@ type createV2Options struct {
 	// Hostnames are the explicit Machine Public Hostnames (ADR-0028) to
 	// claim for the machine — before it exists — and stamp in the create call.
 	Hostnames []string
+	Aliases   []string
 }
 
 func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOptions, summary tenant.Summary, reference string, options createV2Options) error {
@@ -334,6 +335,15 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 	// and everything downstream (output, certificate request, connect) reads
 	// the stamped value back rather than re-deriving it.
 	derived := zoneModePublicHostname(summary, project, machine)
+	for _, label := range options.Aliases {
+		if derived == "" {
+			return fmt.Errorf("--alias requires a Project Domain")
+		}
+		if strings.ContainsAny(label, ".*") || strings.TrimSpace(label) == "" {
+			return fmt.Errorf("alias %q must be one DNS label", label)
+		}
+		options.Hostnames = append(options.Hostnames, label+"."+strings.SplitN(derived, ".", 2)[1])
+	}
 	explicit, err := normalizeHostnameFlags(options.Hostnames)
 	if err != nil {
 		return err
@@ -360,20 +370,29 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		Bare:            options.Bare,
 		DevImage:        devImage,
 		PublicHostnames: publicHostnames,
+		ProjectDomain:   strings.TrimPrefix(derived, machine+"."),
 	}
 	outcomes := map[string]machineCertificateOutcome{}
+	if derived != "" {
+		outcomes[derived] = machineCertificateOutcome{State: "project"}
+	}
 	if options.DryRun {
 		// A dry run validates the explicit names server-side (rolled back)
 		// so a conflicting name is reported now, not at the real create.
 		if hostnameClient != nil {
-			if _, err := claimMachineHostnamesBeforeCreate(ctx, hostnameClient, summary.Tenant, project, machine, explicit, true); err != nil {
+			planned, err := claimMachineHostnamesBeforeCreate(ctx, hostnameClient, summary.Tenant, project, machine, explicit, true)
+			if err != nil {
 				return err
+			}
+			for _, name := range planned {
+				outcomes[name.Hostname] = name.Outcome
 			}
 		}
 		payload := incusx.CreateMachineV2Result{Name: machine, Type: machineTypeLabel(options.VM), Project: request.IncusProject, Image: image, HomeShare: options.HomeShare, Bare: options.Bare, DevImage: request.DevImage && !options.Bare, PublicHostnames: publicHostnames}
 		if len(publicHostnames) > 0 {
 			payload.PublicHostname = publicHostnames[0]
 		}
+		payload.CertificateDecisions = createCertificateDecisions(publicHostnames, outcomes)
 		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, payload, true, outcomes), payload)
 	}
 	var claimed []claimedHostname
@@ -395,14 +414,11 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		}
 		return err
 	}
-	// Derived name: now that the instance exists, ask the Auth App to order
-	// its Machine Certificate — after the create, with a short timeout, never
-	// failing the create. Dev Image machines get no Caddy and therefore no
-	// certificate. Projects without a domain skip this; their output is
-	// unchanged (explicit names got their rows at claim time).
+	// The derived name uses the existing project certificate; creation orders nothing.
 	if derived != "" && !result.DevImage {
-		outcomes[derived] = requestMachineCertificate(ctx, config, summary.Tenant, project, machine)
+		outcomes[derived] = machineCertificateOutcome{State: "project"}
 	}
+	result.CertificateDecisions = createCertificateDecisions(result.PublicHostnames, outcomes)
 	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false, outcomes), result)
 }
 
@@ -535,6 +551,7 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 		// machine born here gets — the derived name, decided exactly like
 		// `sc create` decides it (explicit hostnames are `sc create`'s).
 		PublicHostnames: derivedPublicHostnames(summary, project, machineName),
+		ProjectDomain:   strings.TrimPrefix(zoneModePublicHostname(summary, project, machineName), machineName+"."),
 	}
 	if confirm := launch.ConfirmCreate; confirm != nil {
 		request.ConfirmCreate = func() error { return confirm(project, machineName) }
@@ -743,7 +760,7 @@ func formatCreateMachineV2(summary tenant.Summary, project string, result incusx
 		var lines []string
 		for _, name := range publicHostnames {
 			outcome := machineCertificateOutcome{}
-			if !dryRun {
+			if !dryRun || outcomes[name].State == "project" {
 				outcome = outcomes[name]
 			}
 			lines = append(lines, formatPublicNameLine(name, project, result.DevImage, outcome))
@@ -817,4 +834,18 @@ func requireV2Tenant(ctx context.Context, config commandConfig) (tenant.Summary,
 		return tenant.Summary{}, fmt.Errorf("Sandcastle tenant %s not found", name)
 	}
 	return summary, nil
+}
+
+func createCertificateDecisions(names []string, outcomes map[string]machineCertificateOutcome) map[string]string {
+	if len(names) == 0 {
+		return nil
+	}
+	decisions := make(map[string]string, len(names))
+	for _, name := range names {
+		decisions[name] = "per-name"
+		if outcomes[name].State == "project" {
+			decisions[name] = "project"
+		}
+	}
+	return decisions
 }

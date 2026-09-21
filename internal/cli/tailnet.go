@@ -28,7 +28,7 @@ func legacyTailnetClient(config commandConfig) (tailnetLegacyClient, bool) {
 	if !projectAuthAppAvailable(config, "") {
 		return nil, false
 	}
-	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}, true
+	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}, true
 }
 
 // Tailnet publication is intentionally separate from `sc tunnel publish`:

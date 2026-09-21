@@ -169,7 +169,7 @@ func projectAuthClient(config commandConfig) authProjectClient {
 	if config.authProjects != nil {
 		return config.authProjects
 	}
-	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
+	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 }
 
 // runProjectCreateViaAuthApp creates the project through the auth-app's
@@ -183,7 +183,7 @@ func runProjectCreateViaAuthApp(ctx context.Context, config commandConfig, opts 
 	if request.DryRun {
 		what := "created project " + request.Project
 		if result.Domain != "" {
-			what += " with project domain " + result.Domain + " (zone " + result.Zone + ")"
+			what += " with project domain " + result.Domain + " (zone " + result.Zone + ") — one project certificate for " + result.Domain + ", *." + result.Domain
 		}
 		return writeOutput(config.stdout, opts.output, "[dry-run] would have: "+what, result)
 	}

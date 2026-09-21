@@ -32,6 +32,9 @@ type DeviceClient struct {
 	AuthToken  string
 	HTTPClient *http.Client
 	Verbose    bool
+	// Tenant is the CLI's Current Tenant, sent as X-Sandcastle-Tenant on every
+	// request (Shared Tenants); empty means the caller's Personal Tenant.
+	Tenant string
 }
 
 type DeviceStartResult struct {
@@ -845,13 +848,44 @@ func (c DeviceClient) url(path string) string {
 
 func (c DeviceClient) client() *http.Client {
 	if c.HTTPClient != nil {
-		return c.HTTPClient
+		return c.withTenant(c.HTTPClient)
 	}
 	// The default client performs the version exchange (#124 §6): it sends the
 	// CLI version and records the appliance version/minimum from responses so
 	// the CLI can print a skew warning after its normal output.
-	return &http.Client{
+	return c.withTenant(&http.Client{
 		Timeout:   defaultDeviceClientTimeout,
 		Transport: update.DefaultExchange.WrapTransport(nil),
+	})
+}
+
+// withTenant stamps the CLI's Current Tenant (X-Sandcastle-Tenant) on every
+// request when one is set, so a member acting inside a Shared Tenant reaches
+// that tenant on the Auth App instead of their Personal Tenant. An unset
+// Tenant leaves the client untouched (the request means "my own tenant").
+func (c DeviceClient) withTenant(client *http.Client) *http.Client {
+	tenantName := strings.TrimSpace(c.Tenant)
+	if tenantName == "" {
+		return client
 	}
+	wrapped := *client
+	wrapped.Transport = tenantHeaderTransport{tenant: tenantName, next: client.Transport}
+	return &wrapped
+}
+
+type tenantHeaderTransport struct {
+	tenant string
+	next   http.RoundTripper
+}
+
+func (t tenantHeaderTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get(TenantHeader) == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set(TenantHeader, t.tenant)
+	}
+	next := t.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	return next.RoundTrip(r)
 }

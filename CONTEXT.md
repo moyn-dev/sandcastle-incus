@@ -12,8 +12,16 @@ An admin-created top-level namespace that owns projects, DNS naming, and access 
 _Avoid_: Owner, account, named tenant
 
 **Personal Tenant**:
-An automatically created Tenant scoped to one allowlisted User.
+An automatically created Tenant scoped to one allowlisted User; it belongs to the User whose Sandcastle User Key names it.
 _Avoid_: User-owned tenant, GitHub tenant
+
+**Shared Tenant**:
+An admin-created Tenant that several Users manage together: its Tenant Members are recorded in Tenant Metadata (`v2.members`), every member's login SSH key is authorized on its Machines, and every member can act on it from the CLI after `sc tenant switch`. Created with `sc-adm create tenant --member`, extended with `sc-adm tenant grant`.
+_Avoid_: Team tenant, group tenant, org tenant
+
+**Tenant Member**:
+A User granted Tenant Access to a Shared Tenant without owning it. Prerequisite: the User has completed CLI Device Login on the install (their Personal Tenant carries the login SSH key the shared Machines authorize) and sits on the tenant's tailnet.
+_Avoid_: Collaborator, guest user
 
 **Tenant DNS Suffix**:
 The tenant-chosen final label(s) of Sandcastle private hostnames; defaults to the tenant name.
@@ -39,8 +47,12 @@ _Avoid_: Tenant zone, install zone, DNS provider account
 The public DNS name a Project claims under a Public DNS Zone (e.g. `baum.hase.de`). Optional; a Project without one gives its Machines no derived public name (they keep their Machine Private Hostname and may still carry explicit Machine Public Hostnames). Reserved install-wide, first come, including everything below it.
 _Avoid_: Project suffix, project zone
 
+**Project Certificate**:
+The publicly trusted DNS-01 certificate owned by a Project with a Project Domain. Its SANs are the domain and `*.<domain>`. The Auth App stores it once and distributes it to the Project's Machines. Derived names and explicit one-label aliases use this certificate without per-machine orders; deeper names, outside names, zone apex names and explicitly requested per-machine wildcards use per-name certificates.
+
+
 **Machine Public Hostname**:
-One of a Machine's set of public DNS names, each carrying a publicly trusted certificate for itself and one wildcard level below: the *derived* name `<machine>.<Project Domain>` when the Project has a Project Domain, plus any *explicit* names the tenant claims under a Public DNS Zone (`sc create --hostname`, `sc hostname add`). A Machine has zero or more; it always keeps its Machine Private Hostname beside them. An explicit name reserves itself and its wildcard subtree install-wide, first come. Distinct from a Public Route: a Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
+One of a Machine's set of public DNS names: the *derived* name `<machine>.<Project Domain>` when the Project has a Project Domain, plus any *explicit* names the tenant claims under a Public DNS Zone (`sc create --hostname`, `sc hostname add`). A Machine has zero or more; it always keeps its Machine Private Hostname beside them. An explicit name reserves itself and its wildcard subtree install-wide, first come. Distinct from a Public Route: a Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
 _Avoid_: Public hostname, route hostname, public machine, zone-mode machine
 
 **Naming Mode**:
@@ -196,7 +208,7 @@ Audit metadata recording which user created a resource.
 _Avoid_: Resource owner
 
 **Tenant Access**:
-A user's permission to manage all projects and machines in a tenant.
+A user's permission to manage all projects and machines in a tenant: implied for a Personal Tenant's owner, recorded as Tenant Membership for a Shared Tenant. The Auth App applies it to every tenant-plane request, which carries the CLI's Current Tenant (`X-Sandcastle-Tenant`, defaulting to the caller's Personal Tenant).
 _Avoid_: Project grant
 
 **Project**:

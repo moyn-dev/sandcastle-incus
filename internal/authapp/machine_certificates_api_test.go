@@ -56,7 +56,7 @@ func postMachineCertificate(h http.Handler, token, body string) *httptest.Respon
 	return res
 }
 
-func TestMachineCertificatesAPI_RecordsPendingRow(t *testing.T) {
+func TestMachineCertificatesAPI_ProjectDoesNotCreateMachineRow(t *testing.T) {
 	h, db, token := machineCertTestHandler(t, fakeProjectDomainResolver{domains: map[string][2]string{
 		"acme/baum": {"baum.hase.de", "hase.de"},
 	}})
@@ -69,18 +69,11 @@ func TestMachineCertificatesAPI_RecordsPendingRow(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Hostname != "web.baum.hase.de" || view.State != machineCertStatePending || view.Reason != "" {
+	if view.Hostname != "web.baum.hase.de" || view.State != "project" || view.Reason != "" {
 		t.Fatalf("view = %+v", view)
 	}
-	row, err := getMachineCertificate(context.Background(), db, "web.baum.hase.de")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if row.Tenant != "acme" || row.Project != "baum" || row.Machine != "web" || row.Zone != "hase.de" || row.DirectoryURL != LetsEncryptStagingDirectory {
-		t.Fatalf("row = %+v", row)
-	}
-	if row.CertPEM != "" || row.RequestedAt.IsZero() {
-		t.Fatalf("row = %+v, want pending with requested_at", row)
+	if _, err := getMachineCertificate(context.Background(), db, "web.baum.hase.de"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unexpected machine row: %v", err)
 	}
 
 	// Requesting again for the same hostname is idempotent (still one row).
@@ -88,7 +81,7 @@ func TestMachineCertificatesAPI_RecordsPendingRow(t *testing.T) {
 		t.Fatalf("second request = %d %q", res.Code, res.Body.String())
 	}
 	var n int
-	if err := db.QueryRow("SELECT count(*) FROM machine_certificates").Scan(&n); err != nil || n != 1 {
+	if err := db.QueryRow("SELECT count(*) FROM machine_certificates").Scan(&n); err != nil || n != 0 {
 		t.Fatalf("rows = %d, %v", n, err)
 	}
 }
@@ -119,11 +112,11 @@ func TestMachineCertificatesAPI_RetainedCertificateIsReported(t *testing.T) {
 	}
 	var view MachineCertificateView
 	_ = json.Unmarshal(res.Body.Bytes(), &view)
-	if view.State != machineCertStateIssued {
+	if view.State != "project" {
 		t.Fatalf("state = %q, want issued (retained certificate, no order)", view.State)
 	}
 	row, _ := getMachineCertificate(ctx, db, "web.baum.hase.de")
-	if row.CertPEM != issued.CertPEM || row.PushedSerial != "" {
+	if row.CertPEM != issued.CertPEM || row.PushedSerial != row.Serial {
 		t.Fatalf("retained row = %+v", row)
 	}
 }
@@ -150,18 +143,18 @@ func TestMachineCertificatesAPI_RateLimited(t *testing.T) {
 	}
 
 	res := postMachineCertificate(h, token, `{"project":"baum","machine":"web"}`)
-	if res.Code != http.StatusConflict {
-		t.Fatalf("status = %d %q, want 409", res.Code, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status=%d %s", res.Code, res.Body.String())
 	}
 	var view MachineCertificateView
 	_ = json.Unmarshal(res.Body.Bytes(), &view)
-	if view.Reason != certFailureRateLimited || view.State != machineCertStatePending || !strings.Contains(view.Error, "rate-limited") {
-		t.Fatalf("view = %+v", view)
+	if view.State != "project" || view.Reason != "" {
+		t.Fatalf("view=%+v", view)
 	}
-	// The row is still created; the reconciler tries when the window frees.
-	if _, err := getMachineCertificate(ctx, db, "web.baum.hase.de"); err != nil {
-		t.Fatalf("row not created under rate limit: %v", err)
+	if _, err := getMachineCertificate(ctx, db, "web.baum.hase.de"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unexpected machine row: %v", err)
 	}
+
 }
 
 func TestMachineCertificatesAPI_Refusals(t *testing.T) {
@@ -227,7 +220,7 @@ func TestDeviceClientRequestMachineCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Hostname != "web.baum.hase.de" || view.State != machineCertStatePending {
+	if view.Hostname != "web.baum.hase.de" || view.State != "project" {
 		t.Fatalf("view = %+v", view)
 	}
 	if _, err := client.RequestMachineCertificate(context.Background(), MachineCertificateRequest{Project: "private", Machine: "web"}); err == nil || !strings.Contains(err.Error(), "no project domain") {

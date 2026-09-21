@@ -163,6 +163,10 @@ func (h handler) authorizeWorkloadTenant(ctx context.Context, userKey string, te
 		if summary.Tenant != tenantName {
 			continue
 		}
+		// Shared Tenant: membership recorded in Tenant Metadata wins outright.
+		if summary.Accessible(userKey) {
+			return nil
+		}
 		plan, err := usertrust.PlanTenantUsersForRequest(h.admin, usertrust.TenantAccessRequest{Tenant: summary.Tenant, Personal: summary.Personal})
 		if err != nil {
 			return err

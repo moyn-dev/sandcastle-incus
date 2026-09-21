@@ -272,7 +272,7 @@ func selfUpdateCLI(ctx context.Context, config commandConfig, checker *update.Ch
 func updateSidecarViaDeployment(ctx context.Context, config commandConfig) error {
 	var updatedTo string
 	if strings.TrimSpace(config.adminConfig.AuthToken) != "" && commandAuthHostname(config, "") != "" {
-		client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
+		client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 		result, err := client.UpdateSidecar(ctx)
 		if err != nil {
 			return err

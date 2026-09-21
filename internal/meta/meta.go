@@ -39,10 +39,20 @@ const (
 	// kind=infra project. It is the actual user@host for SSH — NOT the tenant
 	// name. Must match incusx's keyV2User.
 	KeyV2User = Prefix + "v2.user"
-	// KeyV2SSHKey is where v2 stores the tenant's login SSH public key, on the
-	// kind=infra project — the durable record an idempotent re-provision must
-	// reuse (#134). Must match incusx's keyV2SSHKey.
+	// KeyV2SSHKey is where v2 stores the tenant's login SSH public keys, on the
+	// kind=infra project — one key per line. The first line is the tenant's
+	// own login key (a Personal Tenant's owner key, the key a shared tenant was
+	// created with); further lines are keys added with `sc-adm tenant
+	// add-ssh-key`. Every line is rendered into the app projects' default
+	// profile. Must match incusx's keyV2SSHKey.
 	KeyV2SSHKey = Prefix + "v2.sshkey"
+	// KeyV2Members is where v2 stores a Shared Tenant's Tenant Members, on the
+	// kind=infra project: a comma-separated list of normalized Sandcastle User
+	// Keys granted Tenant Access. The Auth App reads it to decide which tenants
+	// a user may switch to and act on; the admin CLI and the web grant both
+	// write it, so the two grant paths never disagree. A Personal Tenant
+	// carries no members key: it belongs to the user whose key names it.
+	KeyV2Members = Prefix + "v2.members"
 
 	// KeyV2CloudIdentity / KeyV2DockerAutostart hold a v2 project's settings on
 	// its own kind=project Incus project. They used to be written into a
@@ -244,6 +254,8 @@ type Machine struct {
 	// when the machine has at least one public name.
 	PublicHostname                string            `json:"publicHostname,omitempty"`
 	PublicHostnames               []string          `json:"publicHostnames,omitempty"`
+	ProjectCertState              string            `json:"projectCertState,omitempty"`
+	ProjectCertNotAfter           string            `json:"projectCertNotAfter,omitempty"`
 	CertState                     string            `json:"certState,omitempty"`
 	CertStates                    map[string]string `json:"certStates,omitempty"`
 	CertNotAfter                  string            `json:"certNotAfter,omitempty"`
@@ -416,6 +428,13 @@ func FormatCertStates(states map[string]string) string {
 // the state of the first of names (the machine's sorted public-name list);
 // with no names it is dropped. Nil when nothing parses.
 func ParseCertStates(value string, names []string) map[string]string {
+	if strings.TrimSpace(value) == "project" {
+		states := map[string]string{}
+		for _, name := range names {
+			states[name] = "project"
+		}
+		return states
+	}
 	var states map[string]string
 	for _, token := range strings.Split(value, ",") {
 		token = strings.TrimSpace(token)
@@ -607,4 +626,52 @@ func decodeState(value string, target any) error {
 		return fmt.Errorf("metadata state is required")
 	}
 	return json.Unmarshal([]byte(value), target)
+}
+
+// ParseMembers splits a KeyV2Members value into its normalized, de-duplicated,
+// sorted user keys. Whitespace and empty entries are dropped; the input is
+// comma-separated (newlines are tolerated as separators too).
+func ParseMembers(value string) []string {
+	seen := map[string]bool{}
+	var members []string
+	for _, raw := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' }) {
+		user := strings.ToLower(strings.TrimSpace(raw))
+		if user == "" || seen[user] {
+			continue
+		}
+		seen[user] = true
+		members = append(members, user)
+	}
+	sort.Strings(members)
+	return members
+}
+
+// FormatMembers renders a member list back into the KeyV2Members value:
+// normalized, de-duplicated, sorted, comma-separated ("" for no members, which
+// callers should treat as "delete the key").
+func FormatMembers(members []string) string {
+	return strings.Join(ParseMembers(strings.Join(members, ",")), ",")
+}
+
+// ParseSSHKeys splits a KeyV2SSHKey value into its individual authorized keys
+// (one per line), trimmed, with blank lines and exact duplicates dropped.
+// Order is preserved: the first line stays the tenant's own login key.
+func ParseSSHKeys(value string) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, line := range strings.Split(value, "\n") {
+		key := strings.TrimSpace(line)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// FormatSSHKeys renders authorized keys back into the KeyV2SSHKey value: one
+// key per line, blanks and duplicates dropped, order preserved.
+func FormatSSHKeys(keys []string) string {
+	return strings.Join(ParseSSHKeys(strings.Join(keys, "\n")), "\n")
 }

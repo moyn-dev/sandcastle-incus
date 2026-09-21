@@ -528,6 +528,9 @@ func onProjectDomainReleased(ctx context.Context, db *sql.DB, claim ProjectDomai
 		return nil
 	}
 	var errs []error
+	if err := deleteMachineCertificate(ctx, db, claim.Domain); err != nil {
+		errs = append(errs, err)
+	}
 	if _, err := deleteMachineCertificatesUnderDomain(ctx, db, claim.Domain); err != nil {
 		errs = append(errs, fmt.Errorf("drop certificate rows under %s: %w", claim.Domain, err))
 	}

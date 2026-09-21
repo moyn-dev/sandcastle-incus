@@ -43,7 +43,7 @@ func hostnameAuthClient(config commandConfig) (authMachineHostnameClient, bool) 
 	if !projectAuthAppAvailable(config, "") {
 		return nil, false
 	}
-	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}, true
+	return authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}, true
 }
 
 // normalizeHostnameFlags normalizes and deduplicates the --hostname values
@@ -260,13 +260,13 @@ func formatHostnameResult(verb string, result authapp.MachineHostnamesResult) st
 		if result.Zone != "" {
 			fmt.Fprintf(&builder, " (zone %s)", result.Zone)
 		}
-		fmt.Fprintln(&builder)
+		fmt.Fprintf(&builder, " — %s\n", hostnameCertificateDetail(result))
 	case verb == "add" && result.AlreadyHeld:
 		fmt.Fprintf(&builder, "machine hostname %q already held by this machine\n", result.Hostname)
 	case verb == "add":
 		fmt.Fprintf(&builder, "Public name: %s (%s)\n", result.Hostname, hostnameCertificateDetail(result))
 	case verb == "remove" && result.DryRun:
-		fmt.Fprintf(&builder, "[dry-run] would have: released %s from machine %s\n", result.Released, ref)
+		fmt.Fprintf(&builder, "[dry-run] would have: released %s from machine %s; project certificate unchanged, per-name certificate retained\n", result.Released, ref)
 	case verb == "remove":
 		fmt.Fprintf(&builder, "Released %s from machine %s.\n", result.Released, ref)
 	}
@@ -299,6 +299,8 @@ func hostnameCertificateDetail(result authapp.MachineHostnamesResult) string {
 			detail += " — " + message
 		}
 		return detail
+	case result.Certificate.State == "project":
+		return "served by project certificate"
 	case result.Certificate.State == "issued":
 		return "certificate retained, installing"
 	}

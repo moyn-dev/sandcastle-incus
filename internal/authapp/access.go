@@ -62,36 +62,29 @@ func (h handler) adminTenantAccessMutation(w http.ResponseWriter, r *http.Reques
 	}
 	tenantName := strings.TrimSpace(r.FormValue("tenant"))
 	userKey := NormalizeGitHubUsername(r.FormValue("user"))
-	personal := strings.TrimSpace(r.FormValue("personal")) == "1"
-	request := usertrust.TenantAccessRequest{Tenant: tenantName, User: userKey, Personal: personal}
-	var plan usertrust.UserPlan
-	var err error
-	switch action {
-	case "grant":
-		plan, err = usertrust.PlanTenantGrant(h.admin, request)
-	case "revoke":
-		plan, err = usertrust.PlanTenantRevoke(h.admin, request)
-	default:
-		err = fmt.Errorf("unsupported tenant access action %q", action)
+	if userKey == "" || tenantName == "" {
+		http.Error(w, "tenant and user are required", http.StatusBadRequest)
+		return
 	}
+	summary, err := h.findTenantSummary(r, tenantName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if action == "grant" {
-		err = h.tenantAccess.Grant(r.Context(), plan)
-	} else {
-		err = h.tenantAccess.Revoke(r.Context(), plan)
+	// The whole membership transition (Shared Tenants): certificate scope over
+	// every project, Tenant Metadata membership, profiles, running machines.
+	switch action {
+	case "grant":
+		err = h.grantTenantMembership(r, summary, userKey)
+	case "revoke":
+		err = h.revokeTenantMembership(r, summary, userKey)
+	default:
+		http.Error(w, fmt.Sprintf("unsupported tenant access action %q", action), http.StatusBadRequest)
+		return
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
-	}
-	if action == "revoke" {
-		if err := h.revokeMachineSSHAccess(r, tenantName, plan.User); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
 	}
 	http.Redirect(w, r, "/admin/access", http.StatusSeeOther)
 }
@@ -160,6 +153,13 @@ func (h handler) tenantAccessPage(r *http.Request) (accessPage, error) {
 		result, err := h.tenantAccess.ListTenantUsers(r.Context(), plan)
 		if err != nil {
 			return accessPage{}, err
+		}
+		// Tenant Members recorded in Tenant Metadata come first; the
+		// certificate-derived list stays as the "who can reach it" view.
+		for _, member := range summary.Members {
+			if !containsNormalizedUser(result.Users, member) {
+				result.Users = append([]string{member}, result.Users...)
+			}
 		}
 		page.Tenants = append(page.Tenants, accessTenant{
 			Tenant:   summary.Tenant,

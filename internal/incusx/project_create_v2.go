@@ -91,7 +91,7 @@ func (c TenantCreator) CreateProjectV2WithDomain(ctx context.Context, installPre
 		Bridge:             cfg[keyV2Bridge],
 		StoragePool:        cfg[keyV2Pool],
 		DefaultProfileUser: cfg[keyV2User],
-		SSHPublicKey:       cfg[keyV2SSHKey],
+		SSHPublicKey:       tenantV2AuthorizedKeys(server, prefix, cfg),
 		DNSSuffix:          cfg[keyV2Suffix],
 		DNSAddress:         dnsAddress,
 		ProjectDomain:      domain,

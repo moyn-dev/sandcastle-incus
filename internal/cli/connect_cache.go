@@ -61,7 +61,7 @@ func dialV2MachineViaCache(ctx context.Context, config commandConfig, reference 
 			logConnectCacheFallback(config, "no stored AuthToken/Auth Hostname")
 			return dialedV2Machine{}, false
 		}
-		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	}
 	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
 	defer cancel()

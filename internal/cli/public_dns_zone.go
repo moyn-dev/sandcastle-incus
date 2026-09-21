@@ -64,7 +64,7 @@ func publicDNSZoneClient(config commandConfig) (authPublicDNSZoneClient, error) 
 	if baseURL == "" {
 		return nil, fmt.Errorf("Auth Hostname is required; run sc login")
 	}
-	return authapp.DeviceClient{BaseURL: baseURL, AuthToken: strings.TrimSpace(config.adminConfig.AuthToken)}, nil
+	return authapp.DeviceClient{BaseURL: baseURL, AuthToken: strings.TrimSpace(config.adminConfig.AuthToken), Tenant: strings.TrimSpace(config.adminConfig.Tenant)}, nil
 }
 
 // addTokenFlags wires the three ways a token reaches add/set-token.

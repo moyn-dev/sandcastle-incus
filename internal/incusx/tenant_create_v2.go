@@ -90,7 +90,7 @@ func (c TenantCreator) CreateTenantV2(ctx context.Context, plan tenant.CreatePla
 		return err
 	}
 	c.log("ensure default + homeshare profiles " + plan.DefaultProject)
-	if err := ensureV2AppProfiles(server.UseProject(plan.DefaultProject), plan, plan.DefaultProjectShort, c.log); err != nil {
+	if err := ensureV2AppProfiles(server.UseProject(plan.DefaultProject), withTenantAuthorizedKeys(server, plan), plan.DefaultProjectShort, c.log); err != nil {
 		return err
 	}
 	c.log("ensure sidecar profile")
@@ -360,12 +360,13 @@ const (
 	keyV2CIDR           = "user.sandcastle.v2.cidr"
 	keyV2User           = meta.KeyV2User
 	keyV2SSHKey         = meta.KeyV2SSHKey
+	keyV2Members        = meta.KeyV2Members
 	keyV2Prefix         = meta.KeyV2Prefix
 	keyV2DefaultProject = meta.KeyV2DefaultProject
 )
 
 func v2InfraMetadata(plan tenant.CreatePlanV2) map[string]string {
-	return map[string]string{
+	config := map[string]string{
 		keyV2Bridge:         plan.Bridge,
 		keyV2Pool:           plan.StoragePool,
 		keyV2Suffix:         plan.DNSSuffix,
@@ -375,6 +376,12 @@ func v2InfraMetadata(plan tenant.CreatePlanV2) map[string]string {
 		keyV2Prefix:         plan.Prefix,
 		keyV2DefaultProject: plan.DefaultProjectShort,
 	}
+	// A Shared Tenant records its Tenant Members; a Personal Tenant writes no
+	// members key at all (the owner is implied by the tenant name).
+	if members := meta.FormatMembers(plan.Members); members != "" {
+		config[keyV2Members] = members
+	}
+	return config
 }
 
 func ensureV2Project(server TenantCreateServer, name string, description string, kind string, tenantName string, ownImages bool, extra map[string]string) error {

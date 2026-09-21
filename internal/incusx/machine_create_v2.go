@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
+	"github.com/thieso2/sandcastle-incus/internal/domain"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
@@ -51,6 +52,7 @@ type CreateMachineV2Request struct {
 	// separated) in the SAME instance-create call — never a second write; an
 	// empty set stamps nothing. The legacy single-name key is not written.
 	PublicHostnames []string
+	ProjectDomain   string
 	// ConfirmCreate, when set, is consulted by EnsureMachineV2 just before it
 	// brings a MISSING machine into existence — the one branch of an ensure
 	// that provisions rather than reuses. Returning an error aborts without
@@ -71,11 +73,12 @@ func v2MachineProfiles(homeShare bool) []string {
 }
 
 type CreateMachineV2Result struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Project   string `json:"incusProject"`
-	Image     string `json:"image"`
-	PrivateIP string `json:"privateIP,omitempty"`
+	CertificateDecisions map[string]string `json:"certificateDecisions,omitempty"`
+	Name                 string            `json:"name"`
+	Type                 string            `json:"type"`
+	Project              string            `json:"incusProject"`
+	Image                string            `json:"image"`
+	PrivateIP            string            `json:"privateIP,omitempty"`
 	// PrivateCIDR is the subnet the machine leased its address on, read from
 	// the machine's own interface. A restricted tenant certificate cannot see
 	// the tenant bridge's config, so this is the only authoritative source.
@@ -178,6 +181,22 @@ func (c TenantCreator) CreateMachineV2(ctx context.Context, request CreateMachin
 	// The public-name set rides the create call itself (ADR-0028): the
 	// instance records its names from its first second.
 	instanceConfig = v2InstanceConfigWithPublicHostnames(instanceConfig, result.PublicHostnames)
+	if request.ProjectDomain != "" {
+		states := map[string]string{}
+		allProject := true
+		for _, name := range result.PublicHostnames {
+			states[name] = "project"
+			if !domain.CoveredByProjectCertificate(name, request.ProjectDomain) {
+				states[name] = meta.CertStatePending
+				allProject = false
+			}
+		}
+		instanceConfig[meta.KeyV2CertState] = meta.FormatCertStates(states)
+		if allProject {
+			instanceConfig[meta.KeyV2CertState] = "project"
+		}
+		instanceConfig[meta.KeyV2CertNotAfter] = ""
+	}
 	c.log("launching " + result.Type + " " + request.Name + " from " + request.Image + " into " + request.IncusProject)
 	op, err := project.CreateInstance(api.InstancesPost{
 		Name:   request.Name,
@@ -331,11 +350,30 @@ func v2BareInstanceConfig(project TenantResourceServer, incusProject string) (ap
 	}, nil
 }
 
-// v2ProfileSSHKeyPattern reads the login SSH key back off a rendered
-// cloud-init document (the line right after `ssh_authorized_keys:`) — the
-// same profile-is-the-one-source-of-truth reasoning as v2ProfileFQDNPattern
-// and v2ProfileSignerPattern above.
-var v2ProfileSSHKeyPattern = regexp.MustCompile(`(?m)^\s*ssh_authorized_keys:\s*$\n^\s*-\s*(\S.*)$`)
+// v2ProfileSSHKeyPattern reads the login SSH keys back off a rendered
+// cloud-init document (the `- <key>` list items right after
+// `ssh_authorized_keys:`) — the same profile-is-the-one-source-of-truth
+// reasoning as v2ProfileFQDNPattern and v2ProfileSignerPattern above. The
+// list may hold several keys (a Shared Tenant renders every member's), so the
+// match is the whole block; v2ProfileSSHKeys splits it back into one key per
+// line, the meta.KeyV2SSHKey shape.
+var v2ProfileSSHKeyPattern = regexp.MustCompile(`(?m)^\s*ssh_authorized_keys:\s*$\n((?:^\s*-\s*\S.*$\n?)+)`)
+
+// v2ProfileSSHKeys returns the profile's authorized keys, one per line.
+func v2ProfileSSHKeys(userData string) string {
+	block := firstSubmatch(v2ProfileSSHKeyPattern, userData)
+	if block == "" {
+		return ""
+	}
+	var keys []string
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		if key := strings.TrimSpace(strings.TrimPrefix(line, "-")); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return strings.Join(keys, "\n")
+}
 
 // v2DevInstanceConfig builds the instance-level config of a Dev Image
 // machine: tenant.V2DevUserData, rendered from the identity, login user and
@@ -356,7 +394,7 @@ func v2DevInstanceConfig(project TenantResourceServer, incusProject string) (api
 	}
 	userData := profile.Config["cloud-init.user-data"]
 	domain := firstSubmatch(v2ProfileFQDNPattern, userData)
-	sshKey := firstSubmatch(v2ProfileSSHKeyPattern, userData)
+	sshKey := v2ProfileSSHKeys(userData)
 	if domain == "" || sshKey == "" {
 		return nil, fmt.Errorf("project %s cannot host a Dev Image machine: its default profile carries no machine FQDN and SSH key, "+
 			"so the machine would boot with no way to log in — re-provision the project (sc project create %s) to re-render it",

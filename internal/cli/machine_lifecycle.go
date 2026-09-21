@@ -40,7 +40,7 @@ type machineActionPayload struct {
 }
 
 func newMachineLifecycleCommand(config commandConfig, opts *rootOptions, use string, action machine.Action, requireYes bool) *cobra.Command {
-	var yes bool
+	var yes, dryRun bool
 	command := &cobra.Command{
 		Use:   use + " [[remote:]project:]machine",
 		Short: machineLifecycleShort(action),
@@ -60,9 +60,13 @@ reports every machine it acted on.`,
 				return err
 			}
 			defer restore()
+			if dryRun {
+				return planMachineLifecycle(cmd.Context(), config, opts, reference, action)
+			}
 			return runMachineLifecycle(cmd.Context(), config, opts, defaultRemoteFanout(), reference, action, requireYes, yes)
 		},
 	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "show targets and certificate decision without changing machines")
 	if requireYes {
 		command.Flags().BoolVar(&yes, "yes", false, "confirm machine deletion")
 	}
@@ -264,4 +268,38 @@ func machineLifecycleShort(action machine.Action) string {
 	default:
 		return string(action) + " a Sandcastle machine"
 	}
+}
+
+func planMachineLifecycle(ctx context.Context, config commandConfig, opts *rootOptions, reference string, action machine.Action) error {
+	selector, err := parseMachineSelector(reference, config.adminConfig.Project)
+	if err != nil {
+		return err
+	}
+	targets, err := lifecycleTargets(ctx, config, defaultRemoteFanout(), selector)
+	if err != nil {
+		return err
+	}
+	type entry struct {
+		Project             string `json:"project"`
+		Machine             string `json:"machine"`
+		CertificateDecision string `json:"certificateDecision"`
+	}
+	var entries []entry
+	var out strings.Builder
+	for _, target := range targets {
+		decision := "per-name certificates retained; no new order"
+		if p, ok := findProject(target.Summary, target.Machine.Project); ok && p.Domain != "" {
+			decision = "project certificate retained; no machine certificate order"
+		}
+		if action == machine.ActionDelete {
+			decision += "; remove machine A records"
+		}
+		entries = append(entries, entry{target.Machine.Project, target.Machine.Name, decision})
+		fmt.Fprintf(&out, "[dry-run] %s %s:%s — %s\n", action, target.Machine.Project, target.Machine.Name, decision)
+	}
+	return writeOutput(config.stdout, opts.output, strings.TrimSpace(out.String()), struct {
+		DryRun   bool           `json:"dryRun"`
+		Action   machine.Action `json:"action"`
+		Machines []entry        `json:"machines"`
+	}{true, action, entries})
 }

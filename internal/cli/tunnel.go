@@ -54,7 +54,7 @@ func newTunnelPublishCommand(config commandConfig, opts *rootOptions) *cobra.Com
 			if !projectAuthAppAvailable(config, "") {
 				return fmt.Errorf("Machine Tunnels require sc login to an Auth App")
 			}
-			runTokenResult, err := (authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}).ProvisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name, Port: port})
+			runTokenResult, err := (authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}).ProvisionMachineTunnel(cmd.Context(), authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: name, Port: port})
 			if err != nil {
 				return err
 			}
@@ -244,7 +244,7 @@ func unpublishMachineTunnels(ctx context.Context, config commandConfig, opts *ro
 }
 
 func unprovisionMachineTunnelWithRetry(ctx context.Context, config commandConfig, summary tenant.Summary, project, machine, hostname string) (authapp.MachineTunnelResult, error) {
-	client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken}
+	client := authapp.DeviceClient{BaseURL: commandAuthHostname(config, ""), AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	var last error
 	for attempt := 1; attempt <= 4; attempt++ {
 		result, err := client.UnprovisionMachineTunnel(ctx, authapp.MachineTunnelRequest{Tenant: summary.Tenant, Project: project, Machine: machine, Hostname: hostname})

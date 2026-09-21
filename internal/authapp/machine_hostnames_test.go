@@ -51,9 +51,8 @@ func TestClaimMachineHostname_ValidatesZoneApexAndLength(t *testing.T) {
 
 	cases := map[string]string{
 		"web.nosuch.example": "no Public DNS Zone covers web.nosuch.example — ask your admin",
-		"tc42.uk":            `machine hostname "tc42.uk" is a zone apex; use at least one label below tc42.uk`,
 		"_acme.tc42.uk":      `invalid machine hostname "_acme.tc42.uk": labels may not start with "_"`,
-		"*.tc42.uk":          `invalid machine hostname "*.tc42.uk": labels may not start with "*"`,
+		"*.*.tc42.uk":        `invalid machine hostname "*.tc42.uk": labels may not start with "*"`,
 		strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 55) + ".tc42.uk": `machine hostname "` + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 55) + `.tc42.uk" is too long: "*.<hostname>" must fit in 253 characters`,
 	}
 	for hostname, want := range cases {
@@ -114,7 +113,7 @@ func TestClaimMachineHostname_ConflictClasses(t *testing.T) {
 		// hostname vs Project Domain (inside, equal, above)
 		{"inside a foreign project domain", "web.baum.hase.de", "evil", "x", "m", flat("web.baum.hase.de"), HostnameClaimConflictDomain, false},
 		{"equal to a project domain", "baum.hase.de", "evil", "x", "m", flat("baum.hase.de"), HostnameClaimConflictDomain, false},
-		{"inside own project domain", "api.baum.hase.de", "acme", "zp", "web", `machine hostname "api.baum.hase.de" overlaps project domain "baum.hase.de" claimed by project "zp" in this tenant`, HostnameClaimConflictDomain, true},
+		{"inside other project domain", "api.baum.hase.de", "acme", "other", "web", `machine hostname "api.baum.hase.de" overlaps project domain "baum.hase.de" claimed by project "zp" in this tenant`, HostnameClaimConflictDomain, true},
 		// hostname vs Public Route (equal after wildcard strip, or covering)
 		{"route wildcard stripped, equal", "shop.tc42.uk", "evil", "x", "m", reserved("shop.tc42.uk"), HostnameClaimConflictRoute, false},
 		{"route inside candidate", "blog.tc42.uk", "acme", "zp", "web", reserved("blog.tc42.uk"), HostnameClaimConflictRoute, false},
@@ -388,7 +387,7 @@ func TestMachineHostnamesAPI_RoundTrips(t *testing.T) {
 	// apex-level name allowed; inside a Project Domain refused (400/409 texts verbatim).
 	for body, want := range map[string][2]any{
 		`{"hostname":"api.baum.hase.de"}`:              {http.StatusConflict, `machine hostname "api.baum.hase.de" overlaps project domain "baum.hase.de" claimed by project "zp" in this tenant`},
-		`{"hostname":"tc42.uk"}`:                       {http.StatusBadRequest, `machine hostname "tc42.uk" is a zone apex; use at least one label below tc42.uk`},
+		`{"hostname":"tc42.uk"}`:                       {http.StatusConflict, `machine hostname "tc42.uk" overlaps "web12.tc42.uk" held by machine "zp:web" in this tenant`},
 		`{"hostname":"x.nosuch.example"}`:              {http.StatusBadRequest, "no Public DNS Zone covers x.nosuch.example — ask your admin"},
 		`{"hostname":"login.sc.hase.de"}`:              {http.StatusConflict, `machine hostname "login.sc.hase.de" is reserved by this install`},
 		`{"hostname":"_x.tc42.uk"}`:                    {http.StatusBadRequest, `invalid machine hostname "_x.tc42.uk": labels may not start with "_"`},
@@ -493,7 +492,7 @@ func TestZoneReconcile_ListKeyMachines(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The derived name got its records and a row; no legacy stamp on either machine.
-	if _, err := getMachineCertificate(h.ctx, h.db, "web.baum.hase.de"); err != nil {
+	if _, err := getMachineCertificate(h.ctx, h.db, "baum.hase.de"); err != nil {
 		t.Fatalf("derived row: %v", err)
 	}
 	for _, stamp := range h.fleet.stamps {

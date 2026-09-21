@@ -427,3 +427,81 @@ func containsProject(projects []string, want string) bool {
 	}
 	return false
 }
+
+// memberDeviceCertificates finds a Tenant Member's live device certificates:
+// the entries named plan.CertificateName, else — shared client identity: a
+// keypair's ONE trust entry is named after whichever tenant/install enrolled
+// it first — every restricted client entry that already holds a project of
+// the member's own Personal Tenant (memberNamespace = <prefix>-<member>).
+// Dead entries (no projects) are never returned.
+func memberDeviceCertificates(server TrustServer, plan usertrust.UserPlan, memberNamespace string) ([]api.Certificate, error) {
+	certificates, err := server.GetCertificates()
+	if err != nil {
+		return nil, fmt.Errorf("list Incus certificates: %w", err)
+	}
+	var named, holders []api.Certificate
+	for _, cert := range certificates {
+		if cert.Type != api.CertificateTypeClient || !cert.Restricted || len(cert.Projects) == 0 {
+			continue
+		}
+		if cert.Name == plan.CertificateName {
+			named = append(named, cert)
+			continue
+		}
+		for _, project := range cert.Projects {
+			if memberNamespace != "" && (project == memberNamespace || strings.HasPrefix(project, memberNamespace+"-")) {
+				holders = append(holders, cert)
+				break
+			}
+		}
+	}
+	if len(named) > 0 {
+		return named, nil
+	}
+	if len(holders) > 0 {
+		return holders, nil
+	}
+	return nil, fmt.Errorf("no live restricted certificate for %s: none named %q and none holding a project of %s (the member must `sc login` on this install first)", plan.User, plan.CertificateName, memberNamespace)
+}
+
+// GrantTenantMember extends a Tenant Member's device certificates (see
+// memberDeviceCertificates) with plan.Projects.
+func (m TrustManager) GrantTenantMember(ctx context.Context, plan usertrust.UserPlan, memberNamespace string) error {
+	server, err := m.server()
+	if err != nil {
+		return err
+	}
+	certs, err := memberDeviceCertificates(server, plan, memberNamespace)
+	if err != nil {
+		return err
+	}
+	for _, cert := range certs {
+		if err := extendCertificateProjects(server, cert, usertrust.UserPlan{Projects: plan.Projects, Description: cert.Description}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RevokeTenantMember removes plan.Projects from a Tenant Member's device
+// certificates (see memberDeviceCertificates). A member with no live entry
+// has nothing to revoke.
+func (m TrustManager) RevokeTenantMember(ctx context.Context, plan usertrust.UserPlan, memberNamespace string) error {
+	server, err := m.server()
+	if err != nil {
+		return err
+	}
+	certs, err := memberDeviceCertificates(server, plan, memberNamespace)
+	if err != nil {
+		return nil
+	}
+	for _, cert := range certs {
+		if err := server.UpdateCertificate(cert.Fingerprint, api.CertificatePut{
+			Name: cert.Name, Type: api.CertificateTypeClient, Restricted: true,
+			Projects: removeProjects(cert.Projects, plan.Projects), Certificate: cert.Certificate, Description: cert.Description,
+		}, ""); err != nil {
+			return fmt.Errorf("update certificate %s: %w", cert.Fingerprint[:min(12, len(cert.Fingerprint))], err)
+		}
+	}
+	return nil
+}

@@ -993,6 +993,7 @@ type authTestTenant struct {
 	CIDR     string
 	Suffix   string
 	Projects []string // extra app-project short names beyond "default"
+	Members  []string // Tenant Members of a Shared Tenant (meta.KeyV2Members)
 }
 
 // v2TenantProjectsForAuthTest builds the v2 Incus projects backing one or more
@@ -1015,6 +1016,9 @@ func v2TenantProjectsForAuthTest(tenants ...authTestTenant) []tenant.IncusProjec
 		}
 		if tt.UnixUser != "" {
 			infraConfig[meta.KeyV2User] = tt.UnixUser
+		}
+		if len(tt.Members) > 0 {
+			infraConfig[meta.KeyV2Members] = meta.FormatMembers(tt.Members)
 		}
 		projects = append(projects, tenant.IncusProject{Name: infraName, Config: infraConfig})
 		for _, short := range append([]string{naming.DefaultProjectName}, tt.Projects...) {

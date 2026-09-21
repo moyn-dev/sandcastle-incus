@@ -52,7 +52,7 @@ func TestV2BareUserDataFollowsTheProfileIdentity(t *testing.T) {
 func TestV2ProfileSSHKeyPatternRoundTripsDefaultUserData(t *testing.T) {
 	userData := tenant.V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "backend", "acme.example", "http://10.249.7.3:9443")
 
-	if got := firstSubmatch(v2ProfileSSHKeyPattern, userData); got != "ssh-ed25519 AAAA" {
+	if got := v2ProfileSSHKeys(userData); got != "ssh-ed25519 AAAA" {
 		t.Fatalf("ssh key: got %q, want %q\n%s", got, "ssh-ed25519 AAAA", userData)
 	}
 	if got := firstSubmatch(v2ProfileUserPattern, userData); got != "dev" {
@@ -68,7 +68,7 @@ func TestV2DevUserDataFollowsTheProfileIdentity(t *testing.T) {
 
 	dev := tenant.V2DevUserData(
 		firstSubmatch(v2ProfileUserPattern, userData),
-		firstSubmatch(v2ProfileSSHKeyPattern, userData),
+		v2ProfileSSHKeys(userData),
 		firstSubmatch(v2ProfileFQDNPattern, userData),
 	)
 	for _, want := range []string{

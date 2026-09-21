@@ -14,6 +14,7 @@ import (
 	"github.com/libdns/cloudflare"
 	"github.com/libdns/libdns"
 
+	"github.com/thieso2/sandcastle-incus/internal/domain"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
@@ -80,6 +81,7 @@ var ErrInstanceFileNotFound = errors.New("instance file not found")
 
 // ZoneMachineServer is the Incus seam of the zone reconciler.
 type ZoneMachineServer interface {
+	PushMachineProjectDomain(ctx context.Context, incusProject, name, domain string) error
 	// ListZoneMachines returns every instance of every app project of the
 	// install (prefix-scoped), with the project's domain key.
 	ListZoneMachines(ctx context.Context) ([]ZoneMachine, error)
@@ -213,10 +215,11 @@ func (r *zoneReconciler) RequestPass() {
 // work of the pass. derived marks `<machine>.<Project Domain>`; every other
 // target is a machine_hostnames row.
 type zoneTarget struct {
-	machine  ZoneMachine
-	hostname string
-	zone     string
-	derived  bool
+	projectDomain string
+	machine       ZoneMachine
+	hostname      string
+	zone          string
+	derived       bool
 }
 
 // machineTargets is one Machine with every public name it must serve, in
@@ -294,6 +297,9 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 		if mt.converge {
 			if err := r.convergePublicHostnames(ctx, mt); err != nil {
 				errs = append(errs, err)
+			} else if meta.FormatPublicHostnames(mt.names()) != meta.FormatPublicHostnames(m.PublicHostnames) {
+				// Convergence cleared copied metadata; mirror against the new state.
+				mt.machine.CertState, mt.machine.CertNotAfter = "", ""
 			}
 		}
 		fleet = append(fleet, mt)
@@ -330,7 +336,19 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	// Per Machine: the hostnames file, then per hostname the certificate
 	// (rows, ARI, drift, push), then the mirror; collect due orders.
 	var candidates []orderCandidate
+	for _, c := range claims {
+		candidate, err := r.reconcileProjectCertificate(ctx, c, now)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if candidate != nil {
+			candidates = append(candidates, *candidate)
+		}
+	}
 	liveHostnames := map[string]struct{}{}
+	for _, c := range claims {
+		liveHostnames[c.Domain] = struct{}{}
+	}
 	for _, h := range explicit {
 		// A reservation that exists says the tenant still wants the name:
 		// its row is never garbage while the reservation stands (the
@@ -340,7 +358,9 @@ func (r *zoneReconciler) Reconcile(ctx context.Context) error {
 	}
 	for _, mt := range fleet {
 		for _, t := range mt.targets {
-			liveHostnames[t.hostname] = struct{}{}
+			if t.projectDomain == "" {
+				liveHostnames[t.hostname] = struct{}{}
+			}
 		}
 		machineCandidates, err := r.reconcileMachine(ctx, mt, now)
 		if err != nil {
@@ -394,6 +414,11 @@ func (r *zoneReconciler) classify(m ZoneMachine, claimByProject map[string]Proje
 	for _, h := range explicitByMachine[m.Tenant+"/"+m.Project+"/"+m.Name] {
 		mt.targets = append(mt.targets, zoneTarget{machine: m, hostname: h.Hostname, zone: h.Zone})
 	}
+	for i := range mt.targets {
+		if claimed && domain.CoveredByProjectCertificate(mt.targets[i].hostname, claim.Domain) {
+			mt.targets[i].projectDomain = claim.Domain
+		}
+	}
 	sort.Slice(mt.targets, func(i, j int) bool { return mt.targets[i].hostname < mt.targets[j].hostname })
 	return mt
 }
@@ -415,6 +440,8 @@ func (r *zoneReconciler) convergePublicHostnames(ctx context.Context, mt machine
 	config := map[string]string{}
 	if want != have {
 		config[meta.KeyV2PublicHostnames] = want
+		config[meta.KeyV2CertState] = ""
+		config[meta.KeyV2CertNotAfter] = ""
 	}
 	if legacy != "" {
 		config[meta.KeyV2PublicHostname] = ""
@@ -477,13 +504,15 @@ func desiredZoneRecords(zone string, targets []zoneTarget) (want map[string]neti
 	keep = map[string]struct{}{}
 	for _, t := range targets {
 		rel := libdns.RelativeName(t.hostname, zone)
-		keep[rel] = struct{}{}
+		keep[machineRelativeName(rel)] = struct{}{}
 		ip, err := netip.ParseAddr(strings.TrimSpace(t.machine.BridgeIPv4))
 		if err != nil || !ip.Is4() {
 			continue
 		}
 		want[rel] = ip
-		want["*."+rel] = ip
+		if !strings.HasPrefix(t.hostname, "*.") && (t.projectDomain == "" || t.derived) {
+			want[relativeWildcard(rel)] = ip
+		}
 	}
 	return want, keep
 }
@@ -491,6 +520,9 @@ func desiredZoneRecords(zone string, targets []zoneTarget) (want map[string]neti
 // machineRelativeName strips a leading wildcard label so both records of a
 // hostname map onto its relative name.
 func machineRelativeName(name string) string {
+	if name == "*" {
+		return "@"
+	}
 	return strings.TrimPrefix(name, "*.")
 }
 
@@ -522,7 +554,7 @@ func (r *zoneReconciler) reconcileZoneRecords(ctx context.Context, zone string, 
 	reserved := map[string]struct{}{}
 	for _, h := range explicit {
 		if h.Zone == zone {
-			reserved[libdns.RelativeName(h.Hostname, lz)] = struct{}{}
+			reserved[machineRelativeName(libdns.RelativeName(h.Hostname, lz))] = struct{}{}
 		}
 	}
 	managed := func(name string) bool {
@@ -612,6 +644,26 @@ func (r *zoneReconciler) reconcileMachine(ctx context.Context, mt machineTargets
 	m := mt.machine
 	var errs []error
 	if mt.converge {
+		if m.Running {
+			selectedDomain := ""
+			for _, t := range mt.targets {
+				if t.projectDomain != "" {
+					selectedDomain = t.projectDomain
+					break
+				}
+			}
+			old, err := r.machines.ReadInstanceFile(ctx, m.IncusProject, m.Name, tenant.MachineProjectDomainPath)
+			if err != nil && !errors.Is(err, ErrInstanceFileNotFound) {
+				errs = append(errs, err)
+			} else if strings.TrimSpace(old) != selectedDomain {
+				ready, _ := r.markerReady(ctx, zoneTarget{machine: m, hostname: m.Name})
+				if ready {
+					if err := r.machines.PushMachineProjectDomain(ctx, m.IncusProject, m.Name, selectedDomain); err != nil {
+						errs = append(errs, err)
+					}
+				}
+			}
+		}
 		if err := r.convergeHostnamesFile(ctx, mt); err != nil {
 			errs = append(errs, err)
 		}
@@ -702,6 +754,9 @@ type targetOutcome struct {
 // directory, refresh ARI, detect drift, push, and report the state. It
 // returns a candidate when an order is due.
 func (r *zoneReconciler) reconcileTargetCertificate(ctx context.Context, t zoneTarget, now time.Time) (targetOutcome, error) {
+	if t.projectDomain != "" {
+		return r.serveProjectCertificate(ctx, t, now)
+	}
 	m := t.machine
 	row, err := getMachineCertificate(ctx, r.db, t.hostname)
 	hasRow := err == nil
@@ -929,7 +984,17 @@ func (r *zoneReconciler) push(ctx context.Context, t zoneTarget, row machineCert
 // (§4.7); a Machine with no state left has both keys deleted.
 func (r *zoneReconciler) mirror(ctx context.Context, m ZoneMachine, states map[string]string, notAfter time.Time) error {
 	config := map[string]string{}
-	if want := meta.FormatCertStates(states); strings.TrimSpace(m.CertState) != want {
+	wantState := meta.FormatCertStates(states)
+	allProject := len(states) > 0
+	for _, state := range states {
+		if state != "project" {
+			allProject = false
+		}
+	}
+	if allProject {
+		wantState = "project"
+	}
+	if want := wantState; strings.TrimSpace(m.CertState) != want {
 		config[meta.KeyV2CertState] = want
 	}
 	if want := formatCertTime(notAfter); strings.TrimSpace(m.CertNotAfter) != want {
@@ -1019,7 +1084,7 @@ func (r *zoneReconciler) sweepChallengeRecords(ctx context.Context, t zoneTarget
 	if err != nil {
 		return fmt.Errorf("zone %s: list records for challenge sweep: %w", t.zone, err)
 	}
-	name := acmeChallengeLabel + "." + libdns.RelativeName(t.hostname, lz)
+	name := relativeChallengeName(t.hostname, lz)
 	var stale []libdns.Record
 	for _, rec := range records {
 		txt, ok := rec.(libdns.TXT)
@@ -1097,9 +1162,9 @@ func releaseMachineHostnameRecords(ctx context.Context, db *sql.DB, hostname Mac
 		rel := libdns.RelativeName(hostname.Hostname, lz)
 		switch rr.Type {
 		case "A":
-			return rr.Name == rel || rr.Name == "*."+rel
+			return rr.Name == rel || (!strings.HasPrefix(hostname.Hostname, "*.") && rr.Name == relativeWildcard(rel))
 		case "TXT":
-			return rr.Name == acmeChallengeLabel+"."+rel
+			return rr.Name == relativeChallengeName(hostname.Hostname, lz)
 		}
 		return false
 	}, "of "+hostname.Hostname)
@@ -1128,7 +1193,7 @@ func deleteZoneRecords(ctx context.Context, db *sql.DB, zone string, match func(
 		case "A":
 			stale = append(stale, rec)
 		case "TXT":
-			if strings.HasPrefix(rr.Name, acmeChallengeLabel+".") {
+			if rr.Name == acmeChallengeLabel || strings.HasPrefix(rr.Name, acmeChallengeLabel+".") {
 				stale = append(stale, rec)
 			}
 		}
@@ -1143,4 +1208,19 @@ func deleteZoneRecords(ctx context.Context, db *sql.DB, zone string, match func(
 		return fmt.Errorf("zone %s: delete %d record(s) %s: %w", zone, len(stale), what, err)
 	}
 	return nil
+}
+
+func relativeWildcard(relative string) string {
+	if relative == "@" {
+		return "*"
+	}
+	return "*." + relative
+}
+
+func relativeChallengeName(hostname, zone string) string {
+	rel := libdns.RelativeName(strings.TrimPrefix(hostname, "*."), zone)
+	if rel == "@" {
+		return acmeChallengeLabel
+	}
+	return acmeChallengeLabel + "." + rel
 }

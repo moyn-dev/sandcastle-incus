@@ -355,7 +355,7 @@ func shareClient(config commandConfig) (authShareClient, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("Auth Hostname is required; run sc login")
 	}
-	return authapp.DeviceClient{BaseURL: baseURL, AuthToken: strings.TrimSpace(config.adminConfig.AuthToken)}, nil
+	return authapp.DeviceClient{BaseURL: baseURL, AuthToken: strings.TrimSpace(config.adminConfig.AuthToken), Tenant: strings.TrimSpace(config.adminConfig.Tenant)}, nil
 }
 
 func formatShares(shares []meta.TenantStorageShare) string {

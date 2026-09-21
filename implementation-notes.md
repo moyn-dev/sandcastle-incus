@@ -6171,3 +6171,108 @@ too narrow, renaming it was not worth the churn. Alternative considered: making 
 fixups tolerate a missing rule by falling back to Incus exec — rejected, the Incus path
 needs no sudo at all and one narrow root-level repair is easier to reason about than
 four fixups with two transports each.
+
+
+## 2026-09-17 — Project-owned public certificates
+
+Reuse the encrypted ACME row format, ARI scheduler, backoff and order queue
+instead of duplicating a second certificate store. Project rows use reserved
+machine owner `@project` (not a legal machine name) and a partial unique index
+on tenant/project; their hostname is the Project Domain. Delivery checks each
+machine's certificate independently rather than trusting a single pushed serial.
+
+The machine selector `/etc/sandcastle/project-domain` is authoritative for
+shared-directory rendering. Inferring coverage from parent directories alone
+would keep serving a released project's stale certificate; unset clears the
+selector. Certificate pushes no longer append storage names to hostnames:
+otherwise the project apex would incorrectly become every machine's name.
+
+Public DNS Zone apex hostnames were rejected in the existing implementation,
+despite the task describing existing per-name orders for them. Accept them
+through the per-name path while preserving all reservation conflict checks.
+Explicit wildcard requests similarly needed normalization/rendering support;
+they order only the wildcard SAN (never `*.*.<name>`). Same-machine wildcards
+and deeper names can coexist; cross-machine overlaps remain rejected.
+
+Add optional current-project forms for status/set-domain/unset-domain and
+machine lifecycle dry-run plans, since the requested forms were absent.
+The updated CLI resolves project state for listings through the Auth App;
+raw instance metadata remains `project` without the shared expiry.
+
+Validation uses the pre-existing scratch Go 1.25.6 and Incus client under
+`/tmp/sandcastle-go`; no system package installation. The supplied follow-up
+handoff concerns hello.thieso2.dev tunnel deployment, not project certificates.
+The local login is thieso2 on obelix (also enrolled on idefix); the hosting
+install/access for skorfmann/tod0s has not been identified, so local checks
+must not be reported as live acceptance.
+
+Validation completed: `go test ./...` and `go vet ./...` pass with the scratch
+toolchain. Added coverage for empty projects, copies, aliases, shared renewal,
+legacy leaf expiry, status/list resolution, Caddy directory selection, explicit
+wildcards/zone apex DNS lifecycle and mutation dry-run plans. Live tod0s checks
+remain unrun; no deployment or Let's Encrypt production order was performed.
+
+## 2026-09-21 — Shared Tenants (spec docs/spec/shared-tenants.md, ADR-0029)
+
+Membership is stored on the tenant's infra Incus project (`v2.members`)
+rather than in the Auth Database, because `sc-adm tenant grant` runs against
+Incus without an Auth App and both grant paths must converge on one record.
+Members' SSH keys are not copied onto the shared tenant: profile rendering
+reads each member's Personal Tenant key, so keys stay attributable and a
+revoke cannot strip the wrong key. The cost is the hard prerequisite that a
+member has logged in on the install, enforced at `create tenant --member`
+and `tenant grant`.
+
+The tenant's own key value (`v2.sshkey`) became a newline-separated list
+instead of a new key, so every existing reader keeps working; the profile
+key regexp now captures the whole `ssh_authorized_keys` block. A login-time
+key rotation replaces only the FIRST line (the owner's key) and keeps keys
+added with `add-ssh-key`.
+
+Tenant scoping of the Auth App's tenant plane uses one request header
+(`X-Sandcastle-Tenant`) stamped by the CLI's DeviceClient transport, instead
+of threading a tenant field through every request struct; the endpoints that
+already had an explicit tenant field keep it (explicit wins). No header keeps
+the pre-existing "caller's own tenant" behaviour.
+
+`sc login` deliberately still returns only the Personal Tenant as accessible:
+returning memberships would make a member's first login skip the personal
+setup (the CLI treats "several tenants" as "no default"). Memberships surface
+through `sc tenant list`; `sc tenant switch` enrols the shared tenant's
+remote (certificate-based, at the sidecar's tailnet IP that `/api/tenants`
+now reports for memberships).
+
+`PlanGrant` now names the certificate per install (`RestrictedInstallName`),
+a latent bug on `--prefix` installs where the default-install name never
+matched the entry a device login enrolled; the default install is unchanged.
+
+E2E: the first fresh install used a hostname four labels deep under the
+Cloudflare zone; Cloudflare's universal certificate covers one level only, so
+the public hostname handshake failed and the install was redone as
+`sh-shared.tc42.uk`. Recorded in Phase 13's prerequisites.
+
+Live e2e (Phase 13, first run) caught a grant gap the unit tests could not:
+two users logging in from ONE client share a keypair, so the daemon holds one
+trust entry named after the first enrollment (`sandcastle-sh-thieso2`) and
+the second member's name-based grant found nothing. The admin plane has no
+recorded client certificate to go fingerprint-first, so `GrantTenantMember`
+falls back to the entries that already hold the member's own Personal Tenant
+projects — the member's live devices by construction — and never touches
+dead same-named entries (#115 rule kept). The Auth App uses the same fallback
+after its fingerprint-first attempt.
+
+Live e2e also showed that `sc remote switch` (since 20cdc40) records the
+active remote in a directory selection file (`.sandcastle`) which overrides
+the global config; a member's `sc tenant switch` that only rewrote the global
+remote left every command in that directory on the personal remote. The
+switch now re-points the nearest selection file when one exists (never
+creates one, keeping the global-config behaviour and its tests intact). The
+e2e script itself had a `set -o pipefail` + `grep -q` trap that reported a
+successful switch as a failure; its checks now capture output first.
+
+Third live finding: with two logins on one client, `sc tenant switch` recorded
+the GLOBAL config's auth token (the last login's) for the shared remote, so
+the other member's later switch presented the wrong user's token and the
+Auth App answered "not accessible". The switch now records the caller's
+resolved credentials (active remote / directory selection), which is what
+every other command uses.

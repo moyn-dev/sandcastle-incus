@@ -203,3 +203,28 @@ func TestRemoteNameForSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanTenantGrantCoversEveryAppProjectAndInstallCertificateName(t *testing.T) {
+	admin := config.LoadAdminFromEnv()
+	plan, err := PlanTenantGrant(admin, TenantAccessRequest{Tenant: "moyn-dev", User: "skorfmann", AppProjects: []string{"default", "web"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Projects, []string{"sc-moyn-dev", "sc-moyn-dev-default", "sc-moyn-dev-web"}) {
+		t.Fatalf("Projects = %#v", plan.Projects)
+	}
+	if plan.CertificateName != "sandcastle-skorfmann" {
+		t.Fatalf("CertificateName = %q", plan.CertificateName)
+	}
+	admin.IncusProjectPrefix = "sh"
+	plan, err = PlanTenantGrant(admin, TenantAccessRequest{Tenant: "moyn-dev", User: "skorfmann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A --prefix install's device login enrolled sandcastle-<prefix>-<user>;
+	// the grant must address that entry, and the default project stays the
+	// fallback when no project list is known.
+	if plan.CertificateName != "sandcastle-sh-skorfmann" || !slices.Equal(plan.Projects, []string{"sh-moyn-dev", "sh-moyn-dev-default"}) {
+		t.Fatalf("prefixed plan = %#v", plan)
+	}
+}

@@ -91,7 +91,7 @@ func newCloudIdentityGCPSetupCommand(config commandConfig, opts *rootOptions) *c
 				if client == nil {
 					baseURL := commandAuthHostname(config, request.AuthHostname)
 					if baseURL != "" {
-						client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: config.adminConfig.AuthToken}
+						client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 					}
 				}
 				if client != nil {

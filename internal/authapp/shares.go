@@ -95,7 +95,7 @@ func (h handler) shareCreateAPI(w http.ResponseWriter, r *http.Request, user Use
 	}
 	sourceTenant := strings.TrimSpace(request.SourceTenant)
 	if sourceTenant == "" {
-		sourceTenant = strings.TrimSpace(h.admin.Tenant)
+		sourceTenant = h.requestTenantHint(r, strings.TrimSpace(h.admin.Tenant))
 	}
 	if err := h.requireTenantAccess(r, user.UserKey, sourceTenant); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -119,7 +119,7 @@ func (h handler) shareCreateAPI(w http.ResponseWriter, r *http.Request, user Use
 func (h handler) shareListAPI(w http.ResponseWriter, r *http.Request, user User) {
 	tenantName := strings.TrimSpace(r.URL.Query().Get("tenant"))
 	if tenantName == "" {
-		tenantName = strings.TrimSpace(h.admin.Tenant)
+		tenantName = h.requestTenantHint(r, strings.TrimSpace(h.admin.Tenant))
 	}
 	if err := h.requireTenantAccess(r, user.UserKey, tenantName); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -155,7 +155,7 @@ func (h handler) shareStatusAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantName := strings.TrimSpace(r.URL.Query().Get("tenant"))
 	if tenantName == "" {
-		tenantName = strings.TrimSpace(h.admin.Tenant)
+		tenantName = h.requestTenantHint(r, strings.TrimSpace(h.admin.Tenant))
 	}
 	if err := h.requireTenantAccess(r, user.UserKey, tenantName); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -467,9 +467,9 @@ func (h handler) requireTenantAccess(r *http.Request, userKey string, tenantName
 	// healthy v2 tenant is refused their own tenant — `sc status` reported
 	// "shares:reconcile: error (user … is not granted access to tenant …)" and the
 	// auth-app logged POST /api/shares/reconcile status=403.
-	// A personal tenant belongs to the user whose key names it. There is no
-	// tenant-user metadata to consult any more.
-	if summary.Tenant == normalizedUser {
+	// A Personal Tenant belongs to the user whose key names it; a Shared
+	// Tenant admits its Tenant Members (Tenant Metadata, KeyV2Members).
+	if summary.Accessible(normalizedUser) {
 		return nil
 	}
 	return fmt.Errorf("user %s is not granted access to tenant %s", normalizedUser, summary.Tenant)

@@ -201,6 +201,7 @@ func ExecuteAdmin(name string, args []string) int {
 		adminConfig:        adminConfig,
 		tenantStore:        incusx.NewTenantStoreForSharedRemote(sharedRemote),
 		tenantCreator:      incusx.NewTenantCreator(adminConfig.Remote).WithVerbose(verbose, os.Stderr),
+		tenantMembers:      incusx.NewTenantCreator(adminConfig.Remote).WithVerbose(verbose, os.Stderr),
 		projectSettings:    incusx.NewTenantCreator(adminConfig.Remote).WithVerbose(verbose, os.Stderr),
 		tenantDeleter:      incusx.NewTenantDeleter(adminConfig.Remote).WithVerbose(verbose, os.Stderr),
 		projectDeleter:     incusx.NewTenantDeleter(adminConfig.Remote).WithVerbose(verbose, os.Stderr),
@@ -227,6 +228,8 @@ func ExecuteAdmin(name string, args []string) int {
 			MachineSSHAccess: authAppSSHKeys,
 			ShareStore:       authAppMetadataUpdater,
 			ShareReconciler:  authAppShareReconciler,
+			TenantMembers:    authAppCreator,
+			SidecarAddresses: authAppCreator,
 			DNSReconcile: func(ctx context.Context) error {
 				if authAppSocketServer == nil {
 					return nil // no mounted socket (not the serving appliance) — nothing to reconcile

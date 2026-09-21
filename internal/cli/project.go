@@ -142,6 +142,9 @@ func currentProjectName(config commandConfig, summary tenant.Summary) string {
 }
 
 type projectStatusPayload struct {
+	CertState    string         `json:"certState,omitempty"`
+	CertNotAfter string         `json:"certNotAfter,omitempty"`
+	SANs         []string       `json:"sans,omitempty"`
 	Tenant       tenant.Summary `json:"tenant"`
 	Project      meta.Project   `json:"project"`
 	MachineCount int            `json:"machineCount"`
@@ -171,10 +174,21 @@ type projectMachineStatus struct {
 
 func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status name",
+		Use:   "status [name]",
 		Short: "Show project status in the current tenant",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				project := strings.TrimSpace(config.adminConfig.Project)
+				if project == "" {
+					summary, err := currentTenantSummary(cmd.Context(), config)
+					if err != nil {
+						return err
+					}
+					project = summary.DefaultProject
+				}
+				args = append([]string{project}, args...)
+			}
 			if err := naming.ValidateProjectName(args[0]); err != nil {
 				return err
 			}
@@ -213,6 +227,7 @@ func newProjectStatusCommand(config commandConfig, opts *rootOptions) *cobra.Com
 				// the status still renders without it.
 				if claim, err := projectAuthClient(config).GetProjectDomain(cmd.Context(), project.Name); err == nil {
 					payload.Zone = claim.Zone
+					payload.CertState, payload.CertNotAfter, payload.SANs = claim.CertState, claim.CertNotAfter, claim.SANs
 				}
 			}
 			return writeOutput(config.stdout, opts.output, formatProjectNamespaceStatus(payload), payload)
@@ -252,15 +267,26 @@ const projectDomainVerbsUnavailable = "--domain is not available on this install
 func newProjectSetDomainCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
-		Use:   "set-domain name domain",
+		Use:   "set-domain [name] domain",
 		Short: "Claim (or replace) the Project Domain of a project",
 		Long: `Claim (or replace) the Project Domain of an existing project (ADR-0027/0028).
 Every machine of the project gets the public name <machine>.<domain> beside its
 Machine Private Hostname: existing machines are re-derived by the zone reconciler
 (records, a new certificate, the hostnames file), a replaced domain's names and
 certificates are released. Explicit hostnames are unaffected.`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				project := strings.TrimSpace(config.adminConfig.Project)
+				if project == "" {
+					summary, err := currentTenantSummary(cmd.Context(), config)
+					if err != nil {
+						return err
+					}
+					project = summary.DefaultProject
+				}
+				args = append([]string{project}, args...)
+			}
 			project := strings.TrimSpace(args[0])
 			if err := naming.ValidateProjectName(project); err != nil {
 				return err
@@ -286,14 +312,25 @@ certificates are released. Explicit hostnames are unaffected.`,
 func newProjectUnsetDomainCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
-		Use:   "unset-domain name",
+		Use:   "unset-domain [name]",
 		Short: "Release the Project Domain of a project",
 		Long: `Release a project's Project Domain (ADR-0027/0028). Every machine loses its
 derived <machine>.<domain> name (records and certificates are released; the zone
 reconciler pushes the shrunken hostnames file); explicit hostnames and the Machine
 Private Hostname stay.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				project := strings.TrimSpace(config.adminConfig.Project)
+				if project == "" {
+					summary, err := currentTenantSummary(cmd.Context(), config)
+					if err != nil {
+						return err
+					}
+					project = summary.DefaultProject
+				}
+				args = append([]string{project}, args...)
+			}
 			project := strings.TrimSpace(args[0])
 			if err := naming.ValidateProjectName(project); err != nil {
 				return err
@@ -334,6 +371,12 @@ func formatProjectDomainResult(verb string, result authapp.ProjectDomainResult) 
 		} else {
 			what = fmt.Sprintf("deleted project %s", result.Project)
 		}
+	}
+	if verb == "set-domain" {
+		what += " — one project certificate for " + result.Domain + ", *." + result.Domain
+	}
+	if verb == "unset-domain" && result.Released != "" {
+		what += " — drop project certificate"
 	}
 	if result.DryRun {
 		return "[dry-run] would have: " + what
@@ -460,7 +503,7 @@ func validateProjectCloudIdentity(ctx context.Context, config commandConfig, ten
 		if strings.TrimSpace(config.adminConfig.AuthToken) == "" {
 			return fmt.Errorf("cannot validate cloud identity %q for tenant %q: run sc login first", cloudIdentity, tenantName)
 		}
-		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: config.adminConfig.AuthToken}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: config.adminConfig.AuthToken, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	}
 	configured, err := client.GetCloudIdentity(ctx, tenantName, cloudIdentity)
 	if err != nil {
@@ -593,6 +636,9 @@ func formatProjectNamespaceStatus(status projectStatusPayload) string {
 		if status.Zone != "" {
 			fmt.Fprintf(&builder, "   (zone %s)", status.Zone)
 		}
+	}
+	if status.CertState != "" {
+		fmt.Fprintf(&builder, "\nCertificate: %s  expires %s\nSANs: %s", status.CertState, orDash(status.CertNotAfter), strings.Join(status.SANs, ", "))
 	}
 	if len(status.Machines) == 0 {
 		return builder.String()

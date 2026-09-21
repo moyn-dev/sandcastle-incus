@@ -93,6 +93,13 @@ type CreateRequest struct {
 	// only the default project while older certificates (extended one-by-one at
 	// each `sc project create`) saw them all.
 	ExistingProjects []string
+	// Members are the Tenant Members of a Shared Tenant (normalized user keys
+	// granted Tenant Access at creation, `sc-adm create tenant --member`).
+	// ExistingMembers carries the live tenant's stored members on idempotent
+	// re-provisioning; the plan unions both, so a re-run never drops a member
+	// granted later with `sc-adm tenant grant`.
+	Members         []string
+	ExistingMembers []string
 }
 
 type SidecarPlan struct {

@@ -45,14 +45,17 @@ const (
 )
 
 type commandConfig struct {
-	name               string
-	stdin              io.Reader
-	stdout             io.Writer
-	stderr             io.Writer
-	stdinIsTerminal    func(io.Reader) bool
-	tenantStore        tenant.IncusTenantStore
-	adminConfig        scconfig.Admin
-	tenantCreator      incusx.TenantCreator
+	name            string
+	stdin           io.Reader
+	stdout          io.Writer
+	stderr          io.Writer
+	stdinIsTerminal func(io.Reader) bool
+	tenantStore     tenant.IncusTenantStore
+	adminConfig     scconfig.Admin
+	tenantCreator   incusx.TenantCreator
+	// tenantMembers maintains Shared Tenant membership and key lists in
+	// Tenant Metadata (incusx.TenantCreator in production; a fake in tests).
+	tenantMembers      tenantMembershipManager
 	projectSettings    projectSettingsUpdater
 	projectDeleter     projectDeleter
 	tenantDeleter      tenant.Deleter
@@ -97,6 +100,7 @@ type commandConfig struct {
 	shareReconciler      tenantShareReconciler
 	openBrowser          func(string)
 	loginRemote          loginRemoteInstaller
+	tenantRemote         tenantRemoteInstaller
 	loginTailnet         loginTailnetVerifier
 	loginSetup           loginSetupRunner
 	loginRemoteProbe     func(context.Context, string) error
@@ -147,6 +151,14 @@ type authCloudIdentityClient interface {
 
 type authTenantClient interface {
 	ListTenants(context.Context) ([]authapp.TenantAccessSummary, error)
+}
+
+// tenantMembershipManager is the admin-plane seam for Shared Tenants.
+type tenantMembershipManager interface {
+	AddTenantMemberV2(ctx context.Context, installPrefix string, tenantName string, userKey string) ([]string, error)
+	RemoveTenantMemberV2(ctx context.Context, installPrefix string, tenantName string, userKey string) ([]string, error)
+	AddTenantSSHKeyV2(ctx context.Context, installPrefix string, tenantName string, sshKey string) ([]string, error)
+	RemoveTenantSSHKeyV2(ctx context.Context, installPrefix string, tenantName string, sshKey string) ([]string, error)
 }
 
 // authResourceClient is the t2 cache-backed GET /api/resources caller `sc ls`
