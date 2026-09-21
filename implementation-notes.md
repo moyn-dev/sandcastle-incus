@@ -6345,3 +6345,12 @@ A member's `sc tenant switch` then hit "connection refused" on the sidecar's
 calls to report the address to a member — now completes the Reach
 idempotently before answering, and the create's URL hint says to re-run the
 command once after joining.
+
+## 2026-09-21 — shared remote recorded against the resolved Auth Hostname
+
+Live on obelix: `sc tenant switch moyn-dev` worked, `sc tenant switch
+thieso2` then failed with `lookup auth.example.com`. The switch had recorded
+`installs[moyn-dev]` from the top-level `auth_hostname` of the user config,
+a placeholder an old login left behind, while the real hostname lives in
+`installs[<remote>]`. It now records what `commandAuthHostname` resolves —
+the same value every other command talks to.

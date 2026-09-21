@@ -20,10 +20,13 @@ func TestTenantSwitchEnrolsSharedTenantRemoteForMember(t *testing.T) {
 	useLoginHomeForTest(t)
 	configPath := scconfig.DefaultConfigPath()
 	if err := scconfig.SaveSandcastleConfig(configPath, scconfig.SandcastleConfig{
-		Tenant:       "skorfmann",
-		Project:      "default",
-		Remote:       "skorfmann",
-		AuthHostname: "https://auth.example.com",
+		Tenant:  "skorfmann",
+		Project: "default",
+		Remote:  "skorfmann",
+		// A stale top-level placeholder (an old login left it); the real
+		// hostname lives in installs[<remote>], and that is what must be
+		// recorded for the shared remote.
+		AuthHostname: "https://auth.placeholder.invalid",
 		AuthToken:    "stored-token",
 		Broker:       "https://10.248.2.1:9443",
 		Installs:     map[string]string{"skorfmann": "https://auth.example.com"},
@@ -37,7 +40,8 @@ func TestTenantSwitchEnrolsSharedTenantRemoteForMember(t *testing.T) {
 	installer := &fakeTenantRemoteInstaller{}
 	admin := testAdminConfig()
 	admin.Tenant = "skorfmann"
-	admin.AuthHostname = "https://auth.example.com"
+	admin.Remote = "skorfmann"
+	admin.AuthHostname = "https://auth.placeholder.invalid"
 	admin.AuthToken = "stored-token"
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig:  admin,

@@ -253,7 +253,12 @@ func ensureSharedTenantRemote(ctx context.Context, config commandConfig, cfg *sc
 	// user's token.
 	token := firstNonEmptyString(config.adminConfig.AuthToken, cfg.AuthToken)
 	broker := firstNonEmptyString(config.adminConfig.Broker, cfg.Broker)
-	authHost := firstNonEmptyString(config.adminConfig.AuthHostname, cfg.AuthHostname)
+	// The Auth Hostname the CLI actually talks to (installs[<active remote>]
+	// first), never the top-level config value — that can be a stale
+	// placeholder from an old login (auth.example.com), and recording it
+	// would make every later switch to this remote ask a host that does not
+	// exist.
+	authHost := firstNonEmptyString(commandAuthHostname(config, ""), config.adminConfig.AuthHostname, cfg.AuthHostname)
 	recordFor(&cfg.RemoteTenants, remoteName, tenantName)
 	recordFor(&cfg.RemoteAuthTokens, remoteName, token)
 	recordFor(&cfg.RemoteBrokers, remoteName, broker)
