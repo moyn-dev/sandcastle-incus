@@ -6524,3 +6524,13 @@ without it, lists only the current project; the tenant-wide sweep is the
 last resort. Also on obelix: the `newbuild2` profile was re-rendered as
 operator with `sc-adm tenant rerender thieso2 newbuild2` (the appliance is
 on v0.18.18 and lacks the tenant-plane rerender endpoint until updated).
+
+## 2026-09-21 — admin tenant commands detect the install prefix
+
+`SANDCASTLE_REMOTE=big sc-adm tenant rerender thieso2` failed with "infra
+project sc2-thieso2 not found": `big` hosts two installs and the CLI looked
+under the default prefix. The tenant commands (grant, revoke, users,
+set/add/remove-ssh-key, rerender) now scan the infra projects for the tenant
+when the configured prefix is the default; one match selects its install
+(with a note), several are refused, none falls through to the original
+error. `tenant create` keeps needing the prefix (there is no tenant yet).

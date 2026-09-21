@@ -9,6 +9,7 @@ import (
 
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 type fakeTenantRemoteInstaller struct{ requests []tenantRemoteInstallRequest }
@@ -265,5 +266,34 @@ func TestMachinePathAndReferencePrefixRoundTrip(t *testing.T) {
 	}
 	if _, project, machine, err := splitMachineReference("thieso2@work:dev", "default"); err != nil || project != "work" || machine != "dev" {
 		t.Fatalf("split project ref = %q %q %v", project, machine, err)
+	}
+}
+
+func TestDetectAdminPrefixFindsTheInstallOfATenant(t *testing.T) {
+	store := tenant.MemoryStore{Projects: append(v2TenantProjectsWithPrefix("obelix", "thieso2", "10.123.0.0/24", "default"), v2TenantProjectsWithPrefix("idefix", "alice", "10.124.0.0/24", "default")...)}
+	admin := testAdminConfig() // default prefix
+	stderr := &strings.Builder{}
+	cfg, err := detectAdminPrefix(context.Background(), commandConfig{adminConfig: admin, tenantStore: store, stderr: stderr}, "thieso2")
+	if err != nil || cfg.adminConfig.IncusProjectPrefix != "obelix" {
+		t.Fatalf("prefix = %q, %v", cfg.adminConfig.IncusProjectPrefix, err)
+	}
+	if !strings.Contains(stderr.String(), `lives on install "obelix"`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	// An explicit prefix is trusted as is; an unknown tenant leaves it alone.
+	admin.IncusProjectPrefix = "sh"
+	cfg, _ = detectAdminPrefix(context.Background(), commandConfig{adminConfig: admin, tenantStore: store, stderr: stderr}, "thieso2")
+	if cfg.adminConfig.IncusProjectPrefix != "sh" {
+		t.Fatalf("explicit prefix overridden: %q", cfg.adminConfig.IncusProjectPrefix)
+	}
+	admin = testAdminConfig()
+	cfg, err = detectAdminPrefix(context.Background(), commandConfig{adminConfig: admin, tenantStore: store, stderr: stderr}, "nobody")
+	if err != nil || cfg.adminConfig.IncusProjectPrefix != admin.IncusProjectPrefix {
+		t.Fatalf("unknown tenant: %q, %v", cfg.adminConfig.IncusProjectPrefix, err)
+	}
+	// The same tenant on two installs is ambiguous.
+	store.Projects = append(store.Projects, v2TenantProjectsWithPrefix("idefix", "thieso2", "10.124.1.0/24", "default")...)
+	if _, err := detectAdminPrefix(context.Background(), commandConfig{adminConfig: admin, tenantStore: store, stderr: stderr}, "thieso2"); err == nil || !strings.Contains(err.Error(), "several installs") {
+		t.Fatalf("ambiguous: %v", err)
 	}
 }

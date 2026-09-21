@@ -563,6 +563,10 @@ func newAdminTenantSetSSHKeyCommand(config commandConfig) *cobra.Command {
 			// The key lives in the infra project's config and is rendered into
 			// each app project's default profile. Resolve the tenant's real
 			// projects rather than deriving a single Incus project name.
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			summaries, err := tenant.ListForPrefix(cmd.Context(), config.tenantStore, config.adminConfig.IncusProjectPrefix)
 			if err != nil {
 				return err
@@ -599,6 +603,10 @@ func newAdminTenantGrantCommand(config commandConfig, opts *rootOptions) *cobra.
 			"Tenant Member (Shared Tenants), which re-renders the tenant's profiles with the member's login " +
 			"key. The member must have logged in to this install already; they then run `sc tenant switch`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			request := usertrust.TenantAccessRequest{Tenant: args[0], User: args[1]}
 			summary, found := adminTenantSummary(cmd.Context(), config, args[0])
 			if found {
@@ -639,6 +647,10 @@ func newAdminTenantRevokeCommand(config commandConfig, opts *rootOptions) *cobra
 		Short: "Revoke tenant access from a restricted user",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			request := usertrust.TenantAccessRequest{Tenant: args[0], User: args[1]}
 			summary, found := adminTenantSummary(cmd.Context(), config, args[0])
 			if found {
@@ -677,6 +689,10 @@ func newAdminTenantUsersCommand(config commandConfig, opts *rootOptions) *cobra.
 		Short: "List restricted users with tenant access",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			plan, err := usertrust.PlanTenantUsers(config.adminConfig, args[0])
 			if err != nil {
 				return err
@@ -1426,6 +1442,10 @@ func newAdminTenantAddSSHKeyCommand(config commandConfig) *cobra.Command {
 		Short: "Add an SSH public key to a Sandcastle tenant (keeps the existing keys)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			if config.tenantMembers == nil {
 				return fmt.Errorf("tenant key manager is not configured")
 			}
@@ -1446,6 +1466,10 @@ func newAdminTenantRemoveSSHKeyCommand(config commandConfig) *cobra.Command {
 		Short: "Remove an SSH public key from a Sandcastle tenant (matched on the key, not its comment)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			if config.tenantMembers == nil {
 				return fmt.Errorf("tenant key manager is not configured")
 			}
@@ -1494,6 +1518,10 @@ func newAdminTenantRerenderCommand(config commandConfig) *cobra.Command {
 		Short: "Re-render a tenant's project profiles (cloud-init) from this release and the stored settings",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := detectAdminPrefix(cmd.Context(), config, args[0])
+			if err != nil {
+				return err
+			}
 			if config.tenantMembers == nil {
 				return fmt.Errorf("tenant profile renderer is not configured")
 			}
@@ -1517,5 +1545,57 @@ func newAdminTenantRerenderCommand(config commandConfig) *cobra.Command {
 			fmt.Fprintf(config.stdout, "Profiles of every project of %s re-rendered (new machines use the current document; existing machines are unchanged).\n", args[0])
 			return nil
 		},
+	}
+}
+
+// detectAdminPrefix resolves which install a tenant belongs to when the
+// operator did not say: a host can carry several installs (--prefix), and
+// `sc-adm tenant … thieso2` without SANDCASTLE_INCUS_PROJECT_PREFIX looked
+// under the default prefix only ("infra project sc2-thieso2 not found").
+// With the default prefix configured and no such tenant under it, the infra
+// projects of every install are scanned; exactly one match selects its
+// prefix, several are refused with the candidates, none leaves the config
+// alone (the caller's own not-found names the project it looked for).
+func detectAdminPrefix(ctx context.Context, config commandConfig, tenantName string) (commandConfig, error) {
+	tenantName = strings.ToLower(strings.TrimSpace(tenantName))
+	if config.tenantStore == nil || tenantName == "" {
+		return config, nil
+	}
+	configured := strings.TrimSpace(config.adminConfig.IncusProjectPrefix)
+	if configured != "" && configured != naming.DefaultIncusProjectPrefix && configured != naming.V2IncusProjectPrefix {
+		return config, nil // an explicit install: trust it
+	}
+	projects, err := config.tenantStore.ListProjects(ctx)
+	if err != nil {
+		return config, nil
+	}
+	var prefixes []string
+	for _, project := range projects {
+		if !meta.IsManaged(project.Config) || project.Config[meta.KeyKind] != meta.KindInfra {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(project.Config[meta.KeyTenant])) != tenantName {
+			continue
+		}
+		prefix := strings.TrimSpace(project.Config[meta.KeyV2Prefix])
+		if prefix == "" {
+			prefix = strings.TrimSuffix(project.Name, "-"+tenantName)
+		}
+		if !slices.Contains(prefixes, prefix) {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	sort.Strings(prefixes)
+	switch len(prefixes) {
+	case 0:
+		return config, nil
+	case 1:
+		if prefixes[0] != naming.NormalizeV2Prefix(configured) {
+			fmt.Fprintf(config.stderr, "note: tenant %s lives on install %q (set SANDCASTLE_INCUS_PROJECT_PREFIX=%s to skip this lookup)\n", tenantName, prefixes[0], prefixes[0])
+		}
+		config.adminConfig.IncusProjectPrefix = prefixes[0]
+		return config, nil
+	default:
+		return config, fmt.Errorf("tenant %s exists on several installs of this remote (%s); set SANDCASTLE_INCUS_PROJECT_PREFIX to the one you mean", tenantName, strings.Join(prefixes, ", "))
 	}
 }

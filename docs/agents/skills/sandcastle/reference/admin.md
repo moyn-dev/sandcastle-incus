@@ -77,6 +77,9 @@ sc-adm tenant users acme
 sc-adm tenant set-ssh-key acme "ssh-ed25519 …"      # replace the key list
 sc-adm tenant add-ssh-key acme "ssh-ed25519 …"      # append / remove-ssh-key drops one (never the last)
 sc-adm tenant rerender acme [project]                # re-render profiles after a release (new machines only)
+# On a host with several installs, the tenant commands find the tenant's install
+# by themselves when SANDCASTLE_INCUS_PROJECT_PREFIX is unset (ambiguous → error);
+# `tenant create` and `sc-adm update` still need the prefix (--prefix / env).
 sc-adm tenant delete acme --purge --yes              # all-or-nothing (machines, volumes, sidecar, bridge)
 sc-adm tenant payload-sync acme --check
 sc-adm tenant delete acme --purge --yes
