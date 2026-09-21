@@ -225,11 +225,17 @@ expand it first.`,
 					return err
 				}
 			}
+			listed := listedScopePath(runCfg, result)
 			text := formatMachineListShort(result)
 			if pathOpts.Long {
+				// The table's own context line is the listed path in the
+				// plain case; only a filtered listing adds a second line.
 				text = formatMachineList(result, renderOpts)
 			}
-			return writeOutput(config.stdout, opts.output, listedScopePath(runCfg, result)+"\n"+text, result)
+			if !strings.HasPrefix(text, listed+"\n") {
+				text = listed + "\n" + text
+			}
+			return writeOutput(config.stdout, opts.output, text, result)
 		},
 	}
 	command.Flags().BoolVarP(&allProjects, "all-projects", "a", false, "list machines across all projects")

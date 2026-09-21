@@ -5,6 +5,18 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — Messages print Sandcastle Paths
+
+Prompts and results named machines in the colon grammar (`Delete machine
+home:test?`, `delete test`, `Machine thieso2@idefix:home:test does not
+exist`). They now print the Sandcastle Path (`/idefix/thieso2/home/test`)
+through the one renderer every message already used (`machinePath` /
+`scopePath`), plus the two target-list helpers that built colon strings by
+hand. The legacy `tenant@remote:project:machine` rendering survives only
+when the remote or tenant is unknown — a path with a hole would not paste
+back — and stays accepted on input. ADR-0030's "messages keep the colon
+form" consequence is amended in place.
+
 ## 2026-09-21 — `sc-adm update --all`
 
 One command for the four update layers: `--all` implies `--all-tenants`

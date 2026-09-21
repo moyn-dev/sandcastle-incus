@@ -64,7 +64,9 @@ selection that never moved must stay as they are.
 ## Consequences
 
 - The tree has one vocabulary: **Sandcastle Path**, **Current Position**
-  (CONTEXT.md). Messages keep printing `tenant@remote:project:machine`.
+  (CONTEXT.md). Messages print the Sandcastle Path (`/obelix/thieso2/work/dev`)
+  wherever the remote and tenant are known — amended 2026-09-21; the first
+  cut kept `tenant@remote:project:machine`, which is still accepted on input.
 - A binary older than this ADR rejects a `.sandcastle` carrying `level` or
   `previous` (strict YAML); `sc update` resolves it, and a selection that
   never ran `cd` above a project is unchanged on disk.

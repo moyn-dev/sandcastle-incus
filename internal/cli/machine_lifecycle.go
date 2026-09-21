@@ -19,10 +19,17 @@ type machineActionResult struct {
 	Project string `json:"project"`
 	Machine string `json:"machine"`
 	Error   string `json:"error,omitempty"`
+	// path is the Sandcastle Path the text output names the machine by; the
+	// JSON keeps its historical fields.
+	path string
 }
 
-// target renders the result the way the reference addressed it.
+// target renders the result for text output: its Sandcastle Path when the
+// run knew the install and tenant, else the colon reference.
 func (r machineActionResult) target() string {
+	if r.path != "" {
+		return r.path
+	}
 	if r.Remote != "" {
 		return r.Remote + ":" + r.Project + ":" + r.Machine
 	}
@@ -160,9 +167,9 @@ func runMachineLifecycle(ctx context.Context, config commandConfig, opts *rootOp
 		return err
 	}
 	if requireYes && !yes {
-		prompt := "Delete machine " + matchTargets(targets)[0] + "?"
+		prompt := "Delete machine " + matchTargets(config, targets)[0] + "?"
 		if len(targets) > 1 {
-			prompt = fmt.Sprintf("Delete %d machines (%s)?", len(targets), strings.Join(matchTargets(targets), ", "))
+			prompt = fmt.Sprintf("Delete %d machines (%s)?", len(targets), strings.Join(matchTargets(config, targets), ", "))
 		}
 		confirmed, err := confirmMissingYes(config, prompt, "refusing to delete machine without --yes")
 		if err != nil {
@@ -190,7 +197,7 @@ func runMachineLifecycle(ctx context.Context, config commandConfig, opts *rootOp
 			Project string `json:"project"`
 			Machine string `json:"machine"`
 		}{string(action), targets[0].Summary.Tenant, result.Project, result.Machine}
-		return writeOutput(config.stdout, opts.output, fmt.Sprintf("%s %s", action, result.Machine), payload)
+		return writeOutput(config.stdout, opts.output, fmt.Sprintf("%s %s", action, machinePath(config.adminConfig.Remote, targets[0].Summary.Tenant, result.Project, result.Machine)), payload)
 	}
 	payload := machineActionPayload{
 		Action:   string(action),
@@ -268,6 +275,7 @@ func runMachineAction(ctx context.Context, config commandConfig, fanout remoteFa
 			if spansRemotes {
 				applied[index].Remote = remote
 			}
+			applied[index].path = machinePath(remote, summary.Tenant, applied[index].Project, applied[index].Machine)
 		}
 		results = append(results, applied...)
 		return nil
@@ -366,7 +374,11 @@ func planMachineLifecycle(ctx context.Context, config commandConfig, opts *rootO
 			decision += "; remove machine A records"
 		}
 		entries = append(entries, entry{target.Machine.Project, target.Machine.Name, decision})
-		fmt.Fprintf(&out, "[dry-run] %s %s:%s — %s\n", action, target.Machine.Project, target.Machine.Name, decision)
+		remote := target.Remote
+		if remote == "" {
+			remote = strings.TrimSpace(config.adminConfig.Remote)
+		}
+		fmt.Fprintf(&out, "[dry-run] %s %s — %s\n", action, machinePath(remote, target.Summary.Tenant, target.Machine.Project, target.Machine.Name), decision)
 	}
 	return writeOutput(config.stdout, opts.output, strings.TrimSpace(out.String()), struct {
 		DryRun   bool           `json:"dryRun"`

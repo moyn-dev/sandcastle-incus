@@ -195,12 +195,15 @@ func resolveSingleMachineReference(ctx context.Context, config commandConfig, su
 	if err != nil {
 		return "", err
 	}
-	targets := machineTargets(matched)
+	// The RETURN is a colon reference (the caller parses it); prompts and
+	// errors show the Sandcastle Path.
+	references := machineTargets(matched)
+	targets := machineTargetPaths(config, matched)
 	switch len(matched) {
 	case 0:
 		return "", fmt.Errorf("no machines match %q in tenant %s", selector.Reference, summary.Tenant)
 	case 1:
-		return targets[0], nil
+		return references[0], nil
 	}
 	if !isTerminalInput(config) {
 		return "", fmt.Errorf("%q matches %d machines (%s); this command acts on one — name it, or narrow the pattern",
@@ -210,7 +213,7 @@ func resolveSingleMachineReference(ctx context.Context, config commandConfig, su
 	if err != nil {
 		return "", err
 	}
-	return targets[choice], nil
+	return references[choice], nil
 }
 
 // narrowRemoteGlob resolves a reference whose INSTALL part globs down to one
@@ -234,7 +237,7 @@ func narrowRemoteGlob(ctx context.Context, config commandConfig, fanout remoteFa
 	if err != nil {
 		return "", err
 	}
-	targets := matchTargets(matches)
+	targets := matchTargets(config, matches)
 	qualified := make([]string, 0, len(matches))
 	for _, match := range matches {
 		qualified = append(qualified, match.Remote+":"+match.Machine.Project+":"+match.Machine.Name)
@@ -257,6 +260,16 @@ func narrowRemoteGlob(ctx context.Context, config commandConfig, fanout remoteFa
 }
 
 // machineTargets renders matches as "project:machine" for prompts and errors.
+// machineTargetPaths renders machines of the current install as Sandcastle
+// Paths, the form every prompt and message uses.
+func machineTargetPaths(config commandConfig, machines []meta.Machine) []string {
+	targets := make([]string, 0, len(machines))
+	for _, m := range machines {
+		targets = append(targets, machinePath(config.adminConfig.Remote, m.Tenant, m.Project, m.Name))
+	}
+	return targets
+}
+
 func machineTargets(machines []meta.Machine) []string {
 	targets := make([]string, 0, len(machines))
 	for _, candidate := range machines {
@@ -343,14 +356,14 @@ func selectMachinesAcrossRemotes(ctx context.Context, config commandConfig, fano
 // install only when it came from a cross-install sweep, and then the install
 // is always named — "work:api" would be actively misleading when the machine
 // is on a DIFFERENT install from the one the command is sitting on.
-func matchTargets(matches []machineMatch) []string {
+func matchTargets(config commandConfig, matches []machineMatch) []string {
 	targets := make([]string, 0, len(matches))
 	for _, match := range matches {
-		if match.Remote != "" {
-			targets = append(targets, match.Remote+":"+match.Machine.Project+":"+match.Machine.Name)
-			continue
+		remote := match.Remote
+		if remote == "" {
+			remote = strings.TrimSpace(config.adminConfig.Remote)
 		}
-		targets = append(targets, match.Machine.Project+":"+match.Machine.Name)
+		targets = append(targets, machinePath(remote, match.Summary.Tenant, match.Machine.Project, match.Machine.Name))
 	}
 	return targets
 }

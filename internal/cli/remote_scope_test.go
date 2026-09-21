@@ -157,8 +157,8 @@ func TestSelectMachinesAcrossRemotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Join(matchTargets(matches), ",")
-	want := "idefix:gbrain:dev,idefix:work:dev,obelix:gbrain:dev"
+	got := strings.Join(matchTargets(fake.configFor("obelix"), matches), ",")
+	want := "/idefix/acme/gbrain/dev,/idefix/acme/work/dev,/obelix/acme/gbrain/dev"
 	if got != want {
 		t.Fatalf("matches = %s, want %s", got, want)
 	}
@@ -178,7 +178,7 @@ func TestSelectMachinesAcrossRemotesCarriesPerInstallSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(matches) != 1 {
-		t.Fatalf("matches = %v, want exactly obelix:gbrain:web", matchTargets(matches))
+		t.Fatalf("matches = %v, want exactly obelix:gbrain:web", matchTargets(fake.configFor("obelix"), matches))
 	}
 	if matches[0].Summary.Tenant != "acme" || matches[0].Remote != "obelix" {
 		t.Fatalf("match = %+v, want the obelix install's summary", matches[0])
@@ -202,7 +202,7 @@ func TestNarrowRemoteGlob(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "matches 3 machines") {
 		t.Fatalf("error = %v, want an ambiguity error", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), "idefix:gbrain:dev") {
+	if err != nil && !strings.Contains(err.Error(), "/idefix/acme/gbrain/dev") {
 		t.Fatalf("error = %v, want the candidates qualified by install", err)
 	}
 
@@ -280,7 +280,7 @@ func TestSelectMachinesAcrossRemotesToleratesProjectMissingOnSomeInstalls(t *tes
 	if err != nil {
 		t.Fatalf("sweep failed because one install lacks the project: %v", err)
 	}
-	if got := strings.Join(matchTargets(matches), ","); got != "idefix:work:api" {
+	if got := strings.Join(matchTargets(fake.configFor("obelix"), matches), ","); got != "/idefix/acme/work/api" {
 		t.Fatalf("matches = %q, want only the install that has the project, named", got)
 	}
 }

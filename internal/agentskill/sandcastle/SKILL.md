@@ -38,7 +38,7 @@ Switch context with `sc remote switch <name>` (install), `sc tenant switch
 then parents; with none, they create it in the current directory. `sc tenant
 list` marks the active tenant with `*` and shows the Role (`owner` for your
 Personal Tenant, `member` for a Shared Tenant). Messages name machines by their
-full path `tenant@remote:project:machine`, which pastes back into any command.
+Sandcastle Path `/remote/tenant/project/machine`, which pastes back into any command.
 Switches report the path written; `sc remote list` and `sc project list` report
 the file read. Global defaults are fallback only, and raw Incus defaults remain
 unchanged. `SANDCASTLE_REMOTE` / `SANDCASTLE_PROJECT` override local selection

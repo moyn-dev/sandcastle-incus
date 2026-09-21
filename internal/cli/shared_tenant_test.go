@@ -247,10 +247,10 @@ func TestTenantSwitchRepointsADriftedSharedRemote(t *testing.T) {
 }
 
 func TestMachinePathAndReferencePrefixRoundTrip(t *testing.T) {
-	if got := machinePath("obelix", "thieso2", "work", "dev"); got != "thieso2@obelix:work:dev" {
+	if got := machinePath("obelix", "thieso2", "work", "dev"); got != "/obelix/thieso2/work/dev" {
 		t.Fatalf("machinePath = %q", got)
 	}
-	if got := scopePath("obelix", "thieso2", "work"); got != "thieso2@obelix:work" {
+	if got := scopePath("obelix", "thieso2", "work"); got != "/obelix/thieso2/work" {
 		t.Fatalf("scopePath = %q", got)
 	}
 	if got := machinePath("", "", "work", "dev"); got != "work:dev" {
@@ -259,7 +259,11 @@ func TestMachinePathAndReferencePrefixRoundTrip(t *testing.T) {
 	if got := machinePath("obelix", "", "work", "dev"); got != "obelix:work:dev" {
 		t.Fatalf("no-tenant path = %q", got)
 	}
-	// The printed form pastes back into any command: tenant@ is ignored.
+	// The printed form pastes back into any command as a path; the legacy
+	// tenant@ form is still accepted, its tenant@ ignored.
+	if !isPathReference(machinePath("obelix", "thieso2", "work", "dev")) {
+		t.Fatalf("printed path is not a path reference")
+	}
 	suffix, project, machine, err := splitMachineReference("thieso2@obelix:work:dev", "default")
 	if err != nil || suffix != "obelix" || project != "work" || machine != "dev" {
 		t.Fatalf("split = %q %q %q %v", suffix, project, machine, err)

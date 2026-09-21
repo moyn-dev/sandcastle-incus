@@ -23,8 +23,8 @@ func TestLifecycleTargetsFromWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(matchTargets(targets), ","); got != "gbrain:dev,gbrain:docker" {
-		t.Fatalf("targets = %s, want gbrain:dev,gbrain:docker", got)
+	if got := strings.Join(matchTargets(selectorConfig(store, ""), targets), ","); got != "/sc-acme/acme/gbrain/dev,/sc-acme/acme/gbrain/docker" {
+		t.Fatalf("targets = %s, want /sc-acme/acme/gbrain/dev,/sc-acme/acme/gbrain/docker", got)
 	}
 }
 
@@ -100,8 +100,8 @@ func TestLifecycleTargetsAcrossInstalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "idefix:gbrain:dev,idefix:work:dev,obelix:gbrain:dev"
-	if got := strings.Join(matchTargets(targets), ","); got != want {
+	want := "/idefix/acme/gbrain/dev,/idefix/acme/work/dev,/obelix/acme/gbrain/dev"
+	if got := strings.Join(matchTargets(fake.configFor("obelix"), targets), ","); got != want {
 		t.Fatalf("targets = %s, want %s", got, want)
 	}
 }
