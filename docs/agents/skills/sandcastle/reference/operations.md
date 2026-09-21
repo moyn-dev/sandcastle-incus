@@ -5,6 +5,11 @@ flags; this file carries what the flags do not say.
 
 ## Machines
 
+Short aliases: `c` connect, `ls` list, `new` create, `del`/`rm` delete, `up`
+start, `down` stop, `reboot` restart, `st` status, `upd` update; groups `t`
+tenant, `p`/`proj` project, `rem` remote, `img` image, `host` hostname; `sw`
+for `tenant switch` / `project switch`.
+
 `sc create [[remote:]project:]machine`:
 
 - `--vm` launches a virtual machine instead of a container.

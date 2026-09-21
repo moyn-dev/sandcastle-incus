@@ -22,8 +22,9 @@ import (
 
 func newRemoteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remote",
-		Short: "Manage Sandcastle remotes",
+		Use:     "remote",
+		Aliases: []string{"rem"},
+		Short:   "Manage Sandcastle remotes",
 	}
 	cmd.AddCommand(newRemoteAddCommand(config, opts))
 	cmd.AddCommand(newRemoteListCommand(config))

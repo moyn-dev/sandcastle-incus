@@ -10,9 +10,10 @@ import (
 
 func newStatusCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status [tenant]",
-		Short: "Show Sandcastle tenant status",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "status [tenant]",
+		Aliases: []string{"st"},
+		Short:   "Show Sandcastle tenant status",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// `sc status <machine>` was the v1 per-machine status. v2 has no
 			// per-machine status, so the argument is always a tenant name.

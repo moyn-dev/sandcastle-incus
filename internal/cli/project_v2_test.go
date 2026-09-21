@@ -274,6 +274,11 @@ func (s *stubAuthProjects) UnsetProjectDomain(_ context.Context, project string,
 	return authapp.ProjectDomainResult{Tenant: "demo", Project: project, Released: s.released, DryRun: dryRun}, nil
 }
 
+func (s *stubAuthProjects) SetProjectImage(_ context.Context, project, image string) (authapp.ProjectImageResult, error) {
+	s.calls = append(s.calls, "image:"+project+"="+image)
+	return authapp.ProjectImageResult{Tenant: s.tenant, Project: project, Image: image}, s.fail
+}
+
 func (s *stubAuthProjects) DeleteProject(_ context.Context, project string, dryRun bool) (authapp.ProjectDomainResult, error) {
 	s.calls = append(s.calls, "delete "+project+" "+boolString(dryRun))
 	if s.fail != nil {

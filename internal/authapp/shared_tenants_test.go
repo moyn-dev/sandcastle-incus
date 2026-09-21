@@ -39,7 +39,27 @@ func (r fakeSidecarAddressReader) SidecarTailnetIPV2(_ context.Context, _ string
 	return r.byTenant[tenantName], nil
 }
 
-type fakeTenantProjectCreator struct{ created []string }
+type fakeTenantProjectCreator struct {
+	created []string
+	images  []string
+}
+
+func (c *fakeTenantProjectCreator) SetProjectImage(_ context.Context, tenantName, project, image string) error {
+	c.images = append(c.images, tenantName+"/"+project+"="+image)
+	return nil
+}
+func (c *fakeTenantProjectCreator) CreateTenantProjectWithDomain(_ context.Context, tenantName, project, _, domain string) (projectbroker.ProjectResult, error) {
+	return projectbroker.ProjectResult{Tenant: tenantName, Project: project, Domain: domain}, nil
+}
+func (c *fakeTenantProjectCreator) SetProjectDomain(context.Context, string, string, string) error {
+	return nil
+}
+func (c *fakeTenantProjectCreator) SetMachinePublicHostnames(context.Context, string, string, string, []string) error {
+	return nil
+}
+func (c *fakeTenantProjectCreator) DeleteTenantProject(context.Context, string, string) error {
+	return nil
+}
 
 func (c *fakeTenantProjectCreator) CreateTenantProject(_ context.Context, tenantName, project, _ string) (projectbroker.ProjectResult, error) {
 	c.created = append(c.created, tenantName+"/"+project)
@@ -74,8 +94,37 @@ func sharedTenantHandler(t *testing.T, members *fakeTenantMembershipManager, pro
 		TenantMembers:    members,
 		SidecarAddresses: fakeSidecarAddressReader{byTenant: map[string]string{"moyn-dev": "100.64.0.9"}},
 		Projects:         projects,
+		ProjectDomains:   projects,
 	})
 	return handler, tokens
+}
+
+func TestProjectImageAPIWritesThroughTheAdminSeamForTheRequestTenant(t *testing.T) {
+	projects := &fakeTenantProjectCreator{}
+	handler, tokens := sharedTenantHandler(t, &fakeTenantMembershipManager{}, projects)
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"images:ubuntu/26.04"}`))
+	req.Header.Set("Authorization", "Bearer "+tokens["skorfmann"])
+	req.Header.Set(TenantHeader, "moyn-dev")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("set image = %d %q", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/projects/web/image", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens["skorfmann"])
+	req.Header.Set(TenantHeader, "moyn-dev")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !slices.Equal(projects.images, []string{"moyn-dev/web=images:ubuntu/26.04", "moyn-dev/web="}) {
+		t.Fatalf("unset = %d images = %v", res.Code, projects.images)
+	}
+	req = httptest.NewRequest(http.MethodPut, "/api/projects/web/image", strings.NewReader(`{"image":"bad ref"}`))
+	req.Header.Set("Authorization", "Bearer "+tokens["thieso2"])
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("bad ref = %d", res.Code)
+	}
 }
 
 func TestTenantsAPIListsSharedTenantMembershipWithRemoteDetails(t *testing.T) {

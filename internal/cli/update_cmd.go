@@ -29,9 +29,10 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var check, yes, noSelfUpdate bool
 	var pin string
 	command := &cobra.Command{
-		Use:   "update",
-		Short: "Check for updates and apply them (CLI binary and your sidecar)",
-		Args:  cobra.NoArgs,
+		Use:     "update",
+		Aliases: []string{"upd"},
+		Short:   "Check for updates and apply them (CLI binary and your sidecar)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 

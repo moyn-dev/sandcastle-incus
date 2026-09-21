@@ -184,6 +184,8 @@ func (h handler) projectAPI(w http.ResponseWriter, r *http.Request) {
 		h.projectDomainSet(w, r, user, project)
 	case action == "domain" && r.Method == http.MethodDelete:
 		h.projectDomainUnset(w, r, user, project, dryRun)
+	case action == "image" && (r.Method == http.MethodPut || r.Method == http.MethodDelete):
+		h.projectImageSet(w, r, user, project)
 	case action == "" && r.Method == http.MethodDelete:
 		h.projectDelete(w, r, user, project, dryRun)
 	default:
@@ -407,4 +409,59 @@ func (h handler) projectDelete(w http.ResponseWriter, r *http.Request, user User
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// ProjectImageRequest is the body of PUT /api/projects/{name}/image.
+type ProjectImageRequest struct {
+	Image string `json:"image"`
+}
+
+// ProjectImageResult is the answer of the image endpoints.
+type ProjectImageResult struct {
+	Tenant  string `json:"tenant"`
+	Project string `json:"project"`
+	Image   string `json:"image,omitempty"`
+}
+
+// projectImageSetter is the optional seam for the project default image: a
+// restricted tenant certificate may not edit Incus project config, so `sc
+// project set-image` rides the Auth App's admin credentials, like set-domain.
+type projectImageSetter interface {
+	SetProjectImage(ctx context.Context, tenant, project, image string) error
+}
+
+// projectImageSet handles PUT (set) and DELETE (clear) /api/projects/{name}/image.
+func (h handler) projectImageSet(w http.ResponseWriter, r *http.Request, user User, project string) {
+	tenantName, err := h.requestTenant(r, user)
+	if err != nil {
+		writeAPIError(w, http.StatusForbidden, err)
+		return
+	}
+	setter, ok := h.projectDomains.(projectImageSetter)
+	if h.projectDomains == nil || !ok {
+		writeAPIError(w, http.StatusNotImplemented, errors.New("project images are not available on this deployment"))
+		return
+	}
+	image := ""
+	if r.Method == http.MethodPut {
+		var request ProjectImageRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeAPIError(w, http.StatusBadRequest, errors.New("invalid request body"))
+			return
+		}
+		image = strings.TrimSpace(request.Image)
+		if image == "" || strings.ContainsAny(image, " \t\n") {
+			writeAPIError(w, http.StatusBadRequest, fmt.Errorf("invalid image reference %q", request.Image))
+			return
+		}
+	}
+	if err := setter.SetProjectImage(r.Context(), tenantName, project, image); err != nil {
+		if errors.Is(err, projectbroker.ErrProjectNotFound) {
+			writeAPIError(w, http.StatusNotFound, err)
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ProjectImageResult{Tenant: tenantName, Project: project, Image: image})
 }

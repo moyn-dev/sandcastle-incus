@@ -15,8 +15,9 @@ import (
 // saved alias is consumed by `sc create <name> --image <base>`.
 func newImageCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "image",
-		Short: "Save and manage reusable base images from your machines",
+		Use:     "image",
+		Aliases: []string{"img"},
+		Short:   "Save and manage reusable base images from your machines",
 	}
 	command.AddCommand(newImageSaveCommand(config, opts))
 	command.AddCommand(newImageListCommand(config, opts))

@@ -6478,3 +6478,15 @@ given. Stored as a plain ref (an `images:` ref or an alias from `sc image
 save`) and not validated against the remote at set time — aliases resolve at
 create time, and a project may be configured before its image is published.
 Mirrors the docker-autostart setting's plan/updater shape.
+
+## 2026-09-21 — short aliases; `set-image` rides the Auth App
+
+Aliases for the frequent verbs (`del`/`rm`, `up`, `down`, `reboot`, `new`,
+`st`, `upd`, `t`, `p`/`proj`, `rem`, `img`, `host`, `sw`). Live: `sc project
+set-image` failed with `Certificate is restricted` — a restricted tenant
+certificate may not edit Incus project config. After a login the write now
+goes through `PUT/DELETE /api/projects/{name}/image` on the Auth App (admin
+rights, tenant-scoped via the Current Tenant header), direct Incus only
+without a login. `set-cloud-identity` and `set-docker-autostart` still
+write directly and will hit the same restriction for tenant users; they
+should follow the same seam.

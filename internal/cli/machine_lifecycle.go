@@ -39,11 +39,21 @@ type machineActionPayload struct {
 	Results  []machineActionResult `json:"results"`
 }
 
+// machineLifecycleAliases are the short forms of the lifecycle verbs
+// (`sc del web`, `sc up web`), beside `c` for connect and `ls` for list.
+var machineLifecycleAliases = map[string][]string{
+	"delete":  {"del", "rm"},
+	"start":   {"up"},
+	"stop":    {"down"},
+	"restart": {"reboot"},
+}
+
 func newMachineLifecycleCommand(config commandConfig, opts *rootOptions, use string, action machine.Action, requireYes bool) *cobra.Command {
 	var yes, dryRun bool
 	command := &cobra.Command{
-		Use:   use + " [[remote:]project:]machine",
-		Short: machineLifecycleShort(action),
+		Use:     use + " [[remote:]project:]machine",
+		Aliases: machineLifecycleAliases[use],
+		Short:   machineLifecycleShort(action),
 		Long: machineLifecycleShort(action) + `.
 
 Every part of the reference accepts shell-style wildcards, so one invocation

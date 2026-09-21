@@ -1750,6 +1750,22 @@ func TestProjectSetAndUnsetImage(t *testing.T) {
 	}
 }
 
+func TestProjectSetImageUsesTheAuthAppWhenLoggedIn(t *testing.T) {
+	projects := v2TenantProjects("acme", "10.248.0.0/24", "default", "work")
+	stub := &stubAuthProjects{tenant: "acme"}
+	updater := &fakeProjectUpdater{}
+	admin := testAdminConfig()
+	admin.AuthHostname, admin.AuthToken = "https://auth.example.com", "stored-token"
+	if _, err := executeForTestWithConfig(t, commandConfig{
+		name: "sandcastle", adminConfig: admin, authProjects: stub, projectSettings: updater, tenantStore: tenant.MemoryStore{Projects: projects},
+	}, "project", "set-image", "work", "images:ubuntu/26.04"); err != nil {
+		t.Fatal(err)
+	}
+	if updater.called || len(stub.calls) != 1 || stub.calls[0] != "image:work=images:ubuntu/26.04" {
+		t.Fatalf("direct updater called=%v auth calls=%v", updater.called, stub.calls)
+	}
+}
+
 func TestProjectDeleteRejectsNonEmptyProject(t *testing.T) {
 	projects := v2TenantProjects("acme", "10.248.0.0/24", "default", "website")
 	_, err := executeForTestWithConfig(t, commandConfig{

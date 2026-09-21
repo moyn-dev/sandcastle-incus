@@ -118,8 +118,9 @@ func releaseMachineHostnames(ctx context.Context, client authMachineHostnameClie
 
 func newHostnameCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "hostname",
-		Short: "Manage a machine's explicit public hostnames (ADR-0028)",
+		Use:     "hostname",
+		Aliases: []string{"host"},
+		Short:   "Manage a machine's explicit public hostnames (ADR-0028)",
 		Long: `Add, remove or list the explicit Machine Public Hostnames of a machine.
 A hostname is any name under a Public DNS Zone the admin registered (apex-level
 names like web12.tc42.uk included); it reserves itself and its wildcard subtree

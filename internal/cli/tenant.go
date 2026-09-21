@@ -54,8 +54,9 @@ type tenantSwitchOutput struct {
 
 func newTenantCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "tenant",
-		Short: "List and select accessible Sandcastle tenants",
+		Use:     "tenant",
+		Aliases: []string{"t"},
+		Short:   "List and select accessible Sandcastle tenants",
 	}
 	command.AddCommand(newTenantListCommand(config, opts))
 	command.AddCommand(newTenantSwitchCommand(config, opts))
@@ -64,8 +65,9 @@ func newTenantCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 
 func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List tenants accessible to the current user",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List tenants accessible to the current user",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := tenantClient(config)
 			if err != nil {
@@ -84,10 +86,11 @@ func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Comman
 func newTenantSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var localOnly bool
 	command := &cobra.Command{
-		Use:   "switch tenant",
-		Short: "Select the local Current Tenant",
-		Long:  "Select the local Current Tenant. By default this validates Tenant Access through the Auth App; use --local-only to update local config without online validation.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "switch tenant",
+		Aliases: []string{"sw"},
+		Short:   "Select the local Current Tenant",
+		Long:    "Select the local Current Tenant. By default this validates Tenant Access through the Auth App; use --local-only to update local config without online validation.",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tenantName := strings.TrimSpace(args[0])
 			if tenantName == "" {

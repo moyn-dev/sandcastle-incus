@@ -15,8 +15,9 @@ import (
 
 func newProjectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "project",
-		Short: "Manage lightweight projects in the current tenant",
+		Use:     "project",
+		Aliases: []string{"proj", "p"},
+		Short:   "Manage lightweight projects in the current tenant",
 	}
 	command.AddCommand(newProjectListCommand(config, opts))
 	command.AddCommand(newProjectSwitchCommand(config, opts))
@@ -63,10 +64,11 @@ type projectSwitchOutput struct {
 func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var localOnly bool
 	command := &cobra.Command{
-		Use:   "switch name",
-		Short: "Select the local current project in the current tenant",
-		Long:  "Select the project in the nearest .sandcastle (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "switch name",
+		Aliases: []string{"sw"},
+		Short:   "Select the local current project in the current tenant",
+		Long:    "Select the project in the nearest .sandcastle (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
 			if name == "" {
@@ -390,9 +392,10 @@ func newProjectDeleteCommand(config commandConfig, opts *rootOptions) *cobra.Com
 	var yes bool
 	var dryRun bool
 	command := &cobra.Command{
-		Use:   "delete name",
-		Short: "Delete an empty project namespace from the current tenant",
-		Args:  cobra.ExactArgs(1),
+		Use:     "delete name",
+		Aliases: []string{"del", "rm"},
+		Short:   "Delete an empty project namespace from the current tenant",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes && !dryRun {
 				confirmed, err := confirmMissingYes(config, "Delete project "+args[0]+"?", "refusing to delete project without --yes")
@@ -733,11 +736,21 @@ func runProjectSetImage(ctx context.Context, config commandConfig, opts *rootOpt
 		return err
 	}
 	if !dryRun {
-		if config.projectSettings == nil {
-			return fmt.Errorf("project settings updater is not configured")
-		}
-		if err := config.projectSettings.SetProjectImage(ctx, plan.Tenant.V2IncusProjectName(project), image); err != nil {
-			return err
+		// A restricted tenant certificate may not edit Incus project config
+		// ("Certificate is restricted"), so after `sc login` the write rides the
+		// Auth App's tenant plane with admin rights; without a login it goes
+		// direct (an admin remote).
+		if projectAuthAppAvailable(config, "") {
+			if _, err := projectAuthClient(config).SetProjectImage(ctx, project, image); err != nil {
+				return err
+			}
+		} else {
+			if config.projectSettings == nil {
+				return fmt.Errorf("project settings updater is not configured")
+			}
+			if err := config.projectSettings.SetProjectImage(ctx, plan.Tenant.V2IncusProjectName(project), image); err != nil {
+				return err
+			}
 		}
 	}
 	return writeOutput(config.stdout, opts.output, formatProjectMutationPlan(plan), plan)

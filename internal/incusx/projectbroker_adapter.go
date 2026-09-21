@@ -75,6 +75,16 @@ func (p ProjectBrokerCreator) CreateTenantProjectWithDomain(ctx context.Context,
 	}, nil
 }
 
+// SetProjectImage implements the Auth App's project image seam: the app
+// project's default machine image (v2.image), written with admin rights.
+func (p ProjectBrokerCreator) SetProjectImage(ctx context.Context, tenant string, project string, image string) error {
+	incusProject, _, err := p.Creator.v2AppProject(p.Prefix, tenant, project)
+	if err != nil {
+		return err
+	}
+	return p.Creator.SetProjectImage(ctx, incusProject, image)
+}
+
 // SetProjectDomain implements authapp.TenantProjectDomainManager.
 func (p ProjectBrokerCreator) SetProjectDomain(ctx context.Context, tenant string, project string, domain string) error {
 	return p.Creator.SetProjectDomainV2(ctx, p.Prefix, tenant, project, domain)

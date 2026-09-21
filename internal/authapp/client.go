@@ -344,6 +344,17 @@ func (c DeviceClient) UnsetProjectDomain(ctx context.Context, project string, dr
 	return result, err
 }
 
+// SetProjectImage drives PUT /api/projects/{name}/image (`sc project
+// set-image`); an empty image drives DELETE (`unset-image`).
+func (c DeviceClient) SetProjectImage(ctx context.Context, project, image string) (ProjectImageResult, error) {
+	var result ProjectImageResult
+	path := "/api/projects/" + url.PathEscape(strings.TrimSpace(project)) + "/image"
+	if strings.TrimSpace(image) == "" {
+		return result, c.publicDNSZoneCall(ctx, http.MethodDelete, path, nil, &result)
+	}
+	return result, c.publicDNSZoneCall(ctx, http.MethodPut, path, ProjectImageRequest{Image: strings.TrimSpace(image)}, &result)
+}
+
 // DeleteProject drives DELETE /api/projects/{name} (`sc project delete` on an
 // Auth App install): releases the Project Domain claim, then deletes the
 // Incus project.
