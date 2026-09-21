@@ -66,6 +66,26 @@ func newConnectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 		Args:              cobra.MinimumNArgs(1),
 		ValidArgsFunction: pathCompletion(config, levelMachine),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A globbed install part narrows to one remote, and a "<remote>:"
+			// prefix (or a path) binds the command to that install BEFORE the
+			// cache path runs — otherwise `sc c moyn:default:web` asked the
+			// current install's Incus about moyn's project and got a 403.
+			ref, err := narrowRemoteGlob(cmd.Context(), config, defaultRemoteFanout(), args[0])
+			if err != nil {
+				return err
+			}
+			config, reference, restore, err := rebindForReference(config, ref)
+			if err != nil {
+				return err
+			}
+			defer restore()
+			// Above a project (after `sc cd ..`) a bare name is looked up
+			// across the tenant rather than read as "the current project".
+			reference, err = qualifyReferenceAbovePosition(cmd.Context(), config, reference)
+			if err != nil {
+				return err
+			}
+			args = append([]string{reference}, args[1:]...)
 			// Cache-first happy path: the machine is cached running with an
 			// address and known_hosts already pins the identity its sshd
 			// presents — one auth-app request + one keyscan, no live Incus

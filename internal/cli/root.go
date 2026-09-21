@@ -368,12 +368,27 @@ func bindConfigToRemote(base commandConfig, remote string) (commandConfig, func(
 			os.Unsetenv("INCUS_CONF")
 		}
 	}
-	adminConfig := base.adminConfig
-	adminConfig.Remote = remote
-	if short := shortProjectName(scconfig.SharedIncusRemoteProject(remote), adminConfig.Tenant); short != "" {
-		adminConfig.Project = short
-	}
+	adminConfig := adminForRemote(base.adminConfig, remote)
 	return newUserCommandConfig(base.name, base.stdin, base.stdout, base.stderr, adminConfig), restore, nil
+}
+
+// adminForRemote is the admin config of another enrolled install: the
+// remote, and — when the enrollment recorded them — that install's tenant,
+// Auth Hostname, token and broker (the same values `sc remote switch`
+// selects), then the project pinned on the remote. Without the recorded
+// tenant, `sc c moyn:default:web` from a thieso2 directory looked for tenant
+// thieso2 on remote moyn and found nothing.
+func adminForRemote(base scconfig.Admin, remote string) scconfig.Admin {
+	admin := base
+	admin.Remote = remote
+	if cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath()); err == nil && cfg.TenantForRemote(remote) != "" {
+		cfg.SelectRemote(remote)
+		admin.Tenant, admin.AuthHostname, admin.AuthToken, admin.Broker = cfg.Tenant, cfg.AuthHostname, cfg.AuthToken, cfg.Broker
+	}
+	if short := shortProjectName(scconfig.SharedIncusRemoteProject(remote), admin.Tenant); short != "" {
+		admin.Project = short
+	}
+	return admin
 }
 
 // NewRootCommand builds the Sandcastle command tree.

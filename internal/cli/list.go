@@ -461,10 +461,7 @@ func listConfigForRemote(base commandConfig, remote string) (commandConfig, func
 	}
 	sharedRemote := incusx.NewSharedRemote(remote).WithVerbose(os.Getenv("VERBOSE") == "1", os.Stderr)
 	cfg := base
-	cfg.adminConfig.Remote = remote
-	if short := shortProjectName(scconfig.SharedIncusRemoteProject(remote), base.adminConfig.Tenant); short != "" {
-		cfg.adminConfig.Project = short
-	}
+	cfg.adminConfig = adminForRemote(base.adminConfig, remote)
 	cfg.tenantStore = incusx.NewTenantStoreForSharedRemote(sharedRemote)
 	cfg.machineStore = incusx.NewHostOverrideManagerForSharedRemote(sharedRemote)
 	return cfg, restore, nil

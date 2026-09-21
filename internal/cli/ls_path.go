@@ -99,18 +99,10 @@ func configForPosition(config commandConfig, remote string, tenant string) (comm
 			os.Unsetenv("INCUS_CONF")
 		}
 	}
-	admin := config.adminConfig
-	admin.Remote = remote
-	admin.Project = ""
-	if cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath()); err == nil {
-		cfg.SelectRemote(remote)
-		admin.Tenant, admin.AuthHostname, admin.AuthToken, admin.Broker = cfg.Tenant, cfg.AuthHostname, cfg.AuthToken, cfg.Broker
-	}
+	admin := adminForRemote(config.adminConfig, remote)
 	if tenant != "" {
 		admin.Tenant = tenant
-	}
-	if short := shortProjectName(scconfig.SharedIncusRemoteProject(remote), admin.Tenant); short != "" {
-		admin.Project = short
+		admin.Project = shortProjectName(scconfig.SharedIncusRemoteProject(remote), tenant)
 	}
 	return newUserCommandConfig(config.name, config.stdin, config.stdout, config.stderr, admin), restore, nil
 }
@@ -380,7 +372,21 @@ func listPaths(ctx context.Context, config commandConfig, args []string, options
 	if len(payload.Listings) > 1 {
 		payload.Headers = true
 	}
+	payload.Warnings = dedupeStrings(payload.Warnings)
 	return payload, nil
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := values[:0]
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 // listDirectory appends one directory's listing, recursing into its child

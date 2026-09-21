@@ -122,3 +122,31 @@ func requireProjectPosition(config commandConfig, reference string, verb string)
 	}
 	return fmt.Errorf("not in a project (position %s): `sc cd` into one, or name it as project:%s", formatPath(currentPosition(config)), reference)
 }
+
+// qualifyReferenceAbovePosition gives a bare machine name its project when
+// the Current Position stands above a project, with the tenant-wide unique
+// lookup the lifecycle verbs already use for bare names. connect needs it
+// explicitly because its bare name otherwise means "the current project,
+// create the machine if missing" — above a project there is no current
+// project to create in, so no hit is an error, never a create in default.
+func qualifyReferenceAbovePosition(ctx context.Context, config commandConfig, reference string) (string, error) {
+	level := config.adminConfig.PositionLevel
+	if level == "" || scconfig.PositionDepth(level) >= levelProject || isPathReference(reference) || v2ReferenceHasProject(reference) || naming.IsPattern(reference) {
+		return reference, nil
+	}
+	summary, err := requireV2Tenant(ctx, config)
+	if err != nil {
+		return "", err
+	}
+	projects, err := v2MachineProjects(ctx, config, summary, strings.TrimSpace(reference))
+	if err != nil {
+		return "", err
+	}
+	switch len(projects) {
+	case 0:
+		return "", fmt.Errorf("no machine %q in any project of tenant %s (position %s): `sc cd` into a project, or name it as project:%s", reference, summary.Tenant, formatPath(currentPosition(config)), reference)
+	case 1:
+		return projects[0] + ":" + strings.TrimSpace(reference), nil
+	}
+	return "", fmt.Errorf("machine %q exists in %d projects (%s); name the one you mean as project:%s", reference, len(projects), strings.Join(projects, ", "), reference)
+}

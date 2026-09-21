@@ -63,6 +63,15 @@ have settled, made here with defaults:
   fan-out and a second `**` is redundant. A general "zero or more" in the
   colon grammar would need the selector to match sets of varying depth,
   which nothing downstream supports.
+- **Two fixes the e2e run forced, both in pre-existing code paths.**
+  `sc connect` ran its cache-first lookup *before* the remote rebind, so
+  `sc c moyn:default:web` asked the current install's Incus about moyn's
+  project (403); the rebind now happens first. And a rebind kept the
+  current tenant: `adminForRemote` now takes the remote's recorded tenant,
+  Auth Hostname, token and broker (what `sc remote switch` selects), so
+  `sc ls moyn:default` reads `moyn-dev@moyn:default`. Also: connect above a
+  project gets the tenant-wide lookup explicitly (its bare name otherwise
+  means "current project, create if missing"), with no hit an error.
 - **`cd` reloads the config between switches** (`LoadUserWithError` after
   each of remote/tenant/project) so each step sees exactly what the next
   `sc` invocation would; simpler and safer than threading partial state
