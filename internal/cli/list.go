@@ -588,6 +588,12 @@ func summaryHasProject(summary tenant.Summary, name string) bool {
 // listing covers, so output — especially an empty result — says WHICH install
 // and project it looked in.
 func listContext(result listPayload) string {
+	// The plain case reads as a path: remote:tenant:project[:machine].
+	if p, m := strings.TrimSpace(result.Project), strings.TrimSpace(result.Machine); !result.AllProjects && !naming.IsPattern(p) && !naming.IsPattern(m) {
+		if path := scopePath(result.Remote, result.Tenant.Tenant, p, m); path != "" {
+			return path
+		}
+	}
 	parts := make([]string, 0, 3)
 	if r := strings.TrimSpace(result.Remote); r != "" {
 		parts = append(parts, fmt.Sprintf("remote %q", r))

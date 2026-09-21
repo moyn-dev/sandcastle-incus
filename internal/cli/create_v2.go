@@ -393,7 +393,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 			payload.PublicHostname = publicHostnames[0]
 		}
 		payload.CertificateDecisions = createCertificateDecisions(publicHostnames, outcomes)
-		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, payload, true, outcomes), payload)
+		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, payload, true, outcomes), payload)
 	}
 	var claimed []claimedHostname
 	if hostnameClient != nil {
@@ -419,7 +419,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		outcomes[derived] = machineCertificateOutcome{State: "project"}
 	}
 	result.CertificateDecisions = createCertificateDecisions(result.PublicHostnames, outcomes)
-	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(summary, project, result, false, outcomes), result)
+	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, result, false, outcomes), result)
 }
 
 // runConnectV2 implements `sc connect` (alias `c`) for v2 tenants: create the
@@ -562,9 +562,9 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	}
 	switch {
 	case ensured.Created:
-		fmt.Fprintf(config.stdout, "Machine %s created (project %s).\n", machineName, project)
+		fmt.Fprintf(config.stdout, "Machine %s created.\n", currentMachinePath(config, project, machineName))
 	case ensured.Started:
-		fmt.Fprintf(config.stdout, "Machine %s started.\n", machineName)
+		fmt.Fprintf(config.stdout, "Machine %s started.\n", currentMachinePath(config, project, machineName))
 	}
 	// A bare machine has no sshd and no user, so everything below this point —
 	// the cloud-init wait, the port probe, the host-key pinning — could only
@@ -722,13 +722,13 @@ func derivedPublicHostnames(summary tenant.Summary, project, machine string) []s
 // the per-name create-time certificate outcome in outcomes. A machine
 // without public names renders exactly what it always did. outcomes is
 // ignored for --dry-run.
-func formatCreateMachineV2(summary tenant.Summary, project string, result incusx.CreateMachineV2Result, dryRun bool, outcomes map[string]machineCertificateOutcome) string {
+func formatCreateMachineV2(remote string, summary tenant.Summary, project string, result incusx.CreateMachineV2Result, dryRun bool, outcomes map[string]machineCertificateOutcome) string {
 	var builder strings.Builder
 	verb := "created"
 	if dryRun {
 		verb = "would be created"
 	}
-	fmt.Fprintf(&builder, "Machine %s %s (%s, project %s, image %s).\n", result.Name, verb, result.Type, project, result.Image)
+	fmt.Fprintf(&builder, "Machine %s %s (%s, image %s).\n", machinePath(remote, summary.Tenant, project, result.Name), verb, result.Type, result.Image)
 	// /workspace is always shared; /home only with --home-share, so say which
 	// of the two shapes this machine got.
 	if result.HomeShare {

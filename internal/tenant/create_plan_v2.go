@@ -772,6 +772,17 @@ fi
 // convention (ADR-0014) applied when the profile is materialized.
 const DefaultV2UnixUser = "dev"
 
+// DefaultUnixUserForTenant is the login user a tenant gets when none is
+// chosen: the tenant name itself when it is a valid Unix username, else
+// DefaultV2UnixUser.
+func DefaultUnixUserForTenant(tenantName string) string {
+	name := strings.ToLower(strings.TrimSpace(tenantName))
+	if name != "" && name != "root" && naming.ValidateUnixUsername(name) == nil {
+		return name
+	}
+	return DefaultV2UnixUser
+}
+
 // CreatePlanV2 describes the v2 MVP tenant bring-up (ADR-0016): one per-tenant
 // infra project holding a single sidecar (CoreDNS + Tailscale + Caddy), one
 // shared per-tenant bridge, and a seeded default app project. Machines are
@@ -864,7 +875,11 @@ func PlanCreateV2(admin config.Admin, request CreateRequest) (CreatePlanV2, erro
 		unixUser = strings.TrimSpace(request.ExistingUnixUser)
 	}
 	if unixUser == "" {
-		unixUser = DefaultV2UnixUser
+		// The tenant's login user defaults to the TENANT's name (a shared
+		// tenant `moyn-dev` logs in as moyn-dev, a personal one as its
+		// owner), falling back to "dev" only when the name is not a valid
+		// Unix username. Explicit (--unix-user / login's local user) still wins.
+		unixUser = DefaultUnixUserForTenant(ref.Tenant)
 	}
 	if err := naming.ValidateUnixUsername(unixUser); err != nil {
 		return CreatePlanV2{}, err

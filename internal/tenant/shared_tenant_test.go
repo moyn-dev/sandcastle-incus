@@ -70,3 +70,25 @@ func TestPlanCreateV2CarriesMembersAndRefusesOwnerAsMember(t *testing.T) {
 		t.Fatalf("FormatMembers = %q", got)
 	}
 }
+
+func TestPlanCreateV2DefaultsTheUnixUserToTheTenantName(t *testing.T) {
+	plan, err := PlanCreateV2(v2TestAdmin(), CreateRequest{Reference: "moyn-dev", SSHPublicKey: "ssh-ed25519 AAAA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DefaultProfileUser != "moyn-dev" {
+		t.Fatalf("DefaultProfileUser = %q", plan.DefaultProfileUser)
+	}
+	// Explicit and stored users still win; an invalid tenant-name user falls back.
+	plan, _ = PlanCreateV2(v2TestAdmin(), CreateRequest{Reference: "moyn-dev", SSHPublicKey: "k", UnixUser: "sebastian"})
+	if plan.DefaultProfileUser != "sebastian" {
+		t.Fatalf("explicit user = %q", plan.DefaultProfileUser)
+	}
+	plan, _ = PlanCreateV2(v2TestAdmin(), CreateRequest{Reference: "moyn-dev", SSHPublicKey: "k", ExistingUnixUser: "dev"})
+	if plan.DefaultProfileUser != "dev" {
+		t.Fatalf("stored user = %q", plan.DefaultProfileUser)
+	}
+	if got := DefaultUnixUserForTenant("1octocat"); got != DefaultV2UnixUser {
+		t.Fatalf("invalid-name fallback = %q", got)
+	}
+}

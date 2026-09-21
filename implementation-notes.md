@@ -6365,3 +6365,13 @@ one. Without it a member's shared tenant was only in the global config while
 the directory selection kept the remote — two sources that could disagree.
 `sc tenant list` marks the active tenant with `*` (like project list) and
 drops the yes/no Current column.
+
+## 2026-09-21 — full machine paths in messages; unix user defaults to the tenant name
+
+With directory selections and Shared Tenants a bare machine name no longer
+says where the user is, so the connect prompt, the create/start lines and
+the empty-list message now render `remote:tenant:project:machine`
+(`machinePath` / `scopePath`); listings by pattern keep their labelled form.
+A tenant's login user now defaults to the tenant name (valid Unix username
+required; else `dev`), overridable with `--unix-user`; the login path keeps
+sending the client's local user and stored users are never rewritten.

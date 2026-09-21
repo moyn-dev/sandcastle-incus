@@ -13,11 +13,13 @@ func TestConfirmCreateMissingMachine(t *testing.T) {
 
 	t.Run("accepting at the prompt allows the create", func(t *testing.T) {
 		stderr := &strings.Builder{}
-		config := commandConfig{stdin: strings.NewReader("y\n"), stderr: stderr, stdinIsTerminal: terminal}
+		admin := testAdminConfig()
+		admin.Remote, admin.Tenant = "obelix", "acme"
+		config := commandConfig{adminConfig: admin, stdin: strings.NewReader("y\n"), stderr: stderr, stdinIsTerminal: terminal}
 		if err := confirmCreateMissingMachine(config, false)("web", "dev"); err != nil {
 			t.Fatalf("confirmed create rejected: %v", err)
 		}
-		if !strings.Contains(stderr.String(), "Machine dev does not exist in project web. Create it? [y/N]") {
+		if !strings.Contains(stderr.String(), "Machine obelix:acme:web:dev does not exist. Create it? [y/N]") {
 			t.Fatalf("prompt %q does not name the machine and project", stderr.String())
 		}
 	})

@@ -321,6 +321,10 @@ sc-adm tenant add-ssh-key moyn-dev "ssh-ed25519 …"     # extra keys; set-ssh-k
 sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuses to drop the last key
 ```
 
+- Machines log in as the tenant's unix user, which defaults to the tenant
+  name (`ssh moyn-dev@<ip>` for `moyn-dev`); `sc-adm tenant create
+  --unix-user` overrides it. Messages name machines by their full path
+  `remote:tenant:project:machine`.
 - **Prerequisite**: every member has already run `sc login` on the install
   (their Personal Tenant carries the login SSH key the shared machines
   authorize) and is on the tenant's tailnet. `create --member` and

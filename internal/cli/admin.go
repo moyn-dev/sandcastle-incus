@@ -310,7 +310,7 @@ func newAdminTenantCreateV2Command(config commandConfig, opts *rootOptions) *cob
 	command.Flags().StringVar(&tailscaleAuthKey, "tailscale-authkey", "", "the tenant's Tailscale auth key (joins the sidecar to the tenant's tailnet)")
 	command.Flags().StringVar(&sidecarImage, "sidecar-image", "", "system-container base image (alias or fingerprint) for the sidecar; defaults to the configured base")
 	command.Flags().StringVar(&cidrPool, "cidr-pool", "", "CIDR pool to allocate the tenant's /24 from (default: the configured pool, else the /16 this install's tenants already occupy, else 10.249.0.0/16)")
-	command.Flags().StringVar(&unixUser, "unix-user", "", "login user baked into the default-project profile (default \"dev\"); matches the login path's client username")
+	command.Flags().StringVar(&unixUser, "unix-user", "", "login user baked into the default-project profile (default: the tenant name; \"dev\" when that is not a valid Unix username)")
 	command.Flags().StringVar(&dnsSuffix, "dns-suffix", "", "Tenant DNS Suffix — the single-label final part of machine hostnames <machine>.<project>.<suffix> (default: the tenant name; immutable once created)")
 	command.Flags().StringVar(&initialProject, "initial-project", "", "name for the tenant's initial project — the middle part of machine hostnames <machine>.<project>.<suffix> (default: default)")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "render the v2 plan without mutating Incus")

@@ -39,7 +39,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 	}{
 		{
 			name: "private with IP", project: "plain", result: base(),
-			want: "Machine web created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9   DNS: web.plain.acme (auto-registers within seconds)\n" +
 				"SSH: ssh dev@10.249.7.9   (cloud-init may still be installing sshd)",
@@ -50,21 +50,21 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			// The default project of THIS summary has a domain, but the
 			// machine carries no public name (unstamped): the private line
 			// with the short alias is all there is to print.
-			want: "Machine web created (container, project default, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:default:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"Still booting — no IP leased yet. Watch it with: sc list\n" +
 				"DNS: web.default.acme (also: web.acme) (auto-registers after boot)",
 		},
 		{
 			name: "private dry-run", project: "plain", result: base(), dryRun: true,
-			want: "Machine web would be created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web would be created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"DNS: web.plain.acme (auto-registers after boot)",
 		},
 		{
 			name: "private bare", project: "plain",
 			result: func() incusx.CreateMachineV2Result { r := base(); r.Bare = true; r.LoginUser = ""; return r }(),
-			want: "Machine web created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9   DNS: web.plain.acme (auto-registers within seconds)\n" +
 				"HTTPS: https://web.plain.acme   (Caddy with the tenant-CA leaf, proxying to localhost:3000)\n" +
@@ -73,7 +73,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 		{
 			name: "private dev image", project: "plain",
 			result: func() incusx.CreateMachineV2Result { r := base(); r.DevImage = true; return r }(),
-			want: "Machine web created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9   DNS: web.plain.acme (auto-registers within seconds)\n" +
 				"Dev Image: no Caddy/TLS ingress — SSH only.\n" +
@@ -83,7 +83,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			// ADR-0028: the private DNS: line is printed for every machine;
 			// the public names follow it, one line each.
 			name: "derived with IP", project: "zp", result: base("web.baum.hase.de"), outcomes: pending,
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.zp.acme (auto-registers within seconds)\n" +
@@ -94,7 +94,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			name: "derived still booting, auth app unreachable", project: "zp",
 			result:   func() incusx.CreateMachineV2Result { r := base("web.baum.hase.de"); r.PrivateIP = ""; return r }(),
 			outcomes: map[string]machineCertificateOutcome{"web.baum.hase.de": {Reason: "auth-app-unreachable", Message: "timed out"}},
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"Still booting — no IP leased yet. Watch it with: sc list\n" +
 				"DNS: web.zp.acme (auto-registers after boot)\n" +
@@ -103,7 +103,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 		{
 			name: "derived rate-limited", project: "zp", result: base("web.baum.hase.de"),
 			outcomes: map[string]machineCertificateOutcome{"web.baum.hase.de": {State: "pending", Reason: "rate-limited", Message: "50 certificates per registered domain per week"}},
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.zp.acme (auto-registers within seconds)\n" +
@@ -117,7 +117,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			// whatever public names the machine has.
 			name: "derived dry-run in default project", project: "default", result: base("web.baum.hase.de"), dryRun: true,
 			outcomes: map[string]machineCertificateOutcome{"web.baum.hase.de": {Reason: "auth-app-unreachable"}},
-			want: "Machine web would be created (container, project default, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:default:web would be created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"DNS: web.default.acme (also: web.acme) (auto-registers after boot)\n" +
 				"Public name: web.baum.hase.de (A record pending, certificate pending — see: sc project status default)",
@@ -134,7 +134,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 				return r
 			}(),
 			outcomes: pending,
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.zp.acme (auto-registers within seconds)\n" +
@@ -151,7 +151,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 				r.LoginUser = ""
 				return r
 			}(),
-			want: "Machine web would be created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web would be created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"DNS: web.zp.acme (auto-registers after boot)\n" +
 				"Public name: web.baum.hase.de (A record pending, certificate pending — see: sc project status zp)\n" +
@@ -162,7 +162,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			// and the outcome is irrelevant (no request is made).
 			name: "derived dev image", project: "zp",
 			result: func() incusx.CreateMachineV2Result { r := base("web.baum.hase.de"); r.DevImage = true; return r }(),
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.zp.acme (auto-registers within seconds)\n" +
@@ -176,7 +176,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 			// certificate outcome (the explicit one came from the claim).
 			name: "mixed: derived + explicit hostnames", project: "zp", result: base("web.baum.hase.de", "web12.tc42.uk"),
 			outcomes: map[string]machineCertificateOutcome{"web.baum.hase.de": {State: "pending"}, "web12.tc42.uk": {State: "issued"}},
-			want: "Machine web created (container, project zp, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:zp:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.zp.acme (auto-registers within seconds)\n" +
@@ -194,7 +194,7 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 				return r
 			}(),
 			outcomes: map[string]machineCertificateOutcome{"web12.tc42.uk": {State: "pending"}},
-			want: "Machine web created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"IP: 10.249.7.9\n" +
 				"DNS: web.plain.acme (auto-registers within seconds)\n" +
@@ -208,14 +208,14 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 				r.Project = "sc2-acme-plain"
 				return r
 			}(),
-			want: "Machine web would be created (container, project plain, image images:debian/13/cloud).\n" +
+			want: "Machine obelix:acme:plain:web would be created (container, image images:debian/13/cloud).\n" +
 				"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 				"DNS: web.plain.acme (auto-registers after boot)\n" +
 				"Public name: web12.tc42.uk (A record pending, certificate pending — see: sc project status plain)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatCreateMachineV2(summary, tc.project, tc.result, tc.dryRun, tc.outcomes)
+			got := formatCreateMachineV2("obelix", summary, tc.project, tc.result, tc.dryRun, tc.outcomes)
 			if got != strings.TrimRight(tc.want, "\n") {
 				t.Fatalf("output:\n%s\nwant:\n%s", got, tc.want)
 			}
@@ -228,8 +228,8 @@ func TestFormatCreateMachineV2Golden(t *testing.T) {
 func TestFormatCreateMachineV2DefaultProjectAlias(t *testing.T) {
 	summary := tenant.Summary{Tenant: "acme", DNSSuffix: "acme"}
 	result := incusx.CreateMachineV2Result{Name: "web", Type: "container", Project: "sc2-acme-default", Image: "images:debian/13/cloud", LoginUser: "dev"}
-	got := formatCreateMachineV2(summary, "default", result, false, nil)
-	want := "Machine web created (container, project default, image images:debian/13/cloud).\n" +
+	got := formatCreateMachineV2("obelix", summary, "default", result, false, nil)
+	want := "Machine obelix:acme:default:web created (container, image images:debian/13/cloud).\n" +
 		"Storage: shared /workspace, machine-local /home (add --home-share for a shared /home).\n" +
 		"Still booting — no IP leased yet. Watch it with: sc list\n" +
 		"DNS: web.default.acme (also: web.acme) (auto-registers after boot)"

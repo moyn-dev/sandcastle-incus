@@ -108,7 +108,7 @@ matches nothing is an **error**, never a silent no-op — except a project glob 
 ## Rules that bite
 
 **`sc connect` creates the machine when it does not exist — after asking.**
-`Machine dev does not exist in project default. Create it? [y/N]`; anything but
+`Machine obelix:thieso2:default:dev does not exist. Create it? [y/N]`; anything but
 `y`/`yes` cancels. Non-interactively (which is how you run it) there is nobody
 to ask, so the create is an **error** unless you pass `--yes` — `sc c --yes dev`
 is the deliberate "create it" form. Confirm the name with `sc ls` first, or

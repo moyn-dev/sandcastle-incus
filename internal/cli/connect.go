@@ -98,9 +98,10 @@ func confirmCreateMissingMachine(config commandConfig, assumeYes bool) func(proj
 		if assumeYes {
 			return nil
 		}
+		path := currentMachinePath(config, project, machine)
 		_, err := confirmMissingYesNamed(config,
-			fmt.Sprintf("Machine %s does not exist in project %s. Create it?", machine, project),
-			fmt.Sprintf("machine %s does not exist in project %s; pass --yes to create it", machine, project),
+			fmt.Sprintf("Machine %s does not exist. Create it?", path),
+			fmt.Sprintf("machine %s does not exist; pass --yes to create it", path),
 			"create canceled")
 		return err
 	}

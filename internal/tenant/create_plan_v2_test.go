@@ -697,13 +697,13 @@ func TestPlanCreateV2ReusesStoredUserAndKey(t *testing.T) {
 		t.Fatalf("explicit request must win: user=%q key=%q", plan.DefaultProfileUser, plan.SSHPublicKey)
 	}
 
-	// nothing stored, nothing requested: the dev default still applies
+	// nothing stored, nothing requested: the tenant's own name is the user
 	plan, err = PlanCreateV2(v2TestAdmin(), CreateRequest{Reference: "acme"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.DefaultProfileUser != DefaultV2UnixUser {
-		t.Fatalf("DefaultProfileUser = %q, want %q", plan.DefaultProfileUser, DefaultV2UnixUser)
+	if plan.DefaultProfileUser != "acme" {
+		t.Fatalf("DefaultProfileUser = %q, want %q", plan.DefaultProfileUser, "acme")
 	}
 }
 
