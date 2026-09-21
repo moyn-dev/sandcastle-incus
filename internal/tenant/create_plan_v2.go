@@ -343,6 +343,25 @@ const sshAgentConsumeSnippet = `# Sandcastle: follow the forwarded agent republi
 if [ -h "$HOME/.ssh/ssh_auth_sock" ]; then
   export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"
 fi
+# Sandcastle prompt: user@<fqdn>:<dir>$ — the machine's full private name
+# says where you are. When the login user IS the tenant (the default: the
+# FQDN ends in ".<user>"), the user is redundant and the prompt is just the
+# FQDN. Interactive shells only; a prompt the user set themselves in
+# ~/.bashrc / ~/.zshrc runs after this file and wins.
+if [ -n "$PS1" ] || [ -n "$ZSH_VERSION" ]; then
+  __sc_fqdn="$(hostname -f 2>/dev/null || hostname)"
+  __sc_user="$(id -un 2>/dev/null)"
+  case "$__sc_fqdn" in
+    *".$__sc_user") __sc_prompt_host="$__sc_fqdn" ;;
+    *) __sc_prompt_host="$__sc_user@$__sc_fqdn" ;;
+  esac
+  if [ -n "$ZSH_VERSION" ]; then
+    PROMPT="$__sc_prompt_host:%~%# "
+  elif [ -n "$BASH_VERSION" ]; then
+    PS1="$__sc_prompt_host"':\w\$ '
+  fi
+  unset __sc_fqdn __sc_user __sc_prompt_host
+fi
 `
 
 // scShimWriteFiles is a cloud-init write_files fragment (entries only, under a

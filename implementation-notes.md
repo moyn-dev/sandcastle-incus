@@ -6409,3 +6409,12 @@ failure; owners without a known address keep the status check.
 Also observed live: the moyn-dev sidecar was deleted and recreated at 12:56
 UTC (not by this code — nothing here deletes a sidecar), which registered a
 third tailnet node; the drift re-pointing from v0.18.9 handled it.
+
+## 2026-09-21 — machine prompt `user@<fqdn>:` (just `<fqdn>:` for the tenant user)
+
+Set in the platform payload's `shell/rc.sh` (sourced by the bash and zsh
+shims on every machine, updated centrally by the payload sync) rather than
+in cloud-init, so existing machines get it too. The rule "user equals
+domain" is implemented as "the FQDN ends in `.<user>`": the tenant name is
+both the default login user and the private DNS suffix. User rc files run
+after the shim and override it.
