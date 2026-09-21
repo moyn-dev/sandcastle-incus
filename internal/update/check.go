@@ -69,6 +69,8 @@ type Checker struct {
 	StatePath string
 	// HTTPClient overrides the default 30s-timeout client.
 	HTTPClient *http.Client
+	// RetryDelay overrides the pause between download retries (tests).
+	RetryDelay time.Duration
 }
 
 // Check fetches the latest release, honouring the stored ETag, and persists

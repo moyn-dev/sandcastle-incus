@@ -210,3 +210,28 @@ func TestResolveReleaseSendsOptionalToken(t *testing.T) {
 		t.Fatalf("anonymous request carried %q (%v)", auth, err)
 	}
 }
+
+func TestDownloadRetriesTransientServerErrors(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		w.Write([]byte("payload"))
+	}))
+	defer server.Close()
+	checker := &Checker{RetryDelay: time.Millisecond}
+	data, err := checker.download(t.Context(), server.URL+"/asset")
+	if err != nil || string(data) != "payload" || attempts != 3 {
+		t.Fatalf("data=%q err=%v attempts=%d", data, err, attempts)
+	}
+	// A 404 is final: no retries.
+	attempts = 0
+	notFound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { attempts++; http.NotFound(w, r) }))
+	defer notFound.Close()
+	if _, err := checker.download(t.Context(), notFound.URL+"/asset"); err == nil || attempts != 1 {
+		t.Fatalf("404: err=%v attempts=%d", err, attempts)
+	}
+}

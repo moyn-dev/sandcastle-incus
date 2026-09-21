@@ -6567,3 +6567,12 @@ from the cached default profile). The user CLI's tenant store is wrapped
 `sc update`'s payload rows come from `include=payloads` the same way.
 Verified on the E2E install: `sc ls` and `sc update --check` issue no live
 Incus calls. Writes (payload sync, machine ops) stay live.
+
+## 2026-09-21 — updater retries GitHub's download CDN
+
+Right after v0.18.26 was published, `releases/download/...` answered 504
+for minutes while the API listed the asset as uploaded and served it (the
+laptop was updated from that path by hand). The downloader now retries 5xx
+answers (six times, ten seconds apart, within the 15-minute deadline);
+4xx stays final. install.sh already retried four times back to back, which
+is too short for this lag — the Go path is the one `sc update` uses.
