@@ -6534,3 +6534,13 @@ set/add/remove-ssh-key, rerender) now scan the infra projects for the tenant
 when the configured prefix is the default; one match selects its install
 (with a note), several are refused, none falls through to the original
 error. `tenant create` keeps needing the prefix (there is no tenant yet).
+
+Verified live on `big`: `sc-adm tenant users moyn-dev` without a prefix
+detects `obelix`; `thieso2` is refused as ambiguous because the Phase 12
+`tc` install (13 Sep) is still on the host with stopped appliances — a
+leftover to tear down, not a detection bug. Two more fixes from the same
+check: v1-era `<project>-infra` projects (`version: "1"`) no longer count as
+installs, and `tenant users` matches certificates holding ANY project of
+the tenant namespace (a personal login certificate never held the infra
+project, so personal tenants listed "none") and shows each user once,
+without the install prefix.

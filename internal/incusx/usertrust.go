@@ -197,7 +197,11 @@ func (m TrustManager) ListTenantUsers(ctx context.Context, plan usertrust.Tenant
 		if cert.Type != api.CertificateTypeClient || !cert.Restricted {
 			continue
 		}
-		if !containsProject(cert.Projects, plan.IncusProject) {
+		// A tenant's users are the entries holding ANY project of its
+		// namespace: a Personal Tenant's own login certificate holds the app
+		// projects but not the infra project, so matching the infra project
+		// alone listed "none" for every personal tenant.
+		if !holdsTenantProject(cert.Projects, plan.IncusProject) {
 			continue
 		}
 		user := strings.TrimPrefix(cert.Name, usertrust.CertificateNamePrefix)
@@ -504,4 +508,15 @@ func (m TrustManager) RevokeTenantMember(ctx context.Context, plan usertrust.Use
 		}
 	}
 	return nil
+}
+
+// holdsTenantProject reports whether the project list touches the tenant's
+// namespace: the infra project itself or any `<infra>-<project>`.
+func holdsTenantProject(projects []string, infraProject string) bool {
+	for _, project := range projects {
+		if project == infraProject || strings.HasPrefix(project, infraProject+"-") {
+			return true
+		}
+	}
+	return false
 }

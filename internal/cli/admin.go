@@ -704,14 +704,26 @@ func newAdminTenantUsersCommand(config commandConfig, opts *rootOptions) *cobra.
 			if err != nil {
 				return err
 			}
+			// Certificate-derived names carry the install prefix
+			// (sandcastle-<prefix>-<user>) and one user may hold several
+			// entries; show each user once, by user key.
+			users := map[string]bool{}
+			for _, user := range result.Users {
+				users[strings.TrimPrefix(user, naming.NormalizeV2Prefix(config.adminConfig.IncusProjectPrefix)+"-")] = true
+				users[strings.TrimPrefix(user, strings.TrimSpace(config.adminConfig.IncusProjectPrefix)+"-")] = true
+			}
 			if summary, found := adminTenantSummary(cmd.Context(), config, args[0]); found {
 				for _, member := range summary.Members {
-					if !slices.Contains(result.Users, member) {
-						result.Users = append(result.Users, member)
-					}
+					users[member] = true
 				}
-				sort.Strings(result.Users)
 			}
+			result.Users = result.Users[:0]
+			for user := range users {
+				if user != "" && !strings.Contains(user, "-"+strings.TrimSpace(config.adminConfig.IncusProjectPrefix)+"-") {
+					result.Users = append(result.Users, user)
+				}
+			}
+			sort.Strings(result.Users)
 			return writeOutput(config.stdout, opts.output, formatTenantUsers(result), result)
 		},
 	}
@@ -1571,15 +1583,20 @@ func detectAdminPrefix(ctx context.Context, config commandConfig, tenantName str
 	}
 	var prefixes []string
 	for _, project := range projects {
-		if !meta.IsManaged(project.Config) || project.Config[meta.KeyKind] != meta.KindInfra {
-			continue
+		if !meta.IsManaged(project.Config) || project.Config[meta.KeyKind] != meta.KindInfra || project.Config[meta.KeyVersion] == "1" {
+			continue // v1-era `<project>-infra` projects are not installs
 		}
 		if strings.ToLower(strings.TrimSpace(project.Config[meta.KeyTenant])) != tenantName {
 			continue
 		}
 		prefix := strings.TrimSpace(project.Config[meta.KeyV2Prefix])
 		if prefix == "" {
-			prefix = strings.TrimSuffix(project.Name, "-"+tenantName)
+			// Only a name shaped <prefix>-<tenant> names an install.
+			cut, ok := strings.CutSuffix(project.Name, "-"+tenantName)
+			if !ok || cut == "" {
+				continue
+			}
+			prefix = cut
 		}
 		if !slices.Contains(prefixes, prefix) {
 			prefixes = append(prefixes, prefix)
