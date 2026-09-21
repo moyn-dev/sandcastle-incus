@@ -270,13 +270,13 @@ func newUserCommandConfig(name string, stdin io.Reader, stdout, stderr io.Writer
 	verbose := os.Getenv("VERBOSE") == "1"
 	remote := adminConfig.Remote
 	sharedRemote := incusx.NewSharedRemote(remote).WithVerbose(verbose, stderr)
-	return commandConfig{
+	config := commandConfig{
 		name:               name,
 		stdin:              stdin,
 		stdout:             stdout,
 		stderr:             stderr,
 		adminConfig:        adminConfig,
-		tenantStore:        incusx.NewTenantStoreForSharedRemote(sharedRemote),
+		tenantStore:        incusx.NewTenantStoreForSharedRemote(sharedRemote), // wrapped by the cache below
 		tenantCreator:      incusx.NewTenantCreator(remote).WithVerbose(verbose, stderr),
 		projectSettings:    incusx.NewTenantCreator(remote).WithVerbose(verbose, stderr),
 		tenantDeleter:      incusx.NewTenantDeleter(remote).WithVerbose(verbose, stderr),
@@ -300,6 +300,10 @@ func newUserCommandConfig(name string, stdin io.Reader, stdout, stderr io.Writer
 			adminConfig: adminConfig,
 		}},
 	}
+	// Every command starts by listing projects; serve that from the Auth App
+	// cache when logged in (live Incus is the fallback).
+	config.tenantStore = newCachedTenantStore(config, config.tenantStore)
+	return config
 }
 
 // rebindForReference implements the "<remote>:" prefix of the universal

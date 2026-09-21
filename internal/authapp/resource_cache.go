@@ -40,6 +40,10 @@ type ResourceCache struct {
 	profilesByProject  map[string][]api.Profile
 	imagesByProject    map[string][]api.Image
 	storagePools       []api.StoragePool
+	// projects is the server's whole project list (config included): what a
+	// tenant summary is built from, so the CLI's tenant store can be served
+	// from here instead of a live GET /1.0/projects on every command.
+	projects []api.Project
 
 	initialReadDone bool
 	streamConnected bool
@@ -58,6 +62,7 @@ type ResourceCacheSnapshot struct {
 	StoragePools   []api.StoragePool
 	Profiles       []api.Profile
 	Images         []api.Image
+	Projects       []api.Project
 }
 
 // NewResourceCache builds an empty, not-ready cache. staleAfter bounds how long
@@ -116,6 +121,7 @@ func (c *ResourceCache) Snapshot() ResourceCacheSnapshot {
 		snapshot.Images = append(snapshot.Images, list...)
 	}
 	snapshot.StoragePools = append(snapshot.StoragePools, c.storagePools...)
+	snapshot.Projects = append(snapshot.Projects, c.projects...)
 
 	sort.Slice(snapshot.Instances, func(i, j int) bool {
 		return lessProjectName(snapshot.Instances[i].Project, snapshot.Instances[i].Name, snapshot.Instances[j].Project, snapshot.Instances[j].Name)
@@ -191,6 +197,13 @@ func (c *ResourceCache) setProjectImages(project string, list []api.Image) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	setProjectBucket(c.imagesByProject, project, list)
+}
+
+// setProjects replaces the (global) project list.
+func (c *ResourceCache) setProjects(projects []api.Project) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.projects = append([]api.Project(nil), projects...)
 }
 
 // setStoragePools replaces the (global, not per-project) storage pool list.

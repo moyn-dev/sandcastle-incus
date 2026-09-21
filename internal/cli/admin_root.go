@@ -138,6 +138,7 @@ func ExecuteAdmin(name string, args []string) int {
 	// assigned unconditionally would box into a non-nil interface even with a
 	// nil inner server, defeating HTTPRunner's `ResourceCacheServer != nil` gate.
 	var authAppResourceCache authapp.ResourceCacheServer
+	var authAppPayloadVersions authapp.PayloadVersionReader
 	// Same nil-interface care for the Public DNS Zone reconciler seam
 	// (ADR-0027 §4): only the serving appliance runs it.
 	var authAppZoneMachines authapp.ZoneMachineServer
@@ -161,6 +162,7 @@ func ExecuteAdmin(name string, args []string) int {
 			adminShareStore = authAppMetadataUpdater
 			adminShareReconciler = incusx.NewShareReconcilerForServer(socketServer, incusx.NewHostOverrideManagerForServer(socketServer), adminShareStore, adminConfig)
 			authAppResourceCache = incusx.NewResourceCacheServer(socketServer).WithVerbose(verbose, os.Stderr)
+			authAppPayloadVersions = incusx.NewResourceCacheServer(socketServer).WithVerbose(verbose, os.Stderr)
 		} else if err != nil && verbose {
 			fmt.Fprintf(os.Stderr, "[verbose] auth app unix socket unavailable: %v\n", err)
 		}
@@ -299,6 +301,7 @@ func ExecuteAdmin(name string, args []string) int {
 			},
 			ResourceCacheEnabled:         resourceCacheEnabled(os.Getenv("SANDCASTLE_RESOURCE_CACHE")),
 			ResourceCacheServer:          authAppResourceCache,
+			PayloadVersions:              authAppPayloadVersions,
 			ResourceCacheMachineRenderer: incusx.MachineFromInstance,
 		},
 		shareStore:      adminShareStore,

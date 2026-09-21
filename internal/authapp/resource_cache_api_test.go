@@ -11,6 +11,7 @@ import (
 	"github.com/lxc/incus/v6/shared/api"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"slices"
 )
 
 // resourceCacheAPITestRenderer is a minimal stand-in for
@@ -347,5 +348,75 @@ func TestResourcesAPI_TrimsUnrenderedPoolAndProfileFields(t *testing.T) {
 	snapshot := cache.Snapshot()
 	if len(snapshot.StoragePools[0].UsedBy) != 1 || len(snapshot.Profiles[0].Config) != 1 {
 		t.Fatalf("cache lost data to a wire-only trim: %+v %+v", snapshot.StoragePools[0], snapshot.Profiles[0])
+	}
+}
+
+type fakePayloadVersions struct{ byProject map[string]string }
+
+func (f fakePayloadVersions) ReadPayloadVersion(_ context.Context, project, pool string) string {
+	if pool == "" {
+		return ""
+	}
+	return f.byProject[project]
+}
+
+func TestResourcesAPIServesProjectsAndPayloadsFromTheCache(t *testing.T) {
+	cache := readyResourceCacheForTest()
+	cache.setProjects([]api.Project{
+		{Name: "sc2-alice", ProjectPut: api.ProjectPut{Config: map[string]string{meta.KeyKind: meta.KindInfra, meta.KeyTenant: "alice", meta.KeyVersion: "2", meta.KeyV2CIDR: "10.248.1.0/24"}}},
+		{Name: "sc2-alice-default", ProjectPut: api.ProjectPut{Config: map[string]string{meta.KeyKind: meta.KindV2Project, meta.KeyTenant: "alice", meta.KeyVersion: "2"}}},
+		{Name: "sc2-alice-docker", ProjectPut: api.ProjectPut{Config: map[string]string{meta.KeyKind: meta.KindV2Project, meta.KeyTenant: "alice", meta.KeyVersion: "2"}}},
+		{Name: "sc2-bob", ProjectPut: api.ProjectPut{Config: map[string]string{meta.KeyKind: meta.KindInfra, meta.KeyTenant: "bob", meta.KeyVersion: "2"}}},
+		{Name: "sc2-bob-default"},
+	})
+	cache.setProjectProfiles("sc2-alice-default", []api.Profile{{Name: "default", Project: "sc2-alice-default", ProfilePut: api.ProfilePut{Devices: map[string]map[string]string{"sc-platform": {"pool": "default"}}}}})
+	db := authDBForTest(t)
+	if err := UpsertUser(context.Background(), db, User{UserKey: "alice", GitHubUsername: "alice", Allowlisted: true}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := CreateCLIToken(context.Background(), db, "alice", timeNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(db, HandlerOptions{
+		AuthHostname: "sc2.thieso2.dev", Admin: testAuthAdminConfig(),
+		Tenants:      tenant.MemoryStore{Projects: v2TenantProjectsForAuthTest(authTestTenant{Tenant: "alice", CIDR: "10.248.1.0/24", Projects: []string{"docker"}}, authTestTenant{Tenant: "bob"})},
+		TenantAccess: &fakeTenantAccessManager{}, ResourceCache: cache, ResourceCacheMachineRenderer: resourceCacheAPITestRenderer,
+		PayloadVersions: fakePayloadVersions{byProject: map[string]string{"sc2-alice-default": "sc-payload-1111111111111111"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/resources?tenant=alice&project=*&include=projects,payloads", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("resources = %d %q", res.Code, res.Body.String())
+	}
+	var result ResourceListResult
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range result.Projects {
+		names = append(names, p.Name)
+	}
+	if !slices.Equal(names, []string{"sc2-alice", "sc2-alice-default", "sc2-alice-docker"}) {
+		t.Fatalf("projects = %v (bob's must not leak)", names)
+	}
+	if result.Projects[0].Config[meta.KeyV2CIDR] != "10.248.1.0/24" {
+		t.Fatalf("infra config missing: %#v", result.Projects[0])
+	}
+	// Payloads: the default project's pool is known → version; docker has no
+	// profile in the cache → "".
+	got := map[string]string{}
+	for _, p := range result.Payloads {
+		got[p.IncusProject] = p.Version
+	}
+	if got["sc2-alice-default"] != "sc-payload-1111111111111111" || got["sc2-alice-docker"] != "" || len(got) != 2 {
+		t.Fatalf("payloads = %v", got)
+	}
+	// The listed projects build a working summary through tenant.ListForPrefix.
+	summaries, err := tenant.ListForPrefix(context.Background(), tenant.MemoryStore{Projects: result.Projects}, "sc2")
+	if err != nil || len(summaries) != 1 || summaries[0].Tenant != "alice" || summaries[0].PrivateCIDR != "10.248.1.0/24" || len(summaries[0].Projects) != 2 {
+		t.Fatalf("summaries = %+v, %v", summaries, err)
 	}
 }

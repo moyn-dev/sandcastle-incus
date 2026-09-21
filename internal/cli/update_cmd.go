@@ -17,6 +17,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/cidr"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/thieso2/sandcastle-incus/internal/tenant"
 	"github.com/thieso2/sandcastle-incus/internal/update"
 	"os/exec"
 )
@@ -256,6 +257,12 @@ func projectPayloadUpdateRows(ctx context.Context, config commandConfig) ([]proj
 	if tenantName == "" {
 		return nil, nil
 	}
+	// The Auth App answers every project's payload version in one request
+	// (read over its local socket); the live check costs a project read, a
+	// profile read and a volume file read per project from here.
+	if rows, ok := projectPayloadRowsViaCache(ctx, config, tenantName); ok {
+		return rows, nil
+	}
 	statuses, err := config.tenantCreator.SyncVisiblePlatformPayload(ctx, tenantName, true)
 	if err != nil {
 		return nil, err
@@ -427,4 +434,36 @@ func probeSidecarVersion(ctx context.Context, config commandConfig) string {
 	}
 	resp.Body.Close()
 	return resp.Header.Get(update.HeaderVersion)
+}
+
+// projectPayloadRowsViaCache builds the payload rows from `include=payloads`;
+// ok=false on any non-answer (the caller then checks live).
+func projectPayloadRowsViaCache(ctx context.Context, config commandConfig, tenantName string) ([]projectPayloadUpdateRow, bool) {
+	if !connectCacheEnabled(os.Getenv(connectCacheEnv)) {
+		return nil, false
+	}
+	client := config.authResources
+	if client == nil {
+		token := strings.TrimSpace(config.adminConfig.AuthToken)
+		baseURL := commandAuthHostname(config, "")
+		if token == "" || baseURL == "" {
+			return nil, false
+		}
+		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: tenantName}
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
+	defer cancel()
+	result, err := client.ListResources(cacheCtx, authapp.ResourceListRequest{Tenant: tenantName, Project: "*", Include: []string{authapp.ResourceKindPayloads}})
+	if err != nil || len(result.Payloads) == 0 {
+		if err != nil {
+			verboseCLI(config, "payload check: cache unavailable (%v); checking live", err)
+		}
+		return nil, false
+	}
+	target := tenant.PlatformPayloadVersion()
+	rows := make([]projectPayloadUpdateRow, 0, len(result.Payloads))
+	for _, p := range result.Payloads {
+		rows = append(rows, projectPayloadUpdateRow{project: p.IncusProject, current: orUnknown(p.Version), wanted: target, outdated: p.Version != target})
+	}
+	return rows, true
 }

@@ -209,6 +209,8 @@ type HTTPRunner struct {
 	// event bus. Set alongside DNSEvents/RouteEvents, from the same mounted
 	// socket.
 	ResourceCacheServer ResourceCacheServer
+	// PayloadVersions serves `include=payloads` (see PayloadVersionReader).
+	PayloadVersions PayloadVersionReader
 	// ResourceCacheMachineRenderer converts one cached Incus instance into the
 	// CLI-facing meta.Machine shape for GET /api/resources (t2 of the same
 	// wish) — set alongside ResourceCacheServer, from
@@ -340,6 +342,7 @@ func (r HTTPRunner) Serve(ctx context.Context, plan ServePlan) error {
 			Sidecars:                     r.Sidecars,
 			ResourceCache:                resourceCache,
 			ResourceCacheMachineRenderer: r.ResourceCacheMachineRenderer,
+			PayloadVersions:              r.PayloadVersions,
 			ZoneReconcileKick:            zones.RequestPass,
 			TailnetPublisher:             r.TailnetPublisher,
 			TailnetIssuer:                issuer,
@@ -995,6 +998,7 @@ type HandlerOptions struct {
 	// ResourceCacheMachineRenderer converts a cached instance into a
 	// meta.Machine; required whenever ResourceCache is set.
 	ResourceCacheMachineRenderer ResourceCacheMachineRenderer
+	PayloadVersions              PayloadVersionReader
 	// CloudflareZones validates a Public DNS Zone token at add/set-token
 	// (ADR-0027). nil uses the real Cloudflare API; tests inject a fake.
 	CloudflareZones CloudflareZoneValidator
@@ -1074,6 +1078,7 @@ func NewHandler(db *sql.DB, options any) http.Handler {
 		releases:              &releaseCache{resolve: handlerOptions.ReleaseResolver},
 		resourceCache:         handlerOptions.ResourceCache,
 		resourceCacheRenderer: handlerOptions.ResourceCacheMachineRenderer,
+		payloadVersions:       handlerOptions.PayloadVersions,
 		cloudflareZones:       handlerOptions.CloudflareZones,
 		projectDomainClaims:   handlerOptions.ProjectDomainClaims,
 		projectDomains:        handlerOptions.ProjectDomains,
@@ -1220,6 +1225,7 @@ type handler struct {
 	releases              *releaseCache
 	resourceCache         *ResourceCache
 	resourceCacheRenderer ResourceCacheMachineRenderer
+	payloadVersions       PayloadVersionReader
 	cloudflareZones       CloudflareZoneValidator
 	projectDomainClaims   ProjectDomainClaimSource
 	projectDomains        TenantProjectDomainManager

@@ -307,6 +307,15 @@ running, so DNS and SSH survive it. Homebrew installs print `brew upgrade
 sandcastle` instead of self-replacing. Direct installs replace atomically and
 keep a `.bak`; a root-owned install directory needs the update run as root.
 
+## Cache first
+
+`sc` commands read the tenant's projects, machines and payload versions from
+the Auth App's event-fed resource cache (one request) and fall back to live
+Incus on any non-answer. `VERBOSE=1` prints `tenant store: cache unavailable
+…` / `connect cache: falling back …` when that happens; a persistent
+fallback means the appliance is older than the CLI or its cache is off
+(`SANDCASTLE_RESOURCE_CACHE`). `SANDCASTLE_CONNECT_CACHE=0` forces live.
+
 ## Login and enrollment
 
 ```bash

@@ -1,6 +1,7 @@
 package authapp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"sort"
 )
 
 // ResourceCacheMachineRenderer converts one cached Incus instance into the
@@ -45,7 +47,16 @@ const (
 	ResourceKindStorageVolumes = "storage-volumes"
 	ResourceKindProfiles       = "profiles"
 	ResourceKindImages         = "images"
-	ResourceKindAll            = "all"
+	// ResourceKindProjects returns the tenant's Incus projects (infra + apps)
+	// with their config — what tenant.ListForPrefix builds summaries from —
+	// so the CLI's tenant store can be served from the cache.
+	ResourceKindProjects = "projects"
+	// ResourceKindPayloads returns each matched project's /.sc platform
+	// payload version, read over the appliance's local socket (one small file
+	// read per project there instead of profile + file reads per project
+	// from the client).
+	ResourceKindPayloads = "payloads"
+	ResourceKindAll      = "all"
 )
 
 // resourceInclude is the parsed include= selection. A missing (or empty)
@@ -101,6 +112,23 @@ type ResourceListResult struct {
 	StorageVolumes []api.StorageVolumeFull `json:"storageVolumes,omitempty"`
 	Profiles       []api.Profile           `json:"profiles,omitempty"`
 	Images         []api.Image             `json:"images,omitempty"`
+	// Projects are the tenant's Incus projects (name + config), infra first.
+	Projects []tenant.IncusProject `json:"projects,omitempty"`
+	// Payloads are the matched projects' /.sc platform payload versions.
+	Payloads []PayloadVersion `json:"payloads,omitempty"`
+}
+
+// PayloadVersion is one project's /.sc platform payload version ("" when the
+// project has no payload volume yet).
+type PayloadVersion struct {
+	IncusProject string `json:"incusProject"`
+	Version      string `json:"version"`
+}
+
+// PayloadVersionReader reads a project's /.sc platform payload VERSION over
+// the appliance's Incus access. Implemented by incusx.ResourceCacheServer.
+type PayloadVersionReader interface {
+	ReadPayloadVersion(ctx context.Context, incusProject string, pool string) string
 }
 
 // resourcesAPI answers `sc ls` from the event-bus-fed resource cache
@@ -225,6 +253,38 @@ func (h handler) resourcesAPI(w http.ResponseWriter, r *http.Request) {
 			if _, ok := matched[image.Project]; ok {
 				result.Images = append(result.Images, image)
 			}
+		}
+	}
+	if include.has(ResourceKindProjects) {
+		// The tenant's whole namespace, regardless of the project filter: a
+		// summary needs the infra project's config (CIDR, suffix, members)
+		// beside every app project.
+		for _, project := range snapshot.Projects {
+			if project.Name == summary.InfraProject || strings.HasPrefix(project.Name, summary.InfraProject+"-") {
+				result.Projects = append(result.Projects, tenant.IncusProject{Name: project.Name, Config: project.Config})
+			}
+		}
+	}
+	if include.has(ResourceKindPayloads) && h.payloadVersions != nil {
+		pools := map[string]string{}
+		for _, profile := range snapshot.Profiles {
+			if profile.Name != "default" {
+				continue
+			}
+			for _, device := range []string{"sc-platform", "workspace", "root"} {
+				if d, ok := profile.Devices[device]; ok && d["pool"] != "" {
+					pools[profile.Project] = d["pool"]
+					break
+				}
+			}
+		}
+		names := make([]string, 0, len(matched))
+		for raw := range matched {
+			names = append(names, raw)
+		}
+		sort.Strings(names)
+		for _, raw := range names {
+			result.Payloads = append(result.Payloads, PayloadVersion{IncusProject: raw, Version: h.payloadVersions.ReadPayloadVersion(r.Context(), raw, pools[raw])})
 		}
 	}
 	writeJSON(w, http.StatusOK, result)

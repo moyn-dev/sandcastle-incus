@@ -37,6 +37,13 @@ type ResourceCacheServer interface {
 	GetEventsAllProjects() (*incus.EventListener, error)
 }
 
+// resourceCacheProjectLister is the optional project-list half of the seam
+// (incusx.ResourceCacheServer has it); a server without it simply leaves the
+// cache's project bucket empty and `include=projects` unanswered.
+type resourceCacheProjectLister interface {
+	GetProjects() ([]api.Project, error)
+}
+
 // resourceCacheKind names which per-project bucket a lifecycle action affects.
 type resourceCacheKind int
 
@@ -47,6 +54,7 @@ const (
 	resourceCacheKindStoragePool
 	resourceCacheKindProfile
 	resourceCacheKindImage
+	resourceCacheKindProject
 )
 
 // resourceCacheActions maps each lifecycle action this cache cares about to
@@ -101,6 +109,11 @@ var resourceCacheActions = map[string]resourceCacheKind{
 	api.EventLifecycleImageAliasDeleted: resourceCacheKindImage,
 	api.EventLifecycleImageAliasRenamed: resourceCacheKindImage,
 	api.EventLifecycleImageAliasUpdated: resourceCacheKindImage,
+
+	api.EventLifecycleProjectCreated: resourceCacheKindProject,
+	api.EventLifecycleProjectDeleted: resourceCacheKindProject,
+	api.EventLifecycleProjectRenamed: resourceCacheKindProject,
+	api.EventLifecycleProjectUpdated: resourceCacheKindProject,
 }
 
 // ResourceCacheLogf is a minimal logging seam so RunResourceCache can report
@@ -161,6 +174,13 @@ func seedResourceCache(cache *ResourceCache, server ResourceCacheServer, log Res
 		return fmt.Errorf("list images across projects: %w", err)
 	}
 	cache.seed(instances, networks, pools, volumes, profiles, images)
+	if lister, ok := server.(resourceCacheProjectLister); ok {
+		projects, err := lister.GetProjects()
+		if err != nil {
+			return fmt.Errorf("list projects: %w", err)
+		}
+		cache.setProjects(projects)
+	}
 	return nil
 }
 
@@ -176,6 +196,18 @@ func refreshResourceCacheProject(cache *ResourceCache, server ResourceCacheServe
 			return fmt.Errorf("refresh storage pools: %w", err)
 		}
 		cache.setStoragePools(pools)
+		return nil
+	}
+	if kind == resourceCacheKindProject {
+		lister, ok := server.(resourceCacheProjectLister)
+		if !ok {
+			return nil
+		}
+		projects, err := lister.GetProjects()
+		if err != nil {
+			return fmt.Errorf("refresh projects: %w", err)
+		}
+		cache.setProjects(projects)
 		return nil
 	}
 	projectServer := server.UseProject(project)

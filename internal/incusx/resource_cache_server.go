@@ -1,9 +1,13 @@
 package incusx
 
 import (
+	"context"
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 	authapp "github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"io"
+	"strings"
 )
 
 // ResourceCacheServer implements authapp.ResourceCacheServer against a live
@@ -109,4 +113,31 @@ func (s ResourceCacheServer) GetImagesAllProjects() ([]api.Image, error) {
 
 func (s ResourceCacheServer) GetEventsAllProjects() (*incus.EventListener, error) {
 	return s.inner.GetEventsAllProjects()
+}
+
+// GetProjects lists every project with its config (authapp's optional
+// resourceCacheProjectLister): the source of the cache's project bucket.
+func (s ResourceCacheServer) GetProjects() ([]api.Project, error) {
+	return logIncusAPICall(s.Log, "GetProjects", func() ([]api.Project, error) {
+		return s.inner.GetProjects()
+	})
+}
+
+// ReadPayloadVersion implements authapp.PayloadVersionReader: the project's
+// /.sc platform payload VERSION over this (local) connection; "" when the
+// pool is unknown or the volume has no payload yet.
+func (s ResourceCacheServer) ReadPayloadVersion(_ context.Context, incusProject string, pool string) string {
+	if pool == "" {
+		return ""
+	}
+	content, _, err := s.inner.UseProject(incusProject).GetStorageVolumeFile(pool, "custom", tenant.V2SCPlatformVolumeName, "/"+tenant.PlatformPayloadVersionFile)
+	if err != nil || content == nil {
+		return ""
+	}
+	defer content.Close()
+	data, err := io.ReadAll(io.LimitReader(content, 256))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }

@@ -6552,3 +6552,18 @@ Live: the CLI tarball download died with "context deadline exceeded" —
 Downloads now run under their own 15-minute context with the client's
 timeout disabled. The status table prints detail only for outdated rows and
 one summary line per kind for current ones (26 payload rows → one line).
+
+## 2026-09-21 — cache first for every command
+
+`sc update` (and every command) began with a live `GET /1.0/projects`
+(>1 s on obelix) plus, for the payload check, a project read, a profile read
+and a volume file read per project. The Auth App resource cache now also
+holds the server's project list (seeded with `GetProjects`, refreshed on
+project lifecycle events) and answers `include=projects` (the tenant's
+namespace, infra config included) and `include=payloads` (each matched
+project's /.sc VERSION, read over the appliance's local socket, pool taken
+from the cached default profile). The user CLI's tenant store is wrapped
+(`cachedTenantStore`): ListProjects from the cache, live on any non-answer;
+`sc update`'s payload rows come from `include=payloads` the same way.
+Verified on the E2E install: `sc ls` and `sc update --check` issue no live
+Incus calls. Writes (payload sync, machine ops) stay live.
