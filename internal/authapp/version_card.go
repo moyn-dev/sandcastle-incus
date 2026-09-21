@@ -36,7 +36,7 @@ func (c *releaseCache) resolveFunc() func(ctx context.Context) (update.Release, 
 	if c.resolve != nil {
 		return c.resolve
 	}
-	checker := &update.Checker{}
+	checker := &update.Checker{Token: update.TokenFromEnv()}
 	return func(ctx context.Context) (update.Release, error) {
 		return checker.ResolveRelease(ctx, "")
 	}

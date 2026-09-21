@@ -47,7 +47,7 @@ func newAdminUpdateCommand(config commandConfig) *cobra.Command {
 			}
 			scoped := filterInstallComponents(components, prefix, config.adminConfig.InfrastructureProject)
 
-			checker := &update.Checker{}
+			checker := &update.Checker{Token: update.TokenFromEnv()}
 			release, releaseErr := checker.ResolveRelease(ctx, update.NormalizeTag(pin))
 
 			if check {

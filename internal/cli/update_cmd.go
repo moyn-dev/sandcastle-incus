@@ -36,7 +36,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 
 			// CLI target: resolve the wanted release (latest, or a pinned tag —
 			// rollback is just pinning an older tag).
-			checker := &update.Checker{StatePath: updateStatePath()}
+			checker := &update.Checker{StatePath: updateStatePath(), Token: update.TokenFromEnv()}
 			release, releaseErr := checker.ResolveRelease(ctx, update.NormalizeTag(pin))
 			if releaseErr != nil {
 				fmt.Fprintf(config.stderr, "note: could not reach GitHub for the latest release: %v\n", releaseErr)

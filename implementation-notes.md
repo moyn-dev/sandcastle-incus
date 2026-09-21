@@ -6319,3 +6319,17 @@ On `big` the obelix auth-app produced ~450 of ~460 Incus API requests per
 Verification target from the handoff (idle: incusd < 0.2 cores, < 10
 listings/min) is recorded in docs/e2e-sc2.md's Phase 1 notes as a read-only
 check (`incus monitor --type=logging`) — no live run was done here.
+
+## 2026-09-21 — `sc update` resolves releases without the GitHub API
+
+`sc update` printed `API rate limit exceeded for <ip>` from the laptop: the
+anonymous GitHub API limit is per public address, shared by everyone behind
+the NAT. Requiring a token was ruled out. The release page redirect
+(`/releases/latest` → `/releases/tag/<tag>`) and the download URLs are not
+rate limited, and GoReleaser's asset names are fixed, so the checker now
+resolves the tag from the redirect and synthesizes the asset list; the
+checksums file still verifies every download. The API is the fallback only
+(and the only source of `published_at`, which merely gates the notice's
+grace). A pinned tag is checked against its page so a typo fails early. A
+`GITHUB_TOKEN` / `GH_TOKEN` in the environment is used when present, never
+required.

@@ -18,6 +18,15 @@ const releaseJSON = `{
 	]
 }`
 
+// deadWeb is a github.com stand-in that answers nothing useful, so a test
+// exercises the API fallback instead of the (preferred) release-page path.
+func deadWeb(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
 func TestCheckFetchesAndCachesLatestRelease(t *testing.T) {
 	var gotPath, gotIfNoneMatch string
 	requests := 0
@@ -35,7 +44,7 @@ func TestCheckFetchesAndCachesLatestRelease(t *testing.T) {
 	defer server.Close()
 
 	statePath := filepath.Join(t.TempDir(), "update-state.json")
-	checker := &Checker{APIBaseURL: server.URL, StatePath: statePath}
+	checker := &Checker{APIBaseURL: server.URL, WebBaseURL: deadWeb(t), StatePath: statePath}
 
 	st, err := checker.Check(t.Context(), now)
 	if err != nil {
@@ -88,7 +97,7 @@ func TestCheckServerErrorKeepsPriorState(t *testing.T) {
 	if err := SaveState(statePath, prior); err != nil {
 		t.Fatal(err)
 	}
-	checker := &Checker{APIBaseURL: server.URL, StatePath: statePath}
+	checker := &Checker{APIBaseURL: server.URL, WebBaseURL: deadWeb(t), StatePath: statePath}
 	if _, err := checker.Check(t.Context(), now); err == nil {
 		t.Fatal("expected error on 403")
 	}
@@ -108,7 +117,7 @@ func TestResolveReleaseByTag(t *testing.T) {
 	}))
 	defer server.Close()
 
-	checker := &Checker{APIBaseURL: server.URL}
+	checker := &Checker{APIBaseURL: server.URL, WebBaseURL: deadWeb(t)}
 	rel, err := checker.ResolveRelease(t.Context(), "v0.2.0")
 	if err != nil {
 		t.Fatalf("ResolveRelease: %v", err)
@@ -122,5 +131,82 @@ func TestResolveReleaseByTag(t *testing.T) {
 	}
 	if _, ok := rel.AssetURL("sandcastle-plan9-386.tar.gz"); ok {
 		t.Fatal("unexpected asset match")
+	}
+}
+
+func TestResolveReleaseUsesTheReleasePageBeforeTheAPI(t *testing.T) {
+	apiCalls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls++
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"API rate limit exceeded for 1.2.3.4."}`))
+	}))
+	defer api.Close()
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/thieso2/sandcastle-incus/releases/latest":
+			w.Header().Set("Location", "https://github.com/thieso2/sandcastle-incus/releases/tag/v0.18.2")
+			w.WriteHeader(http.StatusFound)
+		case r.Method == http.MethodHead && (r.URL.Path == "/thieso2/sandcastle-incus/releases/tag/v0.18.2" || r.URL.Path == "/thieso2/sandcastle-incus/releases/tag/v0.17.3"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer web.Close()
+
+	checker := &Checker{APIBaseURL: api.URL, WebBaseURL: web.URL}
+	rel, err := checker.ResolveRelease(t.Context(), "")
+	if err != nil {
+		t.Fatalf("ResolveRelease: %v", err)
+	}
+	if rel.TagName != "v0.18.2" {
+		t.Fatalf("tag = %q", rel.TagName)
+	}
+	url, ok := rel.AssetURL("sandcastle-linux-amd64.tar.gz")
+	if !ok || url != web.URL+"/thieso2/sandcastle-incus/releases/download/v0.18.2/sandcastle-linux-amd64.tar.gz" {
+		t.Fatalf("AssetURL = %q, %v", url, ok)
+	}
+	if _, ok := rel.AssetURL("checksums.txt"); !ok {
+		t.Fatal("checksums asset missing from the web-resolved release")
+	}
+	// A pinned tag needs no redirect at all.
+	pinned, err := checker.ResolveRelease(t.Context(), "v0.17.3")
+	if err != nil || pinned.TagName != "v0.17.3" {
+		t.Fatalf("pinned = %+v, %v", pinned, err)
+	}
+	// Check() learns the tag the same way and persists it.
+	checker.StatePath = filepath.Join(t.TempDir(), "state.json")
+	st, err := checker.Check(t.Context(), now)
+	if err != nil || st.LatestTag != "v0.18.2" {
+		t.Fatalf("Check = %+v, %v", st, err)
+	}
+	if apiCalls != 0 {
+		t.Fatalf("the API was called %d times; the release page path needs no API and no token", apiCalls)
+	}
+	// A typo'd pinned tag is refused by the tag page, then by the API.
+	if _, err := checker.ResolveRelease(t.Context(), "v9.9.9"); err == nil {
+		t.Fatal("unknown tag resolved")
+	}
+	if apiCalls != 1 {
+		t.Fatalf("API fallback calls = %d", apiCalls)
+	}
+}
+
+func TestResolveReleaseSendsOptionalToken(t *testing.T) {
+	var auth string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Write([]byte(releaseJSON))
+	}))
+	defer api.Close()
+	if _, err := (&Checker{APIBaseURL: api.URL, WebBaseURL: deadWeb(t), Token: "tok"}).ResolveRelease(t.Context(), "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer tok" {
+		t.Fatalf("Authorization = %q", auth)
+	}
+	if _, err := (&Checker{APIBaseURL: api.URL, WebBaseURL: deadWeb(t)}).ResolveRelease(t.Context(), "v0.2.0"); err != nil || auth != "" {
+		t.Fatalf("anonymous request carried %q (%v)", auth, err)
 	}
 }

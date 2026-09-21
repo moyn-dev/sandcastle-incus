@@ -41,7 +41,7 @@ func startBackgroundUpdateCheck() <-chan update.State {
 	ch := make(chan update.State, 1)
 	go func() {
 		defer close(ch)
-		checker := &update.Checker{StatePath: path}
+		checker := &update.Checker{StatePath: path, Token: update.TokenFromEnv()}
 		if fresh, err := checker.Check(context.Background(), time.Now()); err == nil {
 			ch <- fresh
 		}
