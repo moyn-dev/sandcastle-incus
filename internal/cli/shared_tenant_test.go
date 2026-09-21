@@ -213,7 +213,7 @@ func TestTenantSwitchRepointsADriftedSharedRemote(t *testing.T) {
 	}
 	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), scconfig.SandcastleConfig{
 		Tenant: "thieso2", Remote: "thieso2sh", AuthHostname: "https://auth.example.com", AuthToken: "stored-token",
-		Installs: map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
+		Installs:      map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
 		RemoteTenants: map[string]string{"thieso2sh": "thieso2", "moyn-dev": "moyn-dev"},
 	}); err != nil {
 		t.Fatal(err)
