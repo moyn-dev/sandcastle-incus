@@ -22,6 +22,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
 )
 
 // newProjectCreateV2Command is the tenant-facing `sc project create-v2` client
@@ -187,10 +188,21 @@ func runProjectCreateViaAuthApp(ctx context.Context, config commandConfig, opts 
 		}
 		return writeOutput(config.stdout, opts.output, "[dry-run] would have: "+what, result)
 	}
-	payload, _ := json.Marshal(result)
-	fmt.Fprintln(config.stdout, string(payload))
+	// Text names the project by its Sandcastle Path; JSON carries the Auth
+	// App's result plus that path (it used to dump the raw JSON in text mode).
+	path := scopePath(config.adminConfig.Remote, result.Tenant, result.Project)
+	text := fmt.Sprintf("Project %s created.", path)
+	if result.IncusProject != "" {
+		text = fmt.Sprintf("Project %s created (Incus project %s).", path, result.IncusProject)
+	}
 	if result.Domain != "" {
-		fmt.Fprintf(config.stdout, "Project domain: %s (zone %s) — machines created in %s get the public name <machine>.%s\n", result.Domain, result.Zone, result.Project, result.Domain)
+		text += fmt.Sprintf("\nProject domain: %s (zone %s) — machines created in %s get the public name <machine>.%s", result.Domain, result.Zone, result.Project, result.Domain)
+	}
+	if err := writeOutput(config.stdout, opts.output, text, struct {
+		Path string `json:"path"`
+		projectbroker.ProjectResult
+	}{path, result}); err != nil {
+		return err
 	}
 	if writeRemote && result.IncusProject != "" {
 		name := strings.TrimSpace(remoteName)

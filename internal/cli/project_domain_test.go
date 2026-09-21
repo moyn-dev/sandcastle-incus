@@ -34,7 +34,7 @@ func TestProjectCreateWithDomainRidesTheAuthApp(t *testing.T) {
 	if strings.Join(stub.calls, ",") != "create zp baum.hase.de false" {
 		t.Fatalf("calls = %v", stub.calls)
 	}
-	if !strings.Contains(stdout.String(), `"domain":"baum.hase.de"`) || !strings.Contains(stdout.String(), "Project domain: baum.hase.de (zone hase.de)") {
+	if !strings.Contains(stdout.String(), "Project zp created") || !strings.Contains(stdout.String(), "Project domain: baum.hase.de (zone hase.de)") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

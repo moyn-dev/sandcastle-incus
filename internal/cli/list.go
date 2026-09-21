@@ -195,6 +195,9 @@ expand it first.`,
 				if err != nil {
 					return err
 				}
+				for i := range payload.Remotes {
+					stampMachinePaths(payload.Remotes[i].Remote, &payload.Remotes[i])
+				}
 				text := formatMultiMachineListShort(payload)
 				if pathOpts.Long {
 					text = formatMultiMachineList(payload)
@@ -226,6 +229,7 @@ expand it first.`,
 				}
 			}
 			listed := listedScopePath(runCfg, result)
+			stampMachinePaths(strings.TrimSpace(runCfg.adminConfig.Remote), &result)
 			text := formatMachineListShort(result)
 			if pathOpts.Long {
 				// The table's own context line is the listed path in the
@@ -248,6 +252,17 @@ expand it first.`,
 	command.Flags().BoolVar(&showProfiles, "profiles", false, "also list profiles (cache-backed only; no effect when falling back to the live query)")
 	command.Flags().BoolVar(&showImages, "images", false, "also list images (cache-backed only; no effect when falling back to the live query)")
 	return command
+}
+
+// stampMachinePaths fills every machine's Sandcastle Path in a listing.
+func stampMachinePaths(remote string, result *listPayload) {
+	if remote == "" {
+		remote = strings.TrimSpace(result.Remote)
+	}
+	for i := range result.Machines {
+		m := &result.Machines[i]
+		m.Path = machinePath(remote, result.Tenant.Tenant, m.Project, m.Name)
+	}
 }
 
 // listedScopePath is the first line of a colon-mode listing: the Sandcastle

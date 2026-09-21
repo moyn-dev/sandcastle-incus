@@ -118,11 +118,16 @@ defaults.
   cache-backed path**; on the live fallback the flags are silent no-ops.
 - A `sc ls` whose install part globs returns `{remotePattern, remotes[], warnings[]}`
   instead — one `listPayload` per install swept.
-- A machine in `machines[]` → `{tenant, project, name, type, privateIP, linuxUser,
-  running, bare, createdAt, createdBy, …}`.
-- Lifecycle commands: a **literal** reference returns `{action, tenant, project,
-  machine}`; a **glob** returns `{action, tenant, selector, results[]}`, each
-  result naming its remote on a cross-install sweep.
+- A machine in `machines[]` → `{path, tenant, project, name, type, privateIP,
+  linuxUser, running, bare, createdAt, createdBy, renderedVersion, …}`; `path`
+  is its Sandcastle Path (`/remote/tenant/project/machine`), present on every
+  machine-bearing payload (`sc create` → `{path, name, type, …}`, lifecycle
+  results, dry-run plans, path-mode `sc ls` → `{listings[{path, level,
+  entries[{name, path, kind, fields[]}]}], warnings[]}`).
+- `sc cd` / `sc pwd` → `{path, level, remote, tenant, project, previous, config_path}`.
+- Lifecycle commands: a **literal** reference returns `{action, path, tenant,
+  project, machine}`; a **glob** returns `{action, tenant, selector, results[]}`,
+  each result `{path, remote?, project, machine, error?}`.
 - `sc status` / tenant listings return `tenant.Summary`:
   `{incusName, infraProject, tenant, dnsSuffix, defaultProject, privateCIDR,
   dnsAddress, unixUser, projects[], status, tailscale, publicRoutes[]}`.

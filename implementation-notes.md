@@ -5,6 +5,19 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — `path` in every machine payload; `tenant@` prefix removed
+
+Every JSON payload that names a machine now carries `path`, its Sandcastle
+Path: `sc ls` machines (single and cross-install), path-mode entries,
+`sc create`, lifecycle results (scalar and glob) and dry-run plans. The
+structured fields stay beside it, so nothing that parsed `project`/
+`machine` breaks; `meta.Machine.Path` is filled by the CLI (only it knows
+the remote) and stays empty in server payloads. The `tenant@` prefix —
+printed-only since ADR-0020, accepted on input for paste-back — is
+removed from both the parser and the renderer on the user's word that
+nobody typed it; `scopePath` without a remote or tenant now renders the
+plain colon reference of the remaining parts.
+
 ## 2026-09-21 — Messages print Sandcastle Paths
 
 Prompts and results named machines in the colon grammar (`Delete machine

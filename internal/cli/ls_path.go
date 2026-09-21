@@ -22,6 +22,8 @@ import (
 // pathEntry is one child of a directory in the tree.
 type pathEntry struct {
 	Name string `json:"name"`
+	// Path is the entry's absolute Sandcastle Path.
+	Path string `json:"path,omitempty"`
 	// Kind is the child's level: remote, tenant, project or machine.
 	Kind string `json:"kind"`
 	// Fields carries the long-format columns for the entry, in column order.
@@ -428,11 +430,13 @@ func listPaths(ctx context.Context, config commandConfig, args []string, options
 				continue
 			}
 			if match.Entry != nil {
-				payload.Listings = append(payload.Listings, pathListing{Path: formatPath(match.Segments), Level: "machine", Machine: true, Entries: []pathEntry{*match.Entry}})
+				entry := *match.Entry
+				entry.Path = formatPath(match.Segments)
+				payload.Listings = append(payload.Listings, pathListing{Path: entry.Path, Level: "machine", Machine: true, Entries: []pathEntry{entry}})
 				continue
 			}
 			if options.Directory {
-				payload.Listings = append(payload.Listings, pathListing{Path: formatPath(match.Segments), Level: levelName(len(match.Segments)), Entries: []pathEntry{{Name: match.Segments[len(match.Segments)-1], Kind: levelName(len(match.Segments))}}})
+				payload.Listings = append(payload.Listings, pathListing{Path: formatPath(match.Segments), Level: levelName(len(match.Segments)), Entries: []pathEntry{{Name: match.Segments[len(match.Segments)-1], Path: formatPath(match.Segments), Kind: levelName(len(match.Segments))}}})
 				continue
 			}
 			if err := listDirectory(ctx, config, match.Segments, options.Recursive, &payload); err != nil {
@@ -472,6 +476,9 @@ func listDirectory(ctx context.Context, config commandConfig, segments []string,
 			return nil
 		}
 		return err
+	}
+	for i := range children {
+		children[i].Path = formatPath(appendSegment(segments, children[i].Name))
 	}
 	payload.Listings = append(payload.Listings, pathListing{Path: formatPath(segments), Level: levelName(len(segments)), Entries: children})
 	if !recursive || len(segments) >= levelProject {

@@ -362,8 +362,7 @@ sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuse
   name (`ssh moyn-dev@<ip>` for `moyn-dev`); `sc-adm tenant create
   --unix-user` overrides it. Messages name machines by their Sandcastle
   Path (`/obelix/thieso2/work/dev`), which every command accepts, so a
-  printed path pastes back; the older `tenant@remote:project:machine` form
-  is still accepted on input.
+  printed path pastes back.
 - **Prerequisite**: every member has already run `sc login` on the install
   (their Personal Tenant carries the login SSH key the shared machines
   authorize) and is on the tenant's tailnet. `create --member` and

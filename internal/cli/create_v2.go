@@ -155,12 +155,6 @@ func installPrefixFromRemoteName(remote string, tenantName string) string {
 func splitMachineReference(reference string, currentProject string) (dnsSuffix string, project string, machine string, err error) {
 	reference = strings.TrimSpace(reference)
 	project = strings.TrimSpace(currentProject)
-	// Messages print machines as tenant@remote:project:machine; the tenant@
-	// prefix is accepted (and ignored — the remote implies the tenant) so a
-	// printed path pastes back into any command.
-	if at := strings.Index(reference, "@"); at >= 0 && !strings.Contains(reference[:at], ":") {
-		reference = reference[at+1:]
-	}
 	parts := strings.Split(reference, ":")
 	switch len(parts) {
 	case 1:
@@ -495,6 +489,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 			payload.PublicHostname = publicHostnames[0]
 		}
 		payload.CertificateDecisions = createCertificateDecisions(publicHostnames, outcomes)
+		payload.Path = machinePath(config.adminConfig.Remote, summary.Tenant, project, payload.Name)
 		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, payload, true, outcomes), payload)
 	}
 	var claimed []claimedHostname
@@ -521,6 +516,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		outcomes[derived] = machineCertificateOutcome{State: "project"}
 	}
 	result.CertificateDecisions = createCertificateDecisions(result.PublicHostnames, outcomes)
+	result.Path = machinePath(config.adminConfig.Remote, summary.Tenant, project, result.Name)
 	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, result, false, outcomes), result)
 }
 

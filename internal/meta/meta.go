@@ -258,6 +258,9 @@ type Machine struct {
 	// before the stamps existed and for Freeform Machines.
 	RenderedVersion string `json:"renderedVersion,omitempty"`
 	CreatedVersion  string `json:"createdVersion,omitempty"`
+	// Path is the machine's Sandcastle Path (/remote/tenant/project/machine),
+	// filled in by the CLI, which knows the remote; empty in server payloads.
+	Path string `json:"path,omitempty"`
 	// Bare marks a machine created with `sc create --bare`: no login user, no
 	// sshd, no shared storage. It changes how the machine is reached, so a
 	// listing says so rather than leaving `sc connect` to time out.

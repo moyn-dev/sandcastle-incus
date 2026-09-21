@@ -8,9 +8,9 @@ import "strings"
 // exist in several places, and "Machine dev does not exist in project
 // default" no longer tells the user which remote and tenant they are in.
 // The path is the grammar every command accepts, so a printed path pastes
-// back. When the remote or the tenant is unknown the legacy
-// tenant@remote:project:machine rendering is used, with empty parts skipped
-// — a path with a hole would not paste back.
+// back. When the remote or the tenant is unknown the colon reference of the
+// remaining parts is rendered instead — a path with a hole would not paste
+// back.
 func machinePath(remote, tenantName, project, machine string) string {
 	return scopePath(remote, tenantName, project, machine)
 }
@@ -27,16 +27,8 @@ func scopePath(remote, tenantName string, rest ...string) string {
 		}
 		return formatPath(segments)
 	}
-	head := strings.TrimSpace(remote)
-	if t := strings.TrimSpace(tenantName); t != "" {
-		if head != "" {
-			head = t + "@" + head
-		} else {
-			head = t + "@"
-		}
-	}
 	kept := make([]string, 0, len(rest)+1)
-	if head != "" {
+	if head := strings.TrimSpace(remote); head != "" {
 		kept = append(kept, head)
 	}
 	for _, part := range rest {
@@ -44,8 +36,7 @@ func scopePath(remote, tenantName string, rest ...string) string {
 			kept = append(kept, part)
 		}
 	}
-	path := strings.Join(kept, ":")
-	return strings.TrimSuffix(path, "@:")
+	return strings.Join(kept, ":")
 }
 
 // currentMachinePath is machinePath for the CLI's active remote and tenant.
