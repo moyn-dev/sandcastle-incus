@@ -401,23 +401,48 @@ func listDirectory(ctx context.Context, config commandConfig, segments []string,
 	return nil
 }
 
-// formatPathList renders path-mode output the way a shell's ls does: one
-// listing prints its entries; several print each under a "path:" header.
-// formatPathList renders path-mode output: every listed directory (and, in
-// long form, every listed machine) starts with its own Sandcastle Path, then
-// its entries; blocks are separated by a blank line. -d prints only the
-// matching paths. The path line is what tells the reader where the names
-// below live, so it is never omitted.
+// formatPathList renders path-mode output the way ls does with files and
+// directories: every matched machine (a leaf) is a file — all of them go
+// first, together, one path per line, or one table with the path in the
+// MACHINE column under -l; then every matched directory as its own block,
+// its Sandcastle Path on the first line and its entries below, blocks
+// separated by a blank line. -d prints only the matching paths.
 func formatPathList(payload pathListPayload, options pathListOptions) string {
 	var b strings.Builder
 	for _, warning := range payload.Warnings {
 		fmt.Fprintf(&b, "warning: %s\n", warning)
 	}
-	blockBefore := false
-	for _, listing := range payload.Listings {
-		if options.Directory || (listing.Machine && !options.Long) {
-			// Names print as plain lines, like ls on files.
+	if options.Directory {
+		for _, listing := range payload.Listings {
 			fmt.Fprintln(&b, listing.Path)
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	leaves := []pathEntry{}
+	for _, listing := range payload.Listings {
+		if !listing.Machine {
+			continue
+		}
+		for _, entry := range listing.Entries {
+			named := entry
+			named.Fields = append([]string{listing.Path}, entry.Fields[1:]...)
+			named.Name = listing.Path
+			leaves = append(leaves, named)
+		}
+	}
+	blockBefore := false
+	if len(leaves) > 0 {
+		if options.Long {
+			writeEntryTable(&b, levelProject, leaves)
+		} else {
+			for _, leaf := range leaves {
+				fmt.Fprintln(&b, leaf.Name)
+			}
+		}
+		blockBefore = true
+	}
+	for _, listing := range payload.Listings {
+		if listing.Machine {
 			continue
 		}
 		if blockBefore {
