@@ -6394,3 +6394,18 @@ compares the remote's recorded address with the one the Auth App reports
 and re-points it (`incus remote set-url`) when they differ. The stale
 tailnet device has to be deleted in the admin console (see the e2e doc's
 "stale sidecar devices" note).
+
+## 2026-09-21 — tenant switch hints: tailnet only, and only when unreachable
+
+`sc tenant switch` printed `sc dns setup` / `sc trust install` / `sc
+tailscale up` after every switch. The first two are retired (Public DNS
+Zones and real certificates replaced private DNS and the tenant CA), and the
+third was printed even when the switch had just connected to the sidecar
+over the tailnet: a member's restricted certificate cannot read the
+sidecar's Tailscale status, so the status check always failed. The switch
+now dials the sidecar's :8443 when it knows the address and hints only on
+failure; owners without a known address keep the status check.
+
+Also observed live: the moyn-dev sidecar was deleted and recreated at 12:56
+UTC (not by this code — nothing here deletes a sidecar), which registered a
+third tailnet node; the drift re-pointing from v0.18.9 handled it.

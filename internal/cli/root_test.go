@@ -1087,7 +1087,7 @@ func TestTenantSwitchValidatesAccessAndPreservesProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "Current Tenant set to \"skorfman\"") || !strings.Contains(stdout, "sc dns setup skorfman") {
+	if !strings.Contains(stdout, "Current Tenant set to \"skorfman\"") || strings.Contains(stdout, "sc dns setup") || strings.Contains(stdout, "sc trust install") {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	cfg, err := scconfig.LoadSandcastleConfig(configPath)

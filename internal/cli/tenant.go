@@ -8,14 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
 	"github.com/thieso2/sandcastle-incus/internal/tailscale"
 )
 
@@ -175,7 +173,7 @@ func newTenantSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Comm
 				Tenant:     tenantName,
 				LocalOnly:  localOnly,
 				ConfigPath: cfgPath,
-				Actions:    tenantSwitchSetupActions(cmd.Context(), config, tenantName),
+				Actions:    tenantSwitchSetupActions(cmd.Context(), config, tenantName, access.IncusRemoteAddress),
 			}
 			result.Message = tenantSwitchHint(localOnly, result.Actions)
 			return writeOutput(config.stdout, opts.output, formatTenantSwitch(result), result)
@@ -389,69 +387,36 @@ func tenantSwitchHint(localOnly bool, actions []string) string {
 	return prefix + "Local setup actions needed:\n  " + strings.Join(actions, "\n  ")
 }
 
-func tenantSwitchSetupActions(ctx context.Context, config commandConfig, tenantName string) []string {
-	var actions []string
-	if !tenantSwitchDNSReady(ctx, config, tenantName) {
-		actions = append(actions, "sc dns setup "+tenantName)
-	}
-	if !tenantSwitchTrustReady(ctx, config, tenantName) {
-		actions = append(actions, "sc trust install "+tenantName)
+// tenantSwitchSetupActions lists what the user still has to do locally after
+// a switch. Only the tailnet matters: private DNS and tenant-CA trust are
+// served by Public DNS Zones and real certificates now (the `sc dns setup`
+// / `sc trust install` hints were retired). When the switch knows the
+// tenant sidecar's tailnet address, reaching it IS the tailnet check — a
+// member's restricted certificate cannot read the sidecar's status anyway.
+func tenantSwitchSetupActions(ctx context.Context, config commandConfig, tenantName string, sidecarAddress string) []string {
+	if address := strings.TrimSpace(sidecarAddress); address != "" {
+		if sidecarReachable(address) {
+			return nil
+		}
+		return []string{"sc tailscale up " + tenantName}
 	}
 	if !tenantSwitchTailscaleReady(ctx, config, tenantName) {
-		actions = append(actions, "sc tailscale up "+tenantName)
+		return []string{"sc tailscale up " + tenantName}
 	}
-	return actions
+	return nil
 }
 
-func tenantSwitchDNSReady(ctx context.Context, config commandConfig, tenantName string) bool {
-	if config.tenantStore == nil {
-		return false
-	}
-	plan, err := localdns.PlanInstall(ctx, config.adminConfig, config.tenantStore, localdns.Request{Reference: tenantName})
+// sidecarReachable dials the Incus Reach (sidecar tailnet address :8443).
+func sidecarReachable(address string) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(address, "8443"), 3*time.Second)
 	if err != nil {
 		return false
 	}
-	content, err := os.ReadFile(plan.ResolverPath)
-	if err != nil {
-		return false
-	}
-	host, port, err := net.SplitHostPort(plan.DNSEndpoint)
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(content), "nameserver "+host) && strings.Contains(string(content), "port "+port)
+	conn.Close()
+	return true
 }
 
-func tenantSwitchTrustReady(ctx context.Context, config commandConfig, tenantName string) bool {
-	if config.tenantStore == nil {
-		return false
-	}
-	plan, err := localtrust.PlanInstall(ctx, config.adminConfig, config.tenantStore, trustRequest(config, tenantName))
-	if err != nil {
-		return false
-	}
-	if dir := strings.TrimSpace(os.Getenv("SANDCASTLE_TRUST_DIR")); dir != "" {
-		return fileExists(filepath.Join(dir, localtrust.CertFilename(plan)))
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		keychain := strings.TrimSpace(os.Getenv("SANDCASTLE_DARWIN_TRUST_KEYCHAIN"))
-		if keychain == "" {
-			if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-				keychain = filepath.Join(home, "Library", "Keychains", "login.keychain-db")
-			}
-		}
-		args := []string{"find-certificate", "-c", plan.TrustName}
-		if keychain != "" {
-			args = append(args, keychain)
-		}
-		return exec.CommandContext(ctx, "security", args...).Run() == nil
-	case "linux":
-		return fileExists(filepath.Join(localtrust.DetectLinuxTrustLayout().Dir, localtrust.CertFilename(plan)))
-	default:
-		return false
-	}
-}
+
 
 func tenantSwitchTailscaleReady(ctx context.Context, config commandConfig, tenantName string) bool {
 	if config.tenantStore == nil || config.tailscale == nil {
