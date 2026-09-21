@@ -37,12 +37,14 @@ func newRemoteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 // resolved directory/environment selection — the same value `sc ls`/`sc c` resolve from
 // (config.adminConfig.Remote) — so the `*` here always matches what sc operates on.
 func newRemoteListCommand(config commandConfig) *cobra.Command {
-	return &cobra.Command{
+	var long bool
+	command := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List enrolled Sandcastle remotes (installs)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			fmt.Fprintln(config.stdout, positionLine(config))
 			cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
 			if err != nil {
 				fmt.Fprintf(config.stderr, "warning: could not read sandcastle config: %v\n", err)
@@ -59,6 +61,16 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 				fmt.Fprintln(config.stdout, "No Sandcastle remotes enrolled. Run `sc login <auth-hostname>` to enroll one.")
 				return nil
 			}
+			if !long {
+				for _, r := range rows {
+					marker := "  "
+					if r.Name == current {
+						marker = "* "
+					}
+					fmt.Fprintln(config.stdout, marker+r.Name)
+				}
+				return nil
+			}
 			table := tabwriter.NewWriter(config.stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(table, "\tREMOTE\tPROJECT\tAUTH HOSTNAME")
 			for _, r := range rows {
@@ -72,6 +84,8 @@ func newRemoteListCommand(config commandConfig) *cobra.Command {
 			return table.Flush()
 		},
 	}
+	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: REMOTE PROJECT AUTH HOSTNAME table (default: names only)")
+	return command
 }
 
 // newRemoteSwitchCommand persists only the directory's remote/project selection.

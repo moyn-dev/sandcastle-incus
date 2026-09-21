@@ -5,6 +5,28 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-21 — Listings: position line first, names by default, -l for tables
+
+Asked: `sc ls` and the other level listings print short by default and the
+table with `-l`, and always print the current path first. This changes
+the default text output of `sc ls`, `sc project list`, `sc remote list`
+and `sc tenant list` — an explicit user decision, taken against the
+"additive only" rule; JSON output is untouched, which is what scripts and
+the e2e automation should parse.
+
+- First line of every listing is the Current Position as a Sandcastle
+  Path, even when the listing addresses another install (`sc ls obelix:`):
+  the line says where *you* are, the names say what was listed.
+- Short `sc ls`: bare names inside one project, `project/name` when the
+  listing spans projects (`-a`, a project glob), absolute paths when it
+  spans installs, `name (unmanaged)` for unmanaged instances. `-l` is the
+  previous table; the context line (`remote "…", project "…"`) survives
+  only there.
+- `-l` no longer forces path mode: `sc ls -l 'gbrain:*'` is the colon
+  listing as a table; `-d`/`-R` and path arguments still select the walk.
+- `sc project list` keeps its `Selection file:` line (tests and the
+  quickstart rely on it) as the second line.
+
 ## 2026-09-21 — Rendered Version stamps on profiles and machines
 
 Asked: record which release rendered a machine and show it in `sc ls`,

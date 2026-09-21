@@ -107,7 +107,7 @@ func TestTenantListShowsRoleColumn(t *testing.T) {
 	admin.Tenant = "moyn-dev"
 	admin.AuthHostname = "auth.example.com"
 	admin.AuthToken = "stored-token"
-	stdout, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client}, "tenant", "list")
+	stdout, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client}, "tenant", "list", "-l")
 	if err != nil {
 		t.Fatal(err)
 	}

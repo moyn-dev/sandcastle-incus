@@ -23,6 +23,10 @@ sc remote list   # every enrolled install; * marks the active one
 sc ls -a         # every machine in every project of the active install
 ```
 
+Every level listing (`sc ls`, `sc project list`, `sc remote list`, `sc tenant
+list`) prints the Current Position (`/remote/tenant/project`) first, then names
+only; `-l` gives the table. Parse `--json`, not the text.
+
 `sc info --json` and `sc ls --json` give the same facts parseably. Read the
 result rather than assuming: an install's project prefix, DNS suffix, and remote
 name are all operator-chosen and differ per deployment.
@@ -111,8 +115,9 @@ machine is `user@<fqdn>:` (just `<fqdn>:` for the tenant user).
 ## Everyday operations
 
 ```bash
-sc ls                       # machines in the active project
-sc ls -a                    # …across every project (PROJECT MACHINE TYPE FQDN … CREATED RENDERED STATE; RENDERED = release whose profile the machine booted with)
+sc ls                       # position line, then machine names in the active project
+sc ls -a                    # …across every project (project/machine lines)
+sc ls -l -a                 # the table: PROJECT MACHINE TYPE FQDN … CREATED RENDERED STATE (RENDERED = release whose profile the machine booted with)
 sc create dev               # create a container in the active project
 sc create dev --vm          # …a VM instead
 sc create web --image mybase --home-share

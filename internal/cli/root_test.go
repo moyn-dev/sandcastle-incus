@@ -1040,7 +1040,7 @@ func TestTenantListShowsAccessibleTenantsAndCurrent(t *testing.T) {
 	stdout, err := executeForTestWithConfig(t, commandConfig{
 		adminConfig: admin,
 		authTenants: client,
-	}, "tenant", "list")
+	}, "tenant", "list", "-l")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1558,7 +1558,7 @@ func TestListAliasShowsUnmanagedTenantWide(t *testing.T) {
 		machineStore: fakeMachineStatusStore{unmanaged: []machine.UnmanagedMachine{{
 			Tenant: "acme", Name: "manual", InstanceName: "manual", Status: "Running", Running: true,
 		}}},
-	}, "ls")
+	}, "ls", "-l")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1588,7 +1588,7 @@ func TestListProjectScopeAlsoShowsUnmanagedRows(t *testing.T) {
 		machineStore: fakeMachineStatusStore{unmanaged: []machine.UnmanagedMachine{{
 			Tenant: "acme", Name: "manual", InstanceName: "manual", Status: "Running", Running: true,
 		}}},
-	}, "list", "default")
+	}, "list", "-l", "default")
 	if err != nil {
 		t.Fatal(err)
 	}

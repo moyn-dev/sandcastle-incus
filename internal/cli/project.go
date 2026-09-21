@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
@@ -36,7 +37,8 @@ func newProjectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 }
 
 func newProjectListCommand(config commandConfig, opts *rootOptions) *cobra.Command {
-	return &cobra.Command{
+	var long bool
+	command := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List projects in the current tenant",
@@ -50,9 +52,36 @@ func newProjectListCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 				tenant.Summary
 				ConfigPath string `json:"config_path"`
 			}{tenantSummary, config.adminConfig.DirectoryConfigPath}
-			return writeOutput(config.stdout, opts.output, selectionSource(config)+"\n"+formatProjectNamespaceList(tenantSummary, currentProjectName(config, tenantSummary)), payload)
+			current := currentProjectName(config, tenantSummary)
+			text := formatProjectNamespaceList(tenantSummary, current)
+			if long {
+				text = formatProjectNamespaceTable(tenantSummary, current)
+			}
+			return writeOutput(config.stdout, opts.output, positionLine(config)+"\n"+selectionSource(config)+"\n"+text, payload)
 		},
 	}
+	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: PROJECT DOMAIN IMAGE table (default: names only)")
+	return command
+}
+
+// formatProjectNamespaceTable is `sc project list -l`: the level's columns,
+// the current project marked.
+func formatProjectNamespaceTable(summary tenant.Summary, current string) string {
+	if len(summary.Projects) == 0 {
+		return "No Sandcastle projects found."
+	}
+	var builder strings.Builder
+	table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, "\tPROJECT\tDOMAIN\tIMAGE")
+	for _, project := range summary.Projects {
+		marker := ""
+		if project.Name == strings.TrimSpace(current) {
+			marker = "*"
+		}
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", marker, project.Name, orDash(project.Domain), orDash(project.Image))
+	}
+	_ = table.Flush()
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 type projectSwitchOutput struct {

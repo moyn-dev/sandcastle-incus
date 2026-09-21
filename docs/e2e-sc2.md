@@ -1335,7 +1335,8 @@ the lifecycle commands. Quote the patterns so the shell does not expand them.
 sc c --yes lc1 -- true && sc c --yes lc2 -- true && sc c --yes web-a -- true   # three machines in the current project
 
 sc ls ':lc*'                    # machine glob within the current project
-sc ls -a '*:lc*'                # …across every project; RENDERED column = the release whose profile each machine booted with (the running release for machines created now; '-' for machines predating the stamp or Freeform Machines)
+sc ls -a '*:lc*'                # …across every project: first line is the Current Position path, then project/machine names
+sc ls -l -a '*:lc*'             # the table; RENDERED column = the release whose profile each machine booted with (the running release for machines created now; '-' for machines predating the stamp or Freeform Machines)
 sc ls -a 'zz*:*'                # project glob matching nothing → empty listing, exit 0
 sc ls 'zzznope:*'               # literal project that does not exist → error, exit 1
 
@@ -3242,7 +3243,7 @@ coverage: `go test ./internal/cli -run 'TestCdPwdLs|TestPathToMachine|TestResolv
 | **14f** home/root | `sc cd /` prints `/`; `sc ls` lists the enrolled remotes and `sc ls -l /` shows `REMOTE TENANT PROJECT AUTH`; `sc ls /<remote>` lists the accessible tenants; `sc cd` (no argument) returns to the global config's `/<remote>/<tenant>/<project>` |
 | **14g** cross-remote | with a second enrolled install: `sc cd /<other>/<its tenant>/<its project>` switches remote (as `sc remote switch` does) and `sc ls` lists that install's machines; `sc cd /<other>/<wrong-tenant>` fails through Tenant Access validation; `sc c /<other>/<tenant>/<project>/<machine> -- true` from the first install runs without a durable switch (`sc pwd` unchanged); `sc ls <other>:<project>` reports `<its tenant>@<other>:<project>`, not the current tenant |
 | **14h** completion | `sc completion zsh` emits a script; `sc __complete cd ../` lists the sibling projects with a trailing `/`; `sc __complete connect ./` lists the project's machines; `sc __complete cd /` lists the remotes |
-| **14i** compatibility | with `.sandcastle` at project level, `sc ls`, `sc ls -a`, `sc ls 'gbrain:*'`, `sc c web:dev`, `sc remote switch`, `sc project switch`, `sc tenant switch` behave exactly as in Phases 7c/13 |
+| **14i** compatibility | with `.sandcastle` at project level, `sc ls`, `sc ls -a`, `sc ls 'gbrain:*'` keep their filters (output is now the position line plus names; `-l` restores the table), and `sc c web:dev`, `sc remote switch`, `sc project switch`, `sc tenant switch` behave exactly as in Phases 7c/13 |
 
 Live run 2026-09-21 (`big:sc-shared-e2e`, client `big:e2e-pdz-client`, branch
 `feat/path-navigation`): see `docs/e2e-runs/2026-09-21-phase14-path-navigation.md`.

@@ -64,7 +64,8 @@ func newTenantCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 }
 
 func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Command {
-	return &cobra.Command{
+	var long bool
+	command := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List tenants accessible to the current user",
@@ -78,9 +79,32 @@ func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Comman
 				return err
 			}
 			output := tenantListOutput{Tenants: tenantListRows(tenants, strings.TrimSpace(config.adminConfig.Tenant))}
-			return writeOutput(config.stdout, opts.output, formatTenantAccessList(output), output)
+			text := formatTenantAccessNames(output)
+			if long {
+				text = formatTenantAccessList(output)
+			}
+			return writeOutput(config.stdout, opts.output, positionLine(config)+"\n"+text, output)
 		},
 	}
+	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: Tenant Role Personal table (default: names only)")
+	return command
+}
+
+// formatTenantAccessNames is `sc tenant list` without -l: names, the
+// current one marked.
+func formatTenantAccessNames(output tenantListOutput) string {
+	if len(output.Tenants) == 0 {
+		return "No accessible tenants"
+	}
+	var builder strings.Builder
+	for _, tenant := range output.Tenants {
+		marker := "  "
+		if tenant.Current {
+			marker = "* "
+		}
+		builder.WriteString(marker + tenant.Tenant + "\n")
+	}
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func newTenantSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Command {

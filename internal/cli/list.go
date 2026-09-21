@@ -174,12 +174,13 @@ Globbing installs needs all three parts spelled out: a two-part reference stays
 [remote:]project or project:machine. Quote the pattern so the shell does not
 expand it first.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			position := positionLine(config)
 			if listInPathMode(config, args, pathOpts) {
 				payload, err := listPaths(cmd.Context(), config, args, pathOpts)
 				if err != nil {
 					return err
 				}
-				return writeOutput(config.stdout, opts.output, formatPathList(payload, pathOpts), payload)
+				return writeOutput(config.stdout, opts.output, position+"\n"+formatPathList(payload, pathOpts), payload)
 			}
 			if len(args) > 1 {
 				return fmt.Errorf("several arguments need Sandcastle Paths (/remote/tenant/project/machine); the colon grammar takes one reference")
@@ -195,7 +196,11 @@ expand it first.`,
 				if err != nil {
 					return err
 				}
-				return writeOutput(config.stdout, opts.output, formatMultiMachineList(payload), payload)
+				text := formatMultiMachineListShort(payload)
+				if pathOpts.Long {
+					text = formatMultiMachineList(payload)
+				}
+				return writeOutput(config.stdout, opts.output, position+"\n"+text, payload)
 			}
 			runCfg := config
 			if remoteOverride != "" && remoteOverride != strings.TrimSpace(config.adminConfig.Remote) {
@@ -221,11 +226,15 @@ expand it first.`,
 					return err
 				}
 			}
-			return writeOutput(config.stdout, opts.output, formatMachineList(result, renderOpts), result)
+			text := formatMachineListShort(result)
+			if pathOpts.Long {
+				text = formatMachineList(result, renderOpts)
+			}
+			return writeOutput(config.stdout, opts.output, position+"\n"+text, result)
 		},
 	}
 	command.Flags().BoolVarP(&allProjects, "all-projects", "a", false, "list machines across all projects")
-	command.Flags().BoolVarP(&pathOpts.Long, "long", "l", false, "path mode: long listing with the level's columns")
+	command.Flags().BoolVarP(&pathOpts.Long, "long", "l", false, "long listing: the table with the level's columns (default: names only)")
 	command.Flags().BoolVarP(&pathOpts.Directory, "directory", "d", false, "path mode: list the matching names, not their contents")
 	command.Flags().BoolVarP(&pathOpts.Recursive, "recursive", "R", false, "path mode: list subdirectories recursively")
 	command.Flags().BoolVar(&showNetworks, "networks", false, "also list networks (cache-backed only; no effect when falling back to the live query)")
@@ -236,12 +245,65 @@ expand it first.`,
 	return command
 }
 
+// positionLine is the first line of every listing: the Current Position as
+// a Sandcastle Path, so the reader always knows where the names below live.
+func positionLine(config commandConfig) string {
+	return formatPath(currentPosition(config))
+}
+
+// formatMachineListShort is `sc ls` without -l: one machine per line, as a
+// bare name inside the listed project and as project/name when the listing
+// spans projects; unmanaged instances are marked. The table is -l.
+func formatMachineListShort(result listPayload) string {
+	if len(result.Machines) == 0 && len(result.Unmanaged) == 0 {
+		return "No Sandcastle machines found in " + listContext(result) + "."
+	}
+	qualify := result.AllProjects || naming.IsPattern(strings.TrimSpace(result.Project))
+	var b strings.Builder
+	for _, m := range result.Machines {
+		if qualify {
+			fmt.Fprintf(&b, "%s/%s\n", m.Project, m.Name)
+		} else {
+			fmt.Fprintln(&b, m.Name)
+		}
+	}
+	for _, u := range result.Unmanaged {
+		fmt.Fprintf(&b, "%s (unmanaged)\n", u.Name)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatMultiMachineListShort is the cross-install `sc ls` without -l: one
+// absolute Sandcastle Path per machine.
+func formatMultiMachineListShort(payload multiListPayload) string {
+	var b strings.Builder
+	for _, warning := range payload.Warnings {
+		fmt.Fprintf(&b, "warning: %s\n", warning)
+	}
+	total := 0
+	for _, section := range payload.Remotes {
+		for _, m := range section.Machines {
+			fmt.Fprintln(&b, formatPath([]string{section.Remote, section.Tenant.Tenant, m.Project, m.Name}))
+			total++
+		}
+		for _, u := range section.Unmanaged {
+			fmt.Fprintf(&b, "%s (unmanaged)\n", formatPath([]string{section.Remote, section.Tenant.Tenant, "-", u.Name}))
+			total++
+		}
+	}
+	if total == 0 {
+		fmt.Fprintf(&b, "No Sandcastle machines found on installs matching %q.", payload.RemotePattern)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // listInPathMode decides between the two grammars of `sc ls`: any path
-// argument, any path-only flag, or a Current Position above the project
-// level selects the tree walk; otherwise the colon listing runs unchanged,
-// so `sc ls`, `sc ls gbrain:*` and `sc ls -a` inside a project are untouched.
+// argument, -d/-R, or a Current Position above the project level selects
+// the tree walk; otherwise the colon listing runs, so `sc ls gbrain:*` and
+// `sc ls -a` inside a project keep their filters (-l picks the table in
+// both modes).
 func listInPathMode(config commandConfig, args []string, options pathListOptions) bool {
-	if options.Long || options.Directory || options.Recursive {
+	if options.Directory || options.Recursive {
 		return true
 	}
 	for _, arg := range args {
