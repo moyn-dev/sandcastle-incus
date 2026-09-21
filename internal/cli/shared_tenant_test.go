@@ -151,17 +151,17 @@ func TestTenantSwitchCreatesTheDirectorySelectionWithTheTenant(t *testing.T) {
 	t.Chdir(dir)
 	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), scconfig.SandcastleConfig{
 		Tenant: "thieso2", Project: "default", Remote: "thieso2sh", AuthHostname: "https://auth.example.com", AuthToken: "stored-token",
-		Installs: map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
+		Installs:      map[string]string{"thieso2sh": "https://auth.example.com", "moyn-dev": "https://auth.example.com"},
 		RemoteTenants: map[string]string{"thieso2sh": "thieso2", "moyn-dev": "moyn-dev"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	client := &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "thieso2"}, {Tenant: "moyn-dev", Shared: true, Member: true}}}
+	client := &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "thieso2"}, {Tenant: "moyn-dev", Shared: true, Member: true, DNSSuffix: "moyn-dev", DefaultProject: "default", IncusProject: "sc2-moyn-dev-default", IncusRemoteAddress: "100.64.0.9"}}}
 	admin := testAdminConfig()
 	admin.Tenant, admin.Remote, admin.AuthHostname, admin.AuthToken = "thieso2", "thieso2sh", "https://auth.example.com", "stored-token"
-	// The remote for moyn-dev is already enrolled (remote_tenants): the
-	// switch re-activates it and writes a NEW selection file here.
-	if _, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client}, "tenant", "switch", "moyn-dev"); err != nil {
+	// The switch enrols the member remote (fake installer) and writes a NEW
+	// selection file here.
+	if _, err := executeForTestWithConfig(t, commandConfig{adminConfig: admin, authTenants: client, tenantRemote: &fakeTenantRemoteInstaller{}}, "tenant", "switch", "moyn-dev"); err != nil {
 		t.Fatal(err)
 	}
 	local, path, err := scconfig.LoadDirectoryConfig(dir)
