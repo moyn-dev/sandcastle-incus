@@ -18,6 +18,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/cidr"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/update"
+	"os/exec"
 )
 
 // newUpdateCommand is the tenant-facing `sc update` (#124 §3): one status
@@ -25,7 +26,7 @@ import (
 // tenant sidecar (vs the deployment's version), and each visible project's
 // shared /.sc platform payload. Always user-initiated — never automatic.
 func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
-	var check, yes bool
+	var check, yes, noSelfUpdate bool
 	var pin string
 	command := &cobra.Command{
 		Use:   "update",
@@ -121,16 +122,33 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 
 			// Apply: CLI first (so a failed sidecar update still leaves a fresh
 			// CLI), then the sidecar via the deployment (broker-delegated).
+			if cliOutdated && noSelfUpdate {
+				// Second stage after a self-replacement: this IS the new binary.
+				cliOutdated = false
+			}
 			if cliOutdated {
 				if brewManaged {
 					// Never self-replace a Homebrew install: the Caskroom would
 					// desynchronize and the next `brew upgrade` silently downgrades.
 					fmt.Fprintln(config.stdout, "\nThe CLI is Homebrew-managed. Update it with:\n\n    brew upgrade sandcastle")
-				} else if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
-					return err
+				} else {
+					fmt.Fprintf(config.stdout, "\n== sc CLI: %s -> %s\n", cliCurrent, release.TagName)
+					if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
+						return err
+					}
+					if sidecarOutdated || skillsOutdated || payloadsOutdated {
+						// The skill and the platform payload are embedded in the
+						// executable; this process still carries the old ones. Hand
+						// the rest over to the binary just installed instead of
+						// asking the user to run `sc update` twice.
+						fmt.Fprintf(config.stdout, "== re-running with the new CLI to apply the remaining updates\n")
+						return rerunUpdateWithNewCLI(ctx, config, pin)
+					}
+					return nil
 				}
 			}
 			if sidecarOutdated {
+				fmt.Fprintf(config.stdout, "\n== sidecar: %s -> %s (via the deployment)\n", orUnknown(sidecarCurrent), orUnknown(deployment))
 				if err := updateSidecarViaDeployment(ctx, config); err != nil {
 					return err
 				}
@@ -139,33 +157,61 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			// embedded in the running binary (a just-replaced CLI brings its
 			// own newer skill; the next `sc update` picks that up).
 			if skillsOutdated {
+				fmt.Fprintf(config.stdout, "\n== agent skills\n")
 				refreshManagedSkills(config.stdout, config.stderr, skillRows, skillHome(config))
 			}
 			if payloadsOutdated {
-				if cliOutdated {
-					// The payload is embedded in the executable. This process still
-					// contains the old payload after a self-replacement, so never
-					// write it while claiming to install the new one.
-					fmt.Fprintln(config.stdout, "Project payload updates use the newly installed CLI; rerun `sc update` to apply them.")
-				} else {
-					statuses, err := config.tenantCreator.SyncVisiblePlatformPayload(ctx, strings.TrimSpace(config.adminConfig.Tenant), false)
-					if err != nil {
-						return fmt.Errorf("update project payloads: %w", err)
+				fmt.Fprintf(config.stdout, "\n== platform payload (/.sc/platform, shared by every Machine of a project)\n")
+				for _, r := range payloadRows {
+					if r.outdated {
+						fmt.Fprintf(config.stdout, "   %s: %s -> %s\n", r.project, orUnknown(r.current), r.wanted)
 					}
-					for _, status := range statuses {
-						if status.Changed {
-							fmt.Fprintf(config.stdout, "Project payload updated: %s (%s -> %s). All Machines observe it through /.sc.\n", status.IncusProject, orUnknown(status.Before), status.Target)
-						}
+				}
+				statuses, err := config.tenantCreator.SyncVisiblePlatformPayload(ctx, strings.TrimSpace(config.adminConfig.Tenant), false)
+				if err != nil {
+					return fmt.Errorf("update project payloads: %w", err)
+				}
+				for _, status := range statuses {
+					if status.Changed {
+						fmt.Fprintf(config.stdout, "   %s synced (%s -> %s); running Machines see it on their next shell, no restart needed.\n", status.IncusProject, orUnknown(status.Before), status.Target)
 					}
 				}
 			}
+			fmt.Fprintln(config.stdout, "\nDone.")
 			return nil
 		},
 	}
 	command.Flags().BoolVar(&check, "check", false, "only show the status table; apply nothing")
 	command.Flags().BoolVar(&yes, "yes", false, "apply without prompting")
 	command.Flags().StringVar(&pin, "version", "", "pin the CLI to a release tag (vX.Y.Z); an older tag rolls back")
+	command.Flags().BoolVar(&noSelfUpdate, "no-self-update", false, "second stage after a self-replacement: apply everything but the CLI")
+	_ = command.Flags().MarkHidden("no-self-update")
 	return command
+}
+
+// rerunUpdateWithNewCLI runs `sc update --yes --no-self-update` with the
+// binary that selfUpdateCLI just installed, passing stdio through, so one
+// `sc update` finishes the sidecar, skill and payload stages with the new
+// embedded content. A child process rather than exec(2): portable, and the
+// exit status still reaches the caller.
+func rerunUpdateWithNewCLI(ctx context.Context, config commandConfig, pin string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the updated binary: %w", err)
+	}
+	args := []string{"update", "--yes", "--no-self-update"}
+	if strings.TrimSpace(pin) != "" {
+		args = append(args, "--version", strings.TrimSpace(pin))
+	}
+	child := exec.CommandContext(ctx, exe, args...)
+	child.Stdin = config.stdin
+	child.Stdout = config.stdout
+	child.Stderr = config.stderr
+	child.Env = os.Environ()
+	if err := child.Run(); err != nil {
+		return fmt.Errorf("second update stage (%s %s): %w", exe, strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 type projectPayloadUpdateRow struct {

@@ -6450,3 +6450,12 @@ containing `\u@\h`) at the first prompt and leaves a custom one alone.
 Interactive PATH/mise verified on dev2; non-interactive `ssh host cmd`
 shells do not read the rc (Debian's `.bashrc` returns early), which is a
 known limit — use `ssh host 'bash -ic cmd'` or a login shell for now.
+
+## 2026-09-21 — `sc update` finishes in one run
+
+After replacing its own binary the old process still carried the old
+embedded skill and payload, so it asked for a second `sc update`. It now
+re-runs the freshly installed binary as a child (`update --yes
+--no-self-update`, hidden flag) with stdio passed through — a child rather
+than exec(2) so it stays portable and the exit status propagates — and each
+stage narrates what it changes.
