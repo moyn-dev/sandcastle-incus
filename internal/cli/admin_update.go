@@ -70,9 +70,11 @@ func newAdminUpdateCommand(config commandConfig) *cobra.Command {
 				return fmt.Errorf("no updatable components found for install %q on this admin remote — "+
 					"check the remote (SANDCASTLE_REMOTE) and the install (--prefix)", prefix)
 			}
+			// Always both versions per row — an operator confirming an update
+			// must see what is running now, not just the target.
 			fmt.Fprintf(config.stdout, "Updating to %s:\n", release.TagName)
 			for _, t := range targets {
-				fmt.Fprintf(config.stdout, "  %s %s/%s\n", t.Kind, t.Project, t.Instance)
+				fmt.Fprintf(config.stdout, "  %s %s/%s  %s -> %s\n", t.Kind, t.Project, t.Instance, orUnknown(t.BinaryVersion), release.TagName)
 			}
 			if !yes {
 				ok, err := confirmMissingYesNamed(config, "Proceed?",

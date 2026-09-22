@@ -56,7 +56,7 @@ var machineLifecycleAliases = map[string][]string{
 }
 
 func newMachineLifecycleCommand(config commandConfig, opts *rootOptions, use string, action machine.Action, requireYes bool) *cobra.Command {
-	var yes, dryRun, recursive bool
+	var yes, force, dryRun, recursive bool
 	command := &cobra.Command{
 		Use:     use + " [[remote:]project:]machine",
 		Aliases: machineLifecycleAliases[use],
@@ -73,6 +73,7 @@ reports every machine it acted on.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: pathCompletion(config, levelMachine),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			yes = yes || force
 			if action == machine.ActionDelete && isPathReference(args[0]) {
 				// `sc rm /remote/tenant/project` removes a project; a machine
 				// path falls through to the machine grammar below.
@@ -95,6 +96,7 @@ reports every machine it acted on.`,
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "show targets and certificate decision without changing machines")
 	if requireYes {
 		command.Flags().BoolVar(&yes, "yes", false, "confirm machine deletion")
+		command.Flags().BoolVarP(&force, "force", "f", false, "delete without asking (same as --yes)")
 		command.Flags().BoolVarP(&recursive, "recursive", "r", false, "with a project path: delete the project's machines first, then the project")
 	}
 	return command
@@ -142,6 +144,27 @@ func removeProjectPath(ctx context.Context, config commandConfig, opts *rootOpti
 			return true, err
 		}
 		if len(machines) > 0 {
+			// ONE confirmation for the whole removal — the project and its
+			// machines are a single decision, not a prompt per step.
+			if !yes && !dryRun {
+				names := make([]string, 0, len(machines))
+				for _, m := range machines {
+					names = append(names, m.Name)
+				}
+				noun := "machine"
+				if len(names) > 1 {
+					noun = "machines"
+				}
+				prompt := fmt.Sprintf("Delete project %s and its %d %s (%s)?", formatPath(segments), len(names), noun, strings.Join(names, ", "))
+				confirmed, err := confirmMissingYes(bound, prompt, "refusing to delete project without --yes")
+				if err != nil {
+					return true, err
+				}
+				if !confirmed {
+					return true, fmt.Errorf("delete canceled")
+				}
+				yes = true
+			}
 			if err := runMachineLifecycle(ctx, bound, opts, defaultRemoteFanout(), project+":*", machine.ActionDelete, true, yes); err != nil {
 				return true, err
 			}

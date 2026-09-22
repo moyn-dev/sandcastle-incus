@@ -62,7 +62,7 @@ sc ls -d '../**'            # ** matches across levels: every project and machin
 sc stop '/**/dev'           # in a machine reference ** is as many * as reach a machine (= '*:*:dev')
 sc c ../api/dev             # any machine command takes a path
 sc mkdir ../api             # create a project;  sc mkdir -p ../api/dev  project then machine
-sc rm ../api                # delete an (empty) project;  sc rm -r ../api  its machines first
+sc rm ../api                # delete an (empty) project;  sc rm -r ../api  its machines first (one prompt);  -f = no prompt
 sc completion zsh           # tab completion of paths (bash, zsh, fish, powershell)
 ```
 

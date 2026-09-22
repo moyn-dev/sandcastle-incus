@@ -2344,6 +2344,9 @@ SANDCASTLE_REMOTE=<other-remote> sc admin update --check
 
 # 10b — global update (admin)
 sc-adm update --yes                     # or --version v<X.Y.Z> to pin/rollback
+# PASS: the plan under "Updating to v<X.Y.Z>:" prints every row as
+#       "<kind> <project>/<instance>  <running> -> v<X.Y.Z>" — the running version is
+#       always shown next to the target ("unknown" for an unstamped appliance).
 # 10b-all — the one-shot variant: components + every sidecar + every tenant's
 # profiles re-rendered + this CLI. expect: the 10b lines, then one
 # "ok   profiles <tenant> re-rendered" per tenant, then "ok   CLI → v<X.Y.Z>"
@@ -3258,7 +3261,7 @@ coverage: `go test ./internal/cli -run 'TestCdPwdLs|TestPathToMachine|TestResolv
 | **14b** cd | `sc cd web` (from `default`) prints `/<remote>/<tenant>/web`; `.sandcastle` has `project: web`, no `level`; `sc project list` marks `web`; `sc cd nope` fails with `project nope not found`; `sc cd ./dev` fails with `is a machine` |
 | **14c** up | `sc cd ..` prints `/<remote>/<tenant>`; `.sandcastle` has `level: tenant`, `previous: /<remote>/<tenant>/web`, `project: web` kept; `sc ls` lists the project names; `sc create x` is refused with `not in a project`; `sc connect dev -- hostname` resolves `web:dev` through the tenant-wide lookup and `sc connect nope` is refused with `no machine "nope" in any project`; `sc cd -` returns to `/<remote>/<tenant>/web` |
 | **14d** globs | from `web`: `sc ls '../*'` prints every project under a `path:` header; `sc ls -d '../*'` the paths only; `sc ls -l ..` a `PROJECT DOMAIN IMAGE` table; `sc ls -R ..` the machines of every project; `sc ls ../web/d*` prints `/<remote>/<tenant>/web/dev`; `sc ls -d '../**'` lists every project and machine of the tenant; `sc ls '/**/web/*'` the machines of project web; `sc stop /<remote>/<tenant>/web/dev`, `sc start ./dev` and `sc restart '/**/dev'` act on `web:dev` |
-| **14e** mkdir/rm | `sc mkdir ../api` creates project api (visible in `sc project list`); `sc mkdir -p ../api2/dev` creates project api2 and machine `api2:dev`; `sc rm ../api --yes` deletes the empty project; `sc rm -r ../api2 --yes` deletes `api2:dev` then api2; `sc mkdir /` and `sc rm ..` are refused with the remote/tenant guidance |
+| **14e** mkdir/rm | `sc mkdir ../api` creates project api (visible in `sc project list`); `sc mkdir -p ../api2/dev` creates project api2 and machine `api2:dev`; `sc rm ../api --yes` deletes the empty project; `sc rm -r ../api2 --yes` deletes `api2:dev` then api2 (interactively, `sc rm -r ../api2` asks ONCE — "Delete project … and its 1 machine (dev)?" — never a second "Delete project" prompt; `-f` asks nothing); `sc mkdir /` and `sc rm ..` are refused with the remote/tenant guidance |
 | **14f** home/root | `sc cd /` prints `/`; `sc ls` lists the enrolled remotes and `sc ls -l /` shows `REMOTE TENANT PROJECT AUTH`; `sc ls /<remote>` lists the accessible tenants; `sc cd` (no argument) returns to the global config's `/<remote>/<tenant>/<project>` |
 | **14g** cross-remote | with a second enrolled install: `sc cd /<other>/<its tenant>/<its project>` switches remote (as `sc remote switch` does) and `sc ls` lists that install's machines; `sc cd /<other>/<wrong-tenant>` fails through Tenant Access validation; `sc c /<other>/<tenant>/<project>/<machine> -- true` from the first install runs without a durable switch (`sc pwd` unchanged); `sc ls <other>:<project>` reports `<its tenant>@<other>:<project>`, not the current tenant |
 | **14h** completion | `sc completion zsh` emits a script; `sc __complete cd ../` lists the sibling projects with a trailing `/`; `sc __complete connect ./` lists the project's machines; `sc __complete cd /` lists the remotes |
