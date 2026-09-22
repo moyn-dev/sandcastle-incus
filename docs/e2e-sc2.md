@@ -2809,7 +2809,7 @@ sc create zp:web
 #   openssl s_client -connect <bridge-ip>:443 -servername web.zp.<suffix> </dev/null 2>/dev/null | openssl x509 -noout -issuer
 #       # → the tenant CA issuer: the private name serves from the first boot
 # PASS (connect): `sc c zp:web -- hostname -f` prints web.zp.<suffix>, the ssh line is
-#       `Connecting: ssh dev@<bridge-ip>` with HostKeyAlias=web.zp.<suffix>, and ~/.ssh/known_hosts gains ONE line
+#       `Connecting to /<remote>/<tenant>/zp/web: ssh dev@<bridge-ip>` with HostKeyAlias=web.zp.<suffix>, and ~/.ssh/known_hosts gains ONE line
 #       keyed `web.zp.<suffix>,web.e2e-$RUN.$ZONE` (private name first, then the public name) with the
 #       `# sandcastle:<remote>/<tenant>` marker; `sc ssh-key purge --dry-run` reports nothing to do for it.
 # PASS (private DNS): `dig web.zp.<suffix> @<sidecar-tailscale-ip>` answers the bridge IP — every machine keeps its
