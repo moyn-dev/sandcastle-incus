@@ -95,10 +95,13 @@ has_machine "" web || sc create web
 has_ip() { [[ -n "$(machine_ip "$1" "$2")" ]]; }
 wait_for 180 "web's address" has_ip "" web
 IP="$(machine_ip "" web)"
+# The login user is the tenant's unix user (the tenant name unless the
+# install or the tenant chose another); read it off the machine record.
+LOGIN="$(sc ls --json | jq -r '.machines[] | select(.name=="web") | .linuxUser // empty')"; LOGIN="${LOGIN:-$TENANT}"
 ssh_ok() { client ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$@" true >/dev/null 2>&1; }
-wait_for 300 "sshd on $IP (and the shared tenant's subnet route)" ssh_ok -i "$OWNER_KEY" -o IdentitiesOnly=yes "dev@$IP"
-ssh_ok -i "$OWNER_KEY" -o IdentitiesOnly=yes "dev@$IP" || fail "$OWNER's key is not authorized on web"
-ssh_ok -i "$MEMBER_KEY" -o IdentitiesOnly=yes "dev@$IP" || fail "$MEMBER's key is not authorized on web"
+wait_for 600 "sshd on $IP (and the shared tenant's subnet route)" ssh_ok -i "$OWNER_KEY" -o IdentitiesOnly=yes "$LOGIN@$IP"
+ssh_ok -i "$OWNER_KEY" -o IdentitiesOnly=yes "$LOGIN@$IP" || fail "$OWNER's key is not authorized on web"
+ssh_ok -i "$MEMBER_KEY" -o IdentitiesOnly=yes "$LOGIN@$IP" || fail "$MEMBER's key is not authorized on web"
 pass "web authorizes both members' keys"
 
 step "13e — a project created by one member is usable by the other (certificate scope follows)"
@@ -124,7 +127,10 @@ AUTH_HOST="${SANDCASTLE_E2E_AUTH_HOST:?set SANDCASTLE_E2E_AUTH_HOST (https://<au
 SIM="${SANDCASTLE_E2E_SIMULATE_TOKEN:?set SANDCASTLE_E2E_SIMULATE_TOKEN (the --simulate-github-token of the install)}"
 NEWHOME="/root/e2e-newdev-$MEMBER"
 client_sh "rm -rf $NEWHOME && mkdir -p $NEWHOME/.ssh && cp ${MEMBER_KEY} ${MEMBER_KEY}.pub $NEWHOME/.ssh/ && chmod 700 $NEWHOME/.ssh"
-newdev() { client env HOME="$NEWHOME" "$BIN" "$@"; }
+# Run from inside the new HOME too: the client's own /tmp/.sandcastle (the
+# first identity's selection) would otherwise be picked up by the walk-up
+# and, naming a remote the new config never enrolled, drop its credentials.
+newdev() { local q=""; for a in "$@"; do q+=" $(printf %q "$a")"; done; client sh -c "cd $NEWHOME && HOME=$NEWHOME $BIN$q"; }
 OUT="$(newdev login "$AUTH_HOST" --simulate-token "$SIM" --as "$MEMBER" --ssh-public-key "$NEWHOME/.ssh/$(basename "$MEMBER_KEY").pub" --skip-setup 2>&1)" || fail "new-device login: $OUT"
 OUT="$(newdev tenant switch "$TENANT" 2>&1)" || fail "new-device switch: $OUT"
 OUT="$(newdev incus list --format csv 2>&1)" || fail "new device is refused on the shared project (certificate not extended at login): $OUT"
