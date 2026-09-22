@@ -1494,6 +1494,13 @@ sc ssh-key purge --yes                         # drops tagged orphans + recycled
   without a TTY and without `--yes` it refuses.
 
 ### Phase 7d — second project via broker self-service
+
+> Since 2026-09-22 a project created through the Auth App gets a default
+> image at creation: `--image` if given, else the tenant's default project's
+> image, else the install default (`images:ubuntu/26.04/cloud`). PASS: after
+> `sc project create api`, `sc project list -l` shows that image in the
+> IMAGE column and `sc create api:dev --dry-run` names it; the broker path
+> (no Auth App) leaves the column `-`.
 A tenant creates additional projects THEMSELVES through the broker's tenant
 plane, authenticated by their enrolled client certificate. The broker scaffolds
 the project (bridge wiring, default profile with the tenant's user + key, its

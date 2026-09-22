@@ -1271,6 +1271,12 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if image := strings.TrimSpace(request.Image); image != "" {
+		if err := tenant.ValidateMachineImageRef(image); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if strings.TrimSpace(request.Domain) != "" || request.DryRun {
 		// The Project Domain path (ADR-0027 §3.2): claim first, then create
 		// with KeyV2Domain in the same Incus request; JSON error bodies so the
@@ -1288,6 +1294,9 @@ func (h handler) projectsAPI(w http.ResponseWriter, r *http.Request) {
 	err = svclog.Span(r.Context(), "project.create", func() error {
 		var createErr error
 		result, createErr = h.projects.CreateTenantProject(r.Context(), tenantName, project, clientCertificatePEM)
+		if createErr == nil {
+			result.Image = h.setNewProjectImage(r, tenantName, project, request.Image)
+		}
 		return createErr
 	})
 	if err != nil {

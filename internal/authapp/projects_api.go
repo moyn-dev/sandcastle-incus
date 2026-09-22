@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/thieso2/sandcastle-incus/internal/config"
 	"net/http"
 	"strings"
 
@@ -51,7 +52,10 @@ type TenantProjectDomainManager interface {
 type ProjectCreateRequest struct {
 	Project string `json:"project"`
 	Domain  string `json:"domain,omitempty"`
-	DryRun  bool   `json:"dryRun,omitempty"`
+	// Image is the project's default machine image; empty inherits the
+	// tenant's default project's image, else the install's default.
+	Image  string `json:"image,omitempty"`
+	DryRun bool   `json:"dryRun,omitempty"`
 }
 
 // ProjectDomainRequest is the body of PUT /api/projects/{name}/domain.
@@ -147,6 +151,9 @@ func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request,
 	err = svclog.Span(r.Context(), "project.create", func() error {
 		var createErr error
 		result, createErr = h.projectDomains.CreateTenantProjectWithDomain(r.Context(), tenantName, project, clientCertificatePEM, claim.Domain)
+		if createErr == nil {
+			result.Image = h.setNewProjectImage(r, tenantName, project, request.Image)
+		}
 		return createErr
 	})
 	if err != nil {
@@ -161,6 +168,56 @@ func (h handler) projectCreateWithDomain(w http.ResponseWriter, r *http.Request,
 	h.extendMemberCertificates(r, tenantName, user.UserKey, result.IncusProject)
 	h.kickZoneReconcile()
 	writeJSON(w, http.StatusOK, result)
+}
+
+// defaultProjectImage is the image a new project gets when the request
+// names none: the tenant's default project's image (a tenant that chose one
+// keeps every project consistent), else the install's default — so no
+// project is left without one, which silently fell back to the CLI's
+// built-in machine image.
+func (h handler) defaultProjectImage(ctx context.Context, tenantName string, requested string) string {
+	if requested = strings.TrimSpace(requested); requested != "" {
+		return requested
+	}
+	if h.tenants != nil {
+		if summaries, err := tenant.ListForPrefix(ctx, h.tenants, h.admin.IncusProjectPrefix); err == nil {
+			for _, summary := range summaries {
+				if summary.Tenant != tenantName {
+					continue
+				}
+				defaultProject := strings.TrimSpace(summary.DefaultProject)
+				if defaultProject == "" {
+					defaultProject = naming.DefaultProjectName
+				}
+				for _, p := range summary.Projects {
+					if p.Name == defaultProject && strings.TrimSpace(p.Image) != "" {
+						return strings.TrimSpace(p.Image)
+					}
+				}
+			}
+		}
+	}
+	if image := strings.TrimSpace(h.admin.ProjectImage); image != "" {
+		return image
+	}
+	return config.DefaultProjectImage
+}
+
+// setNewProjectImage stores a freshly created project's default image (see
+// defaultProjectImage) and returns it; a deployment without the image seam,
+// or a failed write, leaves the project imageless and returns "" — the
+// project exists either way, and `sc project set-image` repairs it.
+func (h handler) setNewProjectImage(r *http.Request, tenantName string, project string, requested string) string {
+	setter, ok := h.projectDomains.(projectImageSetter)
+	if !ok {
+		return ""
+	}
+	image := h.defaultProjectImage(r.Context(), tenantName, requested)
+	if err := setter.SetProjectImage(r.Context(), tenantName, project, image); err != nil {
+		svclog.Logf(r.Context(), "project.create: could not set the default image of %s/%s: %v", tenantName, project, err)
+		return ""
+	}
+	return image
 }
 
 // projectAPI routes /api/projects/{name} and /api/projects/{name}/domain.

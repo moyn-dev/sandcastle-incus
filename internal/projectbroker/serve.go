@@ -99,6 +99,8 @@ type ProjectResult struct {
 	Domain string `json:"domain,omitempty"`
 	// Zone is the Public DNS Zone the Domain was claimed under.
 	Zone string `json:"zone,omitempty"`
+	// Image is the default machine image the project was given at creation.
+	Image string `json:"image,omitempty"`
 	// DryRun marks a validation-only create: nothing was claimed or created.
 	DryRun bool `json:"dryRun,omitempty"`
 }

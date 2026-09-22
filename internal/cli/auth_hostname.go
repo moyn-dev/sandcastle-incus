@@ -241,7 +241,29 @@ func commandAuthHostname(config commandConfig, override string) string {
 	if host := inferAuthHostnameFromRemote(config.adminConfig.Remote); host != "" {
 		return host
 	}
+	// Admin commands run against the admin remote (the Incus host, e.g.
+	// "big"), which is never a login remote and so has no recorded install.
+	// The install the user CLI is on does: try it before the top-level
+	// auth_hostname, which is only the last login's value and can be a stale
+	// placeholder (auth.example.com) on a client with several logins.
+	if host := recordedInstallHostname(activeUserRemote(config)); host != "" {
+		return host
+	}
 	return normalizeAuthHostname(config.adminConfig.AuthHostname)
+}
+
+// activeUserRemote returns the remote the user CLI is on: the ActiveInstall
+// ExecuteAdmin resolved, else the same resolution `sc ls` uses (directory
+// selection first, then the global config). Empty when nothing is enrolled.
+func activeUserRemote(config commandConfig) string {
+	if remote := strings.TrimSpace(config.adminConfig.ActiveInstall); remote != "" {
+		return remote
+	}
+	userConfig, err := scconfig.LoadUserWithError()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(userConfig.Remote)
 }
 
 // recordedInstallHostname returns the public Auth Hostname recorded for a remote

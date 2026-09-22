@@ -130,7 +130,7 @@ sc c backend:api -- uptime  # …in another project
 sc start dev / sc stop dev / sc restart dev      # aliases: up / down / reboot
 sc delete dev --yes                              # alias: del / rm
 sc fix dev                  # backfill maintenance fixups over SSH (idempotent)
-sc p set-image work images:ubuntu/26.04/cloud          # project default image for sc create (unset-image clears)
+sc p set-image work images:ubuntu/26.04/cloud          # project default image for sc create (unset-image clears); a NEW project gets one at creation: --image, else the tenant's default project's, else the install default (ubuntu 26.04 cloud)
 sc p rerender work          # re-render the project's cloud-init profile after a release; NEW machines get it
 sc c dev -- install-agentic.sh                   # on the machine: mise + herdr, claude, codex for the login user
 ```

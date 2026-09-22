@@ -5,6 +5,20 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-22 — A new project always gets a default image
+
+`sc project create claw` left the project without an image, so machines
+fell back to the CLI's built-in `images:debian/13/cloud` until someone ran
+`sc project set-image`. Asked: set it at creation. The Auth App now sets
+the new project's image when the request names none: the tenant's default
+project's image if it has one (a tenant that chose an image keeps it
+consistent across projects), else the install default
+`images:ubuntu/26.04/cloud` (`SANDCASTLE_DEFAULT_PROJECT_IMAGE` on the
+auth-app process). `sc project create --image` and `sc mkdir --image` on a
+project path pass an explicit one. Existing projects are untouched; the
+CLI's built-in fallback for imageless projects stays as it was. The broker
+path of `sc project create` (no Auth App) does not set an image.
+
 ## 2026-09-22 — Project-scoped `incus` shell-outs name their remote
 
 `sc tunnel publish` (and `sc tailnet`, the bare-machine `incus exec`)

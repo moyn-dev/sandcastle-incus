@@ -33,7 +33,7 @@ import (
 func newProjectCreateV2Command(config commandConfig, opts *rootOptions) *cobra.Command {
 	var broker, certFile, keyFile string
 	var writeRemote, dryRun bool
-	var incusEndpoint, incusConf, remoteName, domainFlag string
+	var incusEndpoint, incusConf, remoteName, domainFlag, imageFlag string
 	command := &cobra.Command{
 		Use:   "create name",
 		Short: "Create a project in the current tenant (self-service via the Auth App or the broker)",
@@ -65,7 +65,7 @@ path can claim a domain.`,
 			// a tunnel, needs no broker port and no client certificate. The
 			// broker path below remains for --broker/BYO setups.
 			if projectAuthAppAvailable(config, broker) {
-				return runProjectCreateViaAuthApp(cmd.Context(), config, opts, authapp.ProjectCreateRequest{Project: project, Domain: domainValue, DryRun: dryRun}, writeRemote, incusEndpoint, incusConf, remoteName)
+				return runProjectCreateViaAuthApp(cmd.Context(), config, opts, authapp.ProjectCreateRequest{Project: project, Domain: domainValue, Image: strings.TrimSpace(imageFlag), DryRun: dryRun}, writeRemote, incusEndpoint, incusConf, remoteName)
 			}
 			if domainValue != "" {
 				return fmt.Errorf("--domain is not available on this install")
@@ -152,6 +152,7 @@ path can claim a domain.`,
 	command.Flags().StringVar(&incusConf, "incus-conf", "", "INCUS_CONF dir to write the remote into (default: $INCUS_CONF or the incus default)")
 	command.Flags().StringVar(&remoteName, "remote-name", "", "name for the per-project remote (default: <tenant>-<project>)")
 	command.Flags().StringVar(&domainFlag, "domain", "", "claim this Project Domain for the project (one label or more below a registered Public DNS Zone; Auth App path only)")
+	command.Flags().StringVar(&imageFlag, "image", "", "the project's default machine image (default: the tenant's default project's image, else the install's default, images:ubuntu/26.04/cloud)")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate (including the domain claim) without creating anything")
 	return command
 }
@@ -205,6 +206,9 @@ func runProjectCreateViaAuthApp(ctx context.Context, config commandConfig, opts 
 	text := fmt.Sprintf("Project %s created.", path)
 	if result.IncusProject != "" {
 		text = fmt.Sprintf("Project %s created (Incus project %s).", path, result.IncusProject)
+	}
+	if result.Image != "" {
+		text += fmt.Sprintf("\nDefault image: %s (change with sc project set-image %s <image>).", result.Image, result.Project)
 	}
 	if result.Domain != "" {
 		text += fmt.Sprintf("\nProject domain: %s (zone %s) — machines created in %s get the public name <machine>.%s", result.Domain, result.Zone, result.Project, result.Domain)

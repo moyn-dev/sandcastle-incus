@@ -36,7 +36,7 @@ sc enroll, and tenants with sc-adm create tenant.`,
 		},
 	}
 	command.Flags().BoolVarP(&parents, "parents", "p", false, "create the project first when a machine's project does not exist")
-	command.Flags().StringVar(&image, "image", "", "image to launch a machine from (default "+v2DefaultMachineImage+")")
+	command.Flags().StringVar(&image, "image", "", "for a machine: the image to launch it from (default: the project's image); for a project: its default machine image (default: inherited from the tenant's default project, else the install's default)")
 	command.Flags().BoolVar(&vm, "vm", false, "launch a virtual machine instead of a container")
 	return command
 }
@@ -73,7 +73,7 @@ func runMkdir(ctx context.Context, config commandConfig, opts *rootOptions, arg 
 		return fmt.Errorf("remote %q serves tenant %q, not %q: `sc cd /%s/%s` first", remote, served, tenantName, remote, tenantName)
 	}
 	if len(segments) == levelProject {
-		return createProjectViaPath(ctx, bound, opts, project)
+		return createProjectViaPath(ctx, bound, opts, project, options.Image)
 	}
 	summary, err := requireV2Tenant(ctx, bound)
 	if err != nil {
@@ -83,7 +83,7 @@ func runMkdir(ctx context.Context, config commandConfig, opts *rootOptions, arg 
 		if !options.Parents {
 			return fmt.Errorf("project %s does not exist in tenant %s: create it with `sc mkdir %s` or pass -p", project, summary.Tenant, formatPath(segments[:levelProject]))
 		}
-		if err := createProjectViaPath(ctx, bound, opts, project); err != nil {
+		if err := createProjectViaPath(ctx, bound, opts, project, ""); err != nil {
 			return err
 		}
 		// The project list is served from the Auth App cache, which learns
@@ -99,14 +99,14 @@ func runMkdir(ctx context.Context, config commandConfig, opts *rootOptions, arg 
 // createProjectViaPath creates a project through the Auth App's tenant
 // plane, the path every logged-in CLI has; the broker and client-certificate
 // paths stay with `sc project create`, which keeps their flags.
-func createProjectViaPath(ctx context.Context, config commandConfig, opts *rootOptions, project string) error {
+func createProjectViaPath(ctx context.Context, config commandConfig, opts *rootOptions, project string, image string) error {
 	if err := naming.ValidateNewProjectName(project); err != nil {
 		return err
 	}
 	if !projectAuthAppAvailable(config, "") {
 		return fmt.Errorf("creating a project by path needs an Auth App login on remote %q (run sc login), or use `sc project create %s` with --broker", strings.TrimSpace(config.adminConfig.Remote), project)
 	}
-	return runProjectCreateViaAuthApp(ctx, config, opts, authapp.ProjectCreateRequest{Project: project}, false, "", "", "")
+	return runProjectCreateViaAuthApp(ctx, config, opts, authapp.ProjectCreateRequest{Project: project, Image: strings.TrimSpace(image)}, false, "", "", "")
 }
 
 // requireProjectPosition refuses a creating command that would fall back to

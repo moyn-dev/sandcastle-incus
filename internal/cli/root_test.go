@@ -1336,6 +1336,28 @@ func TestCommandAuthHostnamePrefersCurrentRemoteOverSavedConfig(t *testing.T) {
 	}
 }
 
+func TestCommandAuthHostnameAdminRemoteFallsBackToActiveInstall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir()) // no directory config from the developer's own tree
+	t.Setenv("SANDCASTLE_REMOTE", "")
+	t.Setenv("SANDCASTLE_AUTH_HOSTNAME", "")
+	cfg := scconfig.SandcastleConfig{
+		Remote:       "idefix",
+		AuthHostname: "https://auth.example.com",
+		Installs:     map[string]string{"idefix": "https://idefix.thieso2.dev"},
+	}
+	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	admin := testAdminConfig()
+	// The admin remote is the Incus host; it has no recorded install.
+	admin.Remote = "big"
+	admin.AuthHostname = "https://auth.example.com"
+	if got := commandAuthHostname(commandConfig{adminConfig: admin}, ""); got != "https://idefix.thieso2.dev" {
+		t.Fatalf("auth hostname = %q", got)
+	}
+}
+
 func TestCommandAuthHostnameExplicitOverridesRemoteInference(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SANDCASTLE_AUTH_HOSTNAME", "env.example.dev")
@@ -1359,6 +1381,8 @@ func TestCommandAuthHostnameExplicitOverridesRemoteInference(t *testing.T) {
 }
 
 func TestCloudIdentityGCPSetupConfiguresTenantFederation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // the Auth Hostname must come from adminConfig, not the developer's logins
+	t.Chdir(t.TempDir())
 	runner := &fakeGCloudRunner{}
 	admin := testAdminConfig()
 	admin.Tenant = "thieso2"

@@ -404,6 +404,7 @@ func adminFromConfigAndEnv(cfg SandcastleConfig, env map[string]string) Admin {
 		AuthAdminGitHubUsers:   splitListFrom(env, "SANDCASTLE_AUTH_ADMIN_GITHUB_USERS"),
 		AuthDebugDeviceUser:    strings.TrimSpace(env["SANDCASTLE_AUTH_DEBUG_DEVICE_USER"]),
 		AuthTailscaleAuthKey:   authTailscaleAuthKeyFromEnv(env),
+		ProjectImage:           strings.TrimSpace(env["SANDCASTLE_DEFAULT_PROJECT_IMAGE"]),
 		RouteBrokerIncusSocket: strings.TrimSpace(env["SANDCASTLE_ROUTE_BROKER_INCUS_SOCKET"]),
 		AllowedDomainSuffixes:  splitListFrom(env, "SANDCASTLE_ALLOWED_DOMAIN_SUFFIXES"),
 		DeniedDomainSuffixes:   splitListFrom(env, "SANDCASTLE_DENIED_DOMAIN_SUFFIXES"),

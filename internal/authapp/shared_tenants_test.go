@@ -3,6 +3,7 @@ package authapp
 import (
 	"context"
 	"encoding/json"
+	"github.com/thieso2/sandcastle-incus/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -203,6 +204,25 @@ func TestProjectsAPIActsOnTheRequestTenantForMembersOnly(t *testing.T) {
 	}
 	if !slices.Equal(projects.created, []string{"moyn-dev/api", "thieso2/api"}) {
 		t.Fatalf("created = %v", projects.created)
+	}
+	// A new project always gets a default image: the install default when
+	// neither the request nor the tenant's default project names one.
+	if !slices.Equal(projects.images, []string{"moyn-dev/api=" + config.DefaultProjectImage, "thieso2/api=" + config.DefaultProjectImage}) {
+		t.Fatalf("images = %v", projects.images)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"project":"api2","image":"images:debian/13/cloud"}`))
+	req.Header.Set("Authorization", "Bearer "+tokens["thieso2"])
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || projects.images[len(projects.images)-1] != "thieso2/api2=images:debian/13/cloud" || !strings.Contains(res.Body.String(), `"image":"images:debian/13/cloud"`) {
+		t.Fatalf("explicit image = %d %q images = %v", res.Code, res.Body.String(), projects.images)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"project":"api3","image":"bad ref"}`))
+	req.Header.Set("Authorization", "Bearer "+tokens["thieso2"])
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("bad image ref = %d", res.Code)
 	}
 }
 

@@ -27,7 +27,14 @@ const (
 	// The Dev Image is a distinct template (Ubuntu 26.04, not Debian 13), so it
 	// gets its own stock public images: alias rather than reusing Base/AI's.
 	// Not verified against a live Incus images: remote — see implementation-notes.md.
-	DefaultDevImageAlias          = "images:ubuntu/26.04"
+	DefaultDevImageAlias = "images:ubuntu/26.04"
+	// DefaultProjectImage is what a NEW project's default machine image is set
+	// to at creation when the request names none and the tenant's default
+	// project has none to inherit. A project without an image fell back to
+	// the CLI's built-in machine image, which surprised users who expected
+	// the install's dev image; setting it explicitly at creation keeps it
+	// visible (`sc project list -l`) and changeable (`sc project set-image`).
+	DefaultProjectImage           = "images:ubuntu/26.04/cloud"
 	DefaultRouteBrokerIncusSocket = "/var/lib/incus/unix.socket"
 )
 
@@ -62,6 +69,9 @@ type Admin struct {
 	AuthAdminGitHubUsers   []string
 	AuthDebugDeviceUser    string
 	AuthTailscaleAuthKey   string
+	// ProjectImage is the image a new project is given at creation
+	// (SANDCASTLE_DEFAULT_PROJECT_IMAGE; DefaultProjectImage when unset).
+	ProjectImage           string
 	AuthToken              string
 	Broker                 string // Sandcastle Broker URL for tenant self-service
 	RouteBrokerIncusSocket string
