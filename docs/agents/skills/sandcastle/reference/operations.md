@@ -289,6 +289,10 @@ sc payload-sync           # converge every app project of the tenant
 - `install-agentic.sh` (on PATH via `/.sc/platform/bin`) installs mise for
   the calling user, then `herdr`, `claude` and `codex` through it; re-run to
   upgrade. `SC_AGENTIC_TOOLS="claude"` narrows the set. Not as root.
+  With herdr in the set it seeds `~/.config/herdr/config.toml` from
+  `/.sc/platform/etc/herdr/config.toml` (Omarchy's tmux keys, `ctrl+space`
+  prefix; only when the user has no config, never overwritten) and runs
+  `herdr integration install` for claude/codex so herdr shows agent state.
 
 Written once per project, never per machine. Running machines pick the change up
 through the mount — no re-create, no sweep. Rolling back means running

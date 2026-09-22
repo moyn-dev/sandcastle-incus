@@ -3186,7 +3186,7 @@ proof because certificate transparency indexing may lag. Record live timing
 and any unavailable acceptance checks separately from unit tests.
 
 
-## Phase 13 — Shared Tenants (ADR-0029, `docs/spec/shared-tenants.md`) ✅ 13a–13g PASS 2026-09-21
+## Phase 13 — Shared Tenants (ADR-0029, `docs/spec/shared-tenants.md`) ✅ 13a–13h PASS 2026-09-22 (13a–13g 2026-09-21)
 
 One tenant, several users. Membership is Tenant Metadata (`v2.members` on
 the infra project), every member's login key is authorized on the tenant's
@@ -3230,7 +3230,8 @@ SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFI
 
 Live run 2026-09-21 (`big:sc-shared-e2e`, Incus 7.4, install prefix `sh`,
 Auth Hostname `https://sh-shared.tc42.uk`, client `big:e2e-pdz-client`):
-see `docs/e2e-runs/2026-09-21-phase13-shared-tenants.md`.
+see `docs/e2e-runs/2026-09-21-phase13-shared-tenants.md`; 13h added and the whole
+phase re-run 2026-09-22, see `docs/e2e-runs/2026-09-22-phase13-shared-tenants-13h.md`.
 
 ## Phase 14 — Path navigation: `sc cd` / `pwd` / `ls <path>` / `mkdir` / `rm` (ADR-0030) ✅ 14a–14i PASS 2026-09-21
 

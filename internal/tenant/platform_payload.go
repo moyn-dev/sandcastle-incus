@@ -45,8 +45,12 @@ const (
 	SCPayloadCloudflaredPath = "sbin/cloudflared"
 	// SCPayloadInstallAgenticPath is the user-facing `install-agentic.sh`:
 	// installs mise for the calling user and, through it, herdr, claude and
-	// codex. Lives under bin/ (on every machine's PATH via the shell rc).
+	// codex, plus herdr's config and agent integrations. Lives under bin/
+	// (on every machine's PATH via the shell rc).
 	SCPayloadInstallAgenticPath = "bin/install-agentic.sh"
+	// SCPayloadHerdrConfigPath is the default herdr config install-agentic.sh
+	// copies to ~/.config/herdr/config.toml when the user has none.
+	SCPayloadHerdrConfigPath = "etc/herdr/config.toml"
 )
 
 // PlatformPayload returns the versioned /.sc/platform payload: every platform
@@ -67,6 +71,7 @@ func PlatformPayload() ([]PlatformPayloadFile, string) {
 		{Path: SCPayloadCaddyPath, Mode: 0o755, Content: caddyPlatformLauncher},
 		{Path: SCPayloadCloudflaredPath, Mode: 0o755, Content: cloudflaredPlatformLauncher},
 		{Path: SCPayloadInstallAgenticPath, Mode: 0o755, Content: installAgenticScript},
+		{Path: SCPayloadHerdrConfigPath, Mode: 0o644, Content: herdrConfigTOML},
 	}
 	version := platformPayloadVersion(files)
 	files = append(files, PlatformPayloadFile{Path: PlatformPayloadVersionFile, Mode: 0o644, Content: version + "\n"})

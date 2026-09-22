@@ -390,14 +390,19 @@ fi
 // command that turns a stock machine into an agent box for the calling user
 // — mise (https://mise.run) into ~/.local/bin, then herdr, claude and codex
 // through mise (all three are in mise's registry). Idempotent: re-running
-// upgrades to the latest of each. Runs as the login user; no sudo.
+// upgrades to the latest of each. Runs as the login user; no sudo. With herdr
+// in the set it also seeds ~/.config/herdr/config.toml from the payload (only
+// when the user has none) and installs herdr's claude/codex integrations.
 const installAgenticScript = `#!/bin/sh
 # Sandcastle: install the agentic toolchain for the current user.
 #   mise (tool version manager) -> ~/.local/bin/mise
 #   herdr, claude (Claude Code), codex (OpenAI Codex) -> managed by mise
+#   ~/.config/herdr/config.toml -> seeded from the Sandcastle default if absent
+#   herdr claude/codex integrations -> agent state shown in herdr
 # Re-run any time to upgrade. Sourced PATH comes from /.sc/platform/shell/rc.sh.
 set -eu
 TOOLS="${SC_AGENTIC_TOOLS:-herdr claude codex}"
+SC_HERDR_CONFIG="${SC_HERDR_CONFIG:-` + SCPlatformPath + "/" + SCPayloadHerdrConfigPath + `}"
 if [ "$(id -u)" = "0" ]; then
   echo "install-agentic.sh: run as your login user, not root (tools install per user)" >&2
   exit 2
@@ -413,6 +418,26 @@ for tool in $TOOLS; do
   echo "== installing $tool"
   mise use -g -y "$tool@latest"
 done
+case " $TOOLS " in *" herdr "*)
+  # Seed the Sandcastle herdr config once; never overwrite the user's own.
+  HERDR_CONFIG="$HOME/.config/herdr/config.toml"
+  if [ ! -e "$HERDR_CONFIG" ]; then
+    mkdir -p "$(dirname "$HERDR_CONFIG")"
+    cp "$SC_HERDR_CONFIG" "$HERDR_CONFIG"
+    echo "== herdr config -> $HERDR_CONFIG"
+  elif ! cmp -s "$SC_HERDR_CONFIG" "$HERDR_CONFIG"; then
+    echo "== herdr config: keeping your $HERDR_CONFIG (Sandcastle default: $SC_HERDR_CONFIG)"
+  fi
+  # Agent-state hooks, so herdr shows each agent as working/blocked/idle.
+  for agent in claude codex; do
+    case " $TOOLS " in *" $agent "*)
+      echo "== herdr integration $agent"
+      herdr integration install "$agent" || echo "install-agentic.sh: herdr integration install $agent failed (continuing)" >&2
+      ;;
+    esac
+  done
+  ;;
+esac
 echo
 echo "Installed:"
 for tool in $TOOLS; do
@@ -420,6 +445,111 @@ for tool in $TOOLS; do
 done
 echo
 echo "Open a new shell (or: eval \"\$(mise activate bash)\") and run: claude / codex / herdr"
+`
+
+// herdrConfigTOML is /.sc/platform/etc/herdr/config.toml, the herdr config
+// install-agentic.sh seeds for users who have none. It maps Omarchy's tmux
+// key layout onto herdr (tmux session -> workspace, window -> tab, pane ->
+// pane), so every box shares the same keys. The hostname in the tab bar and
+// window title resolves on the server, so a `herdr --remote` session names
+// the machine it runs on.
+const herdrConfigTOML = `onboarding = false
+# Mirrors the Omarchy tmux config in config/tmux/tmux.conf
+# tmux session -> herdr workspace, tmux window -> herdr tab, tmux pane -> herdr pane
+
+[theme]
+# tmux ran on the terminal's own palette (bg=default, fg=default, ANSI blue accents)
+name = "terminal"
+
+auto_switch = false
+[theme.custom]
+# The active tab is drawn as panel_bg text on an accent background, so panel_bg
+# has to be dark for it to read - same colors as status-left's "#[fg=black,bg=blue]"
+panel_bg = "black"
+
+[terminal]
+# Matches -c "#{pane_current_path}" on every split, window, and session
+new_cwd = "follow"
+
+[keys]
+prefix = "ctrl+space"
+
+# Config and help
+reload_config = "prefix+q"
+help = "prefix+?"
+detach = "prefix+d"
+
+# Copy mode
+copy_mode = "prefix+["
+
+# Panes
+split_horizontal = ["prefix+h", "alt+enter"]
+split_vertical = ["prefix+v", "alt+shift+enter"]
+close_pane = ["prefix+x", "alt+esc"]
+zoom = "prefix+z"
+last_pane = "prefix+;"
+
+focus_pane_left = "ctrl+alt+left"
+focus_pane_down = "ctrl+alt+down"
+focus_pane_up = "ctrl+alt+up"
+focus_pane_right = "ctrl+alt+right"
+
+resize_mode = ["prefix+ctrl+left", "prefix+ctrl+down", "prefix+ctrl+up", "prefix+ctrl+right"]
+
+# Like resize-pane on C-M-S-arrows
+resize_pane_left = "ctrl+alt+shift+left"
+resize_pane_down = "ctrl+alt+shift+down"
+resize_pane_up = "ctrl+alt+shift+up"
+resize_pane_right = "ctrl+alt+shift+right"
+
+# No tmux equivalent; herdr's default prefix+shift+p is taken by previous session
+rename_pane = "prefix+shift+o"
+
+# Windows -> tabs
+new_tab = "prefix+c"
+rename_tab = "prefix+r"
+close_tab = "prefix+k"
+switch_tab = ["prefix+1..9", "alt+1..9"]
+previous_tab = ["prefix+p", "alt+left"]
+next_tab = ["prefix+n", "alt+right"]
+
+# Like swap-window -t -1/+1 on M-S-Left/Right
+move_tab_previous = "alt+shift+left"
+move_tab_next = "alt+shift+right"
+
+# Sessions -> workspaces
+new_workspace = "prefix+shift+c"
+rename_workspace = "prefix+shift+r"
+close_workspace = "prefix+shift+k"
+previous_workspace = ["prefix+shift+p", "alt+up"]
+next_workspace = ["prefix+shift+n", "alt+down"]
+
+[ui]
+accent = "blue"
+
+# tmux drew single-line dividers between adjacent panes and no outer frame
+pane_gaps = false
+pane_outer_borders = false
+
+# tmux had no scrollbar column beside its panes
+pane_scrollbars = false
+
+# kill-window and kill-session never asked
+confirm_close = false
+
+# automatic-rename gave windows a name without prompting
+prompt_new_tab_name = false
+
+# set -g mouse on
+mouse_capture = true
+
+# status-right had the zoom flag followed by #h
+tab_bar_right = [{ type = "zoom" }, { type = "hostname" }]
+
+# set -g set-titles on / set -g set-titles-string '#h:#W', where tmux's #W was
+# the basename of the pane cwd. This is what Hyprland shows in the group bar,
+# and it resolves on the server so remote sessions name the remote host.
+window_title = "{hostname}: {workspace}"
 `
 
 // scShimWriteFiles is a cloud-init write_files fragment (entries only, under a

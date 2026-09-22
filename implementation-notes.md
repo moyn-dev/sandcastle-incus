@@ -17,6 +17,20 @@ idefix's Incus is "User does not have permission". `sc incus` already set
 while chasing a certificate-scope error that had already been fixed: the
 403 survived the grant because it came from the wrong daemon.
 
+## 2026-09-22 — `install-agentic.sh` seeds the herdr config and integrations
+
+The herdr config from the admin's Omarchy laptop (Omarchy's tmux key layout
+mapped onto herdr, hostname in tab bar and window title) now ships in the
+payload as `etc/herdr/config.toml`, so it updates centrally like the
+scripts. `install-agentic.sh` copies it to `~/.config/herdr/config.toml`
+only when that file is absent: a user's own config is never touched, and a
+re-run just says it kept it. It is not symlinked, so herdr's settings UI can
+still write to it. With claude/codex also in the set it runs
+`herdr integration install <agent>` (herdr owns those hook files and
+rewrites them on update, so they are installed, not shipped); a failure
+there warns and continues rather than failing the toolchain install.
+`SC_HERDR_CONFIG` overrides the source path, which the test uses.
+
 ## 2026-09-22 — Login covers Shared Tenant memberships
 
 A device enrolled after `sc-adm tenant create --member` (or `tenant
