@@ -105,12 +105,23 @@ path can claim a domain.`,
 				return fmt.Errorf("broker rejected request (%d): %s", resp.StatusCode, strings.TrimSpace(string(payload)))
 			}
 			var result struct {
+				Path         string `json:"path"`
 				Tenant       string `json:"tenant"`
 				Project      string `json:"project"`
 				IncusProject string `json:"incusProject"`
 			}
 			_ = json.Unmarshal(payload, &result)
-			fmt.Fprintln(config.stdout, strings.TrimSpace(string(payload)))
+			if result.Project == "" {
+				result.Project = project
+			}
+			result.Path = scopePath(config.adminConfig.Remote, firstNonEmptyString(result.Tenant, config.adminConfig.Tenant), result.Project)
+			text := fmt.Sprintf("Project %s created.", result.Path)
+			if result.IncusProject != "" {
+				text = fmt.Sprintf("Project %s created (Incus project %s).", result.Path, result.IncusProject)
+			}
+			if err := writeOutput(config.stdout, opts.output, text, result); err != nil {
+				return err
+			}
 
 			// By default, drop a ready-to-use per-project incus remote so the tenant
 			// can `incus <cmd> <tenant>-<project>:` with no --project flag.
