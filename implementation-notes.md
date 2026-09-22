@@ -6819,3 +6819,23 @@ laptop was updated from that path by hand). The downloader now retries 5xx
 answers (six times, ten seconds apart, within the 15-minute deadline);
 4xx stays final. install.sh already retried four times back to back, which
 is too short for this lag — the Go path is the one `sc update` uses.
+
+## 2026-09-22 — admin tree: Auth App host + token follow the active install
+
+`sc admin public-dns-zone list` dialled `auth.example.com`. The admin tree
+(`ExecuteAdmin`) loaded the global file's top-level `auth_hostname` /
+`auth_token`, which are only the last login's values — on this client a
+placeholder from an e2e login next to another install's token — while
+`commandAuthHostname` looked the install up by the ADMIN remote (`big`,
+the Incus host), which is never a login remote. Two fixes, kept as a pair:
+`ExecuteAdmin` now takes host and token from the user loader (the same
+directory/global resolution `sc ls` uses, env overrides included) whenever
+both are set, so an admin command talks to the install the user is on with
+that install's token; and `commandAuthHostname` falls back to the install
+recorded for the active user remote before the top-level value. When
+`SANDCASTLE_REMOTE` names the admin remote, the user loader is re-run
+without it (it finds no credentials under an Incus-host remote).
+Alternative considered: keying the installs map by admin remote at login —
+rejected, the admin remote is not known at login time and the credentials
+belong to the Auth App, not the Incus host. Tenant is deliberately left
+untouched; admin commands scope tenants explicitly.

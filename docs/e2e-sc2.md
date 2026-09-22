@@ -2733,6 +2733,10 @@ sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUD
 sc-adm public-dns-zone list
 # PASS: the zone lists with CLOUDFLARE-ZONE = the Cloudflare zone the token is scoped to, a
 #       Cloudflare id, an 8-hex token fingerprint and CLAIMS 0.
+# PASS: the call goes to the Auth Hostname of the install the user CLI is on (installs[<active
+#       remote>], token from the same login) — never to the global file's top-level auth_hostname,
+#       which may be a stale placeholder (auth.example.com) on a client with several logins; the
+#       same holds with `admin_remote`/SANDCASTLE_REMOTE naming the Incus host (never a login remote).
 sc-adm public-dns-zone add $ZONE --token-file <(printf %s "$SANDCASTLE_E2E_CLOUDFLARE_TOKEN")   # again
 # PASS: "public DNS zone $ZONE is already registered (use set-token to rotate its token)".
 sc-adm public-dns-zone add bad.${ZONE#*.} --token-file <(printf %s not-a-token)   # a SIBLING of $ZONE, not a name under it

@@ -58,13 +58,41 @@ func ExecuteAdmin(name string, args []string) int {
 	// wrong sandcastle without noticing. Skipped entirely when the operator
 	// named a remote explicitly — an explicit choice always wins.
 	activeInstall := ""
+	userConfig, userErr := scconfig.LoadUserWithError()
+	if envRemote := strings.TrimSpace(os.Getenv("SANDCASTLE_REMOTE")); envRemote != "" && userErr == nil &&
+		(strings.TrimSpace(userConfig.AuthHostname) == "" || strings.TrimSpace(userConfig.AuthToken) == "") {
+		// SANDCASTLE_REMOTE names the ADMIN remote here (the Incus host), which
+		// is no login remote, so the user loader found no credentials under
+		// it. Resolve the user's install without the override to find them.
+		os.Unsetenv("SANDCASTLE_REMOTE")
+		if unpinned, err := scconfig.LoadUserWithError(); err == nil {
+			userConfig.AuthHostname, userConfig.AuthToken = unpinned.AuthHostname, unpinned.AuthToken
+		}
+		os.Setenv("SANDCASTLE_REMOTE", envRemote)
+	}
 	if !explicitRemote {
-		userConfig, err := scconfig.LoadUserWithError()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		if userErr != nil {
+			fmt.Fprintln(os.Stderr, userErr)
 			return 1
 		}
 		activeInstall = strings.TrimSpace(userConfig.Remote)
+	}
+	// Auth App credentials follow that same install, as a PAIR. The global
+	// file's top-level auth_hostname/auth_token are only the last login's
+	// values — on a client with several logins they can be a stale placeholder
+	// (auth.example.com) next to another install's token — while the user
+	// loader already selected the host and token recorded for the active
+	// remote. Even with an explicit admin remote (the Incus host, never a
+	// login remote) the Auth App to talk to is the one the user is logged
+	// in to. SANDCASTLE_AUTH_HOSTNAME/SANDCASTLE_AUTH_TOKEN still win: the
+	// user loader applies them too.
+	if userErr == nil {
+		host := strings.TrimSpace(userConfig.AuthHostname)
+		token := strings.TrimSpace(userConfig.AuthToken)
+		if host != "" && token != "" {
+			adminConfig.AuthHostname = host
+			adminConfig.AuthToken = token
+		}
 	}
 
 	// Prefer explicit admin_remote; then cert/IP-based auto-detection; then the
