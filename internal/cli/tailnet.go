@@ -222,7 +222,7 @@ func readTailnetPublicationMetadata(ctx context.Context, config commandConfig, s
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	var current bytes.Buffer
 	if err := runner(ctx, []string{"config", "get", machine, meta.KeyV2TailnetPublications}, env, config.stdin, &current, config.stderr); err != nil {
 		return nil, fmt.Errorf("read Tailnet publication metadata: %w", err)
@@ -243,7 +243,7 @@ func setTailnetPublicationMetadata(ctx context.Context, config commandConfig, su
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	names, err := readTailnetPublicationMetadata(ctx, config, summary, project, machine)
 	if err != nil {
 		return err

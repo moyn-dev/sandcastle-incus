@@ -165,7 +165,7 @@ func (p Provisioner) ensurePersonalTenantV2(ctx context.Context, userKey string,
 		CertificateName: usertrust.RestrictedInstallName(plan.Prefix, plan.Tenant),
 		RemoteName:      remoteName,
 		Restricted:      true,
-		Projects:        plan.RestrictedProjects,
+		Projects:        append(plan.RestrictedProjects, p.memberTenantProjects(ctx, userKey)...),
 		Description:     "Sandcastle v2 tenant " + plan.Tenant,
 	}
 	// Shared client identity: if the client's existing certificate is already
@@ -273,4 +273,34 @@ func (r PersonalTenantResult) normalizedMessage() string {
 		return "Personal tenant " + r.Tenant + " is ready."
 	}
 	return "Personal tenant is ready."
+}
+
+// memberTenantProjects lists the Incus projects of every Shared Tenant the
+// user is already a member of: its infra project and every app project. A
+// login is where a device's certificate is minted (the token) or extended
+// (a shared client identity), and a certificate that covered only the
+// Personal Tenant left a member unable to reach a tenant they were granted
+// before this device existed — `sc tunnel publish` in the shared project
+// answered "User does not have permission" although `sc tenant list` showed
+// the membership. Unreadable tenant state degrades to the personal set.
+func (p Provisioner) memberTenantProjects(ctx context.Context, userKey string) []string {
+	if p.Tenants == nil {
+		return nil
+	}
+	summaries, err := tenant.ListForPrefix(ctx, p.Tenants, p.Admin.IncusProjectPrefix)
+	if err != nil {
+		return nil
+	}
+	normalized := strings.ToLower(strings.TrimSpace(userKey))
+	projects := []string{}
+	for _, summary := range summaries {
+		if summary.Tenant == normalized || !summary.IsMember(normalized) {
+			continue
+		}
+		projects = append(projects, summary.InfraProject)
+		for _, short := range summary.ProjectShortNames() {
+			projects = append(projects, summary.V2IncusProjectName(short))
+		}
+	}
+	return projects
 }

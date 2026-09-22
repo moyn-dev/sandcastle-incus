@@ -3225,6 +3225,7 @@ SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFI
 | **13d** machine | `sc create web` in the shared tenant; `ssh dev@<ip>` succeeds with **both** the owner's default key and `-i ~/.ssh/skorfmann_ed25519` |
 | **13e** project | `$MEMBER`: `sc project create api` (through the auth-app tenant plane, `X-Sandcastle-Tenant: moyn-dev`); `$OWNER` after `sc tenant switch moyn-dev` sees `web` and creates `api:svc` — the other member's certificate was extended with `<prefix>-moyn-dev-api` |
 | **13f** scoping | `sc tenant switch $OWNER` back: `sc ls` no longer shows the shared machines (personal remote re-activated) |
+| **13h** new device | as `$MEMBER` with a fresh `HOME` (a new device): `sc login <auth> --simulate-token … --as $MEMBER --ssh-public-key …` mints a certificate that already carries every project of `moyn-dev` (infra, `default`, `api`); `sc tenant switch moyn-dev` then `sc incus list` on the shared default project and on `api` both succeed (before the fix: `User does not have permission for project`). Requires `SANDCASTLE_E2E_AUTH_HOST` and `SANDCASTLE_E2E_SIMULATE_TOKEN` |
 | **13g** revoke | `sc-adm tenant revoke moyn-dev $MEMBER` prints `members: $OWNER`; `$MEMBER`'s `sc tenant list` no longer lists it and `sc tenant switch moyn-dev` is refused with `not accessible`; the profile no longer carries the member's key |
 
 Live run 2026-09-21 (`big:sc-shared-e2e`, Incus 7.4, install prefix `sh`,

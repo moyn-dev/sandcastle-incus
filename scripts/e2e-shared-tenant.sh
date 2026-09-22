@@ -71,7 +71,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "13a — prerequisite: both members logged in; a never-logged-in member is refused"
-for u in "$OWNER" "$MEMBER"; do as_user "$u"; LIST="$(sc tenant list)"; grep -q "^$u" <<<"$LIST" || fail "$u has no Personal Tenant on this install (run sc login first)"; done
+for u in "$OWNER" "$MEMBER"; do as_user "$u"; LIST="$(sc tenant list -l)"; grep -qE "^[* ] *$u\s" <<<"$LIST" || fail "$u has no Personal Tenant on this install (run sc login first)"; done
 pass "$OWNER and $MEMBER each hold a Personal Tenant"
 expect_fail "must run \`sc login\`" adm tenant create "$TENANT" --member "$OWNER" --member never-logged-in --tailscale-authkey "$TS_KEY" --dns-suffix "$SUFFIX" --cidr-pool 10.251.0.0/16
 
@@ -83,7 +83,7 @@ pass "tenant $TENANT created; members $OWNER, $MEMBER recorded"
 
 step "13c — the member sees, switches to, and reaches the shared tenant"
 as_user "$MEMBER"
-LIST="$(sc tenant list)"; grep -E "^$TENANT\s" <<<"$LIST" | grep -q member || fail "sc tenant list does not show $TENANT as a membership: $LIST"
+LIST="$(sc tenant list -l)"; grep -E "^[* ] *$TENANT\s" <<<"$LIST" | grep -q member || fail "sc tenant list does not show $TENANT as a membership: $LIST"
 OUT="$(sc tenant switch "$TENANT" 2>&1)" || fail "switch: $OUT"
 [[ "$OUT" == *"points at shared tenant $TENANT"* ]] || fail "switch did not enrol the shared remote: $OUT"
 client_sh "grep -qE '^remote: $SUFFIX\$' \$HOME/.config/sandcastle/config.yml" || fail "config remote is not $SUFFIX"
@@ -116,11 +116,28 @@ sc tenant switch "$OWNER" >/dev/null
 sc ls --json | jq -e '.machines | map(.name) | index("web") == null' >/dev/null || fail "personal tenant view leaks the shared machine"
 pass "switching back to the personal tenant hides shared machines"
 
+step "13h — a device enrolled AFTER the grant reaches the shared tenant (login covers memberships)"
+# A new device = a fresh HOME: sc login mints a new restricted certificate
+# there. Before the fix it covered only the Personal Tenant, so every Incus
+# call in the shared project answered "User does not have permission".
+AUTH_HOST="${SANDCASTLE_E2E_AUTH_HOST:?set SANDCASTLE_E2E_AUTH_HOST (https://<auth-hostname>)}"
+SIM="${SANDCASTLE_E2E_SIMULATE_TOKEN:?set SANDCASTLE_E2E_SIMULATE_TOKEN (the --simulate-github-token of the install)}"
+NEWHOME="/root/e2e-newdev-$MEMBER"
+client_sh "rm -rf $NEWHOME && mkdir -p $NEWHOME/.ssh && cp ${MEMBER_KEY} ${MEMBER_KEY}.pub $NEWHOME/.ssh/ && chmod 700 $NEWHOME/.ssh"
+newdev() { client env HOME="$NEWHOME" "$BIN" "$@"; }
+OUT="$(newdev login "$AUTH_HOST" --simulate-token "$SIM" --as "$MEMBER" --ssh-public-key "$NEWHOME/.ssh/$(basename "$MEMBER_KEY").pub" --skip-setup 2>&1)" || fail "new-device login: $OUT"
+OUT="$(newdev tenant switch "$TENANT" 2>&1)" || fail "new-device switch: $OUT"
+OUT="$(newdev incus list --format csv 2>&1)" || fail "new device is refused on the shared project (certificate not extended at login): $OUT"
+grep -q "web" <<<"$OUT" || fail "new device does not see the shared machine through Incus: $OUT"
+OUT="$(newdev incus list --project "${PREFIX}-${TENANT}-api" --format csv 2>&1)" || fail "new device is refused on the second shared project: $OUT"
+pass "a device enrolled after the grant holds every project of $TENANT"
+client_sh "rm -rf $NEWHOME"
+
 step "13g — revoke: the member loses the tenant, the key leaves the profile"
 OUT="$(adm tenant revoke "$TENANT" "$MEMBER" 2>&1)" || fail "revoke: $OUT"
 [[ "$OUT" == *"members: $OWNER"* ]] || fail "revoke did not update membership: $OUT"
 as_user "$MEMBER"
-LIST="$(sc tenant list)"; grep -qE "^$TENANT\s" <<<"$LIST" && fail "$MEMBER still lists $TENANT after revoke"
+LIST="$(sc tenant list -l)"; grep -qE "^[* ] *$TENANT\s" <<<"$LIST" && fail "$MEMBER still lists $TENANT after revoke"
 expect_fail "not accessible" sc tenant switch "$TENANT"
 pass "$MEMBER no longer holds Tenant Access"
 

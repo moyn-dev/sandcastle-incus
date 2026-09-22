@@ -601,7 +601,7 @@ func connectV2Bare(ctx context.Context, config commandConfig, summary tenant.Sum
 		fmt.Fprintf(config.stdout, "Connecting to %s: incus exec %s as root (bare machine — no user, no sshd)\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.machine)
 	}
 	incusProject := summary.V2IncusProjectName(dialed.project)
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject)
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject, "INCUS_REMOTE="+config.adminConfig.Remote)
 	return runner(ctx, remote, env, osStdinFor(config), config.stdout, config.stderr)
 }
 

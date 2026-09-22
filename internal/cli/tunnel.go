@@ -92,7 +92,7 @@ func installMachineTunnel(ctx context.Context, config commandConfig, incusProjec
 	if incusDir == "" {
 		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject)
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject, "INCUS_REMOTE="+config.adminConfig.Remote)
 	run := func(args []string, in io.Reader) error {
 		return runner(ctx, args, env, in, config.stdout, config.stderr)
 	}
@@ -277,7 +277,7 @@ func readMachineTunnelHostnames(ctx context.Context, config commandConfig, summa
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	read := func(key string) (string, error) {
 		var current bytes.Buffer
 		if err := runner(ctx, []string{"config", "get", machine, key}, env, config.stdin, &current, config.stderr); err != nil {
@@ -306,7 +306,7 @@ func machineTunnelLegacyHostname(ctx context.Context, config commandConfig, summ
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	var out bytes.Buffer
 	if err := runner(ctx, []string{"config", "get", machine, meta.KeyV2MachineTunnelHostname}, env, config.stdin, &out, config.stderr); err != nil {
 		return "", fmt.Errorf("read legacy Machine Tunnel metadata: %w", err)
@@ -355,7 +355,7 @@ func recordMachineTunnelPublication(ctx context.Context, config commandConfig, s
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	args := []string{"config", "set", machine, meta.KeyV2MachineTunnelHostnames + "=" + strings.Join(want, ","), meta.KeyV2MachineTunnelPendingHostnames + "=" + strings.Join(wantPending, ",")}
 	if clearLegacy {
 		args = append(args, meta.KeyV2MachineTunnelHostname+"=")
@@ -375,7 +375,7 @@ func readMachineTunnelMetadata(ctx context.Context, config commandConfig, summar
 	if runner == nil {
 		runner = runIncusCLI
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project))
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+summary.V2IncusProjectName(project), "INCUS_REMOTE="+config.adminConfig.Remote)
 	var out bytes.Buffer
 	if err := runner(ctx, []string{"config", "get", machine, key}, env, config.stdin, &out, config.stderr); err != nil {
 		return nil, fmt.Errorf("read Machine Tunnel metadata: %w", err)
@@ -404,7 +404,7 @@ func uninstallMachineTunnel(ctx context.Context, config commandConfig, incusProj
 	if incusDir == "" {
 		return fmt.Errorf("no Sandcastle-managed Incus config found for remote %q", config.adminConfig.Remote)
 	}
-	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject)
+	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject, "INCUS_REMOTE="+config.adminConfig.Remote)
 	run := func(args []string, in io.Reader) error {
 		return runner(ctx, args, env, in, config.stdout, config.stderr)
 	}

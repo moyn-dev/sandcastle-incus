@@ -5,6 +5,33 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-09-22 — Project-scoped `incus` shell-outs name their remote
+
+`sc tunnel publish` (and `sc tailnet`, the bare-machine `incus exec`)
+shell out to the `incus` CLI with `INCUS_CONF` and `INCUS_PROJECT` but
+without `INCUS_REMOTE`, so the call landed on the shared config's
+`default-remote` — on a laptop enrolled on several installs that is
+whichever install logged in last (idefix here), and an obelix project on
+idefix's Incus is "User does not have permission". `sc incus` already set
+`INCUS_REMOTE`; every project-scoped shell-out now does the same. Found
+while chasing a certificate-scope error that had already been fixed: the
+403 survived the grant because it came from the wrong daemon.
+
+## 2026-09-22 — Login covers Shared Tenant memberships
+
+A device enrolled after `sc-adm tenant create --member` (or `tenant
+grant`) got a certificate scoped to the Personal Tenant only: the login
+token's project list came from the personal plan alone, and the grant at
+create time extends only the certificates that exist then. On a new
+laptop that left `sc tunnel publish` in a shared project with "User does
+not have permission" while `sc tenant list` showed the membership and SSH
+(no Incus) worked. `ensurePersonalTenantV2` now appends the infra and app
+projects of every Shared Tenant whose `v2.members` names the user
+(`memberTenantProjects`), so both the minted token and the shared-identity
+extension carry them. e2e 13h (a fresh-HOME login on the client) pins it.
+The live case on obelix was repaired by hand with `sc-adm tenant grant
+moyn-dev thieso2`, which is idempotent.
+
 ## 2026-09-21 — `path` in every machine payload; `tenant@` prefix removed
 
 Every JSON payload that names a machine now carries `path`, its Sandcastle
