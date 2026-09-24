@@ -78,6 +78,12 @@ var machineFixups = []machineFixup{
 		apply:   tenant.CloudflaredBackfillScript,
 		check:   tenant.CloudflaredCheckScript,
 	},
+	{
+		name:    "ping",
+		summary: "let every user ping without sudo (net.ipv4.ping_group_range)",
+		apply:   tenant.PingBackfillScript,
+		check:   tenant.PingCheckScript,
+	},
 }
 
 func newFixCommand(config commandConfig, opts *rootOptions) *cobra.Command {
@@ -98,7 +104,8 @@ Fixups:
   sudo                 restore the login user's NOPASSWD sudo rule through Incus
   agent-forwarding     forwarded SSH agent survives herdr/tmux panes
   caddy-publications   refresh Caddy readiness for Tailnet/public certificates
-  cloudflared          restore an already-installed Cloudflare connector`,
+  cloudflared          restore an already-installed Cloudflare connector
+  ping                 let every user ping without sudo`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected, err := selectFixups(only)

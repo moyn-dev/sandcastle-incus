@@ -6839,3 +6839,18 @@ Alternative considered: keying the installs map by admin remote at login —
 rejected, the admin remote is not known at login time and the credentials
 belong to the Auth App, not the Incus host. Tenant is deliberately left
 untouched; admin commands scope tenants explicitly.
+
+## 2026-09-24 — cloud-init: ping without sudo via ping_group_range
+
+Machines (Debian trixie seen live) answered `ping` with "missing cap_net_raw":
+the distro ships `ping` without file capabilities and relies on systemd's
+`net.ipv4.ping_group_range = 0 2147483647`, which the unprivileged container
+rejects with EINVAL because the range exceeds its gid map. The login-user
+cloud-init documents (default profile, both branches, and the Dev Image) now
+write `/etc/sysctl.d/99-sandcastle-ping.conf` with `0 65535` — 65536 ids is the
+smallest map Incus hands out, and VMs accept it too — and apply it in runcmd
+via `/proc` (minimal images have no `sysctl(8)`; systemd-sysctl already ran
+before cloud-init wrote the file). Alternative considered: `setcap
+cap_net_raw+ep /usr/bin/ping` — rejected, it needs libcap tools on the image
+and is lost on every iputils upgrade. Bare machines are left alone (no login
+user). Older machines backfill with the new `sc fix --only ping` fixup.

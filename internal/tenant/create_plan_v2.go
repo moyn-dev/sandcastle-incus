@@ -118,7 +118,7 @@ packages:
 	if jinja && signerURL != "" {
 		script := base64.StdEncoding.EncodeToString([]byte(SCCaddySetupShim))
 		generalize := base64.StdEncoding.EncodeToString([]byte(SCGeneralizeShim))
-		body += "write_files:\n" + scShimWriteFiles + fmt.Sprintf(`  - path: /etc/sandcastle/machine.env
+		body += "write_files:\n" + scShimWriteFiles + pingWriteFiles + fmt.Sprintf(`  - path: /etc/sandcastle/machine.env
     permissions: '0644'
     content: |
       FQDN={{ v1.local_hostname }}.%s.%s
@@ -134,15 +134,14 @@ packages:
     encoding: b64
     content: %s
 runcmd:
-  - [/usr/local/sbin/sandcastle-generalize]
+`+pingRuncmd+`  - [/usr/local/sbin/sandcastle-generalize]
   - [systemctl, enable, --now, ssh]
   - [/usr/local/sbin/sandcastle-caddy-setup]
 `, project, suffix, PublicHostnamesEnvLine(projectDomain), signerURL, user, generalize, script)
 		return header + identity + body
 	}
 
-	return header + identity + body + "write_files:\n" + scShimWriteFiles + `runcmd:
-  - [systemctl, enable, --now, ssh]
+	return header + identity + body + "write_files:\n" + scShimWriteFiles + pingWriteFiles + "runcmd:\n" + pingRuncmd + `  - [systemctl, enable, --now, ssh]
 `
 }
 
@@ -302,8 +301,7 @@ packages:
   - zsh
 write_files:
 `, domain, user, sshAuthorizedKeysYAML(sshKey))
-	return body + scShimWriteFiles + `runcmd:
-  - [systemctl, enable, --now, ssh]
+	return body + scShimWriteFiles + pingWriteFiles + "runcmd:\n" + pingRuncmd + `  - [systemctl, enable, --now, ssh]
 `
 }
 
@@ -560,6 +558,41 @@ var scShimWriteFiles = "  - path: /etc/ssh/sshrc\n" +
 	"    permissions: '0755'\n    content: |\n" + indentBlock(SCSSHRCShim, 6) +
 	"  - path: /etc/zsh/zshrc\n    append: true\n    content: |\n" + indentBlock(SCShellRCShim, 6) +
 	"  - path: /etc/bash.bashrc\n    append: true\n    content: |\n" + indentBlock(SCShellRCShim, 6)
+
+// PingGroupRange lets every group up to 65535 open unprivileged ICMP echo
+// sockets, so a login user can ping without sudo. Distros ship ping without
+// cap_net_raw and rely on systemd's 0 2147483647 instead, which an unprivileged
+// container rejects (EINVAL): the range must stay inside the container's gid
+// map, and 65536 ids is the smallest map Incus hands out. VMs accept it too.
+const PingGroupRange = "0 65535"
+
+// pingSysctlPath persists PingGroupRange across reboots; systemd-sysctl reads
+// it after 50-default.conf, so the later, valid value wins.
+const pingSysctlPath = "/etc/sysctl.d/99-sandcastle-ping.conf"
+
+// pingWriteFiles is a write_files fragment (entries only) carrying the sysctl.
+var pingWriteFiles = "  - path: " + pingSysctlPath + "\n    permissions: '0644'\n    content: |\n      net.ipv4.ping_group_range = " + PingGroupRange + "\n"
+
+// pingRuncmd applies the sysctl for this boot — systemd-sysctl already ran
+// before cloud-init wrote the file. /proc directly: minimal images lack sysctl(8).
+var pingRuncmd = "  - [sh, -c, \"echo '" + PingGroupRange + "' > /proc/sys/net/ipv4/ping_group_range || true\"]\n"
+
+// PingBackfillScript is the `sc fix` counterpart of pingWriteFiles/pingRuncmd
+// for machines created before cloud-init carried them.
+func PingBackfillScript() string {
+	return `set -eu
+printf 'net.ipv4.ping_group_range = ` + PingGroupRange + `\n' > ` + pingSysctlPath + `
+echo '` + PingGroupRange + `' > /proc/sys/net/ipv4/ping_group_range
+echo "ping: unprivileged ICMP enabled (ping_group_range ` + PingGroupRange + `)"
+`
+}
+
+// PingCheckScript reports whether unprivileged ping is enabled.
+func PingCheckScript() string {
+	return `set -u
+if [ "$(tr -s '\t ' ' ' < /proc/sys/net/ipv4/ping_group_range)" = "` + PingGroupRange + `" ] && [ -r ` + pingSysctlPath + ` ]; then echo "ping: OK"; else echo "ping: NEEDS FIX"; fi
+`
+}
 
 // indentBlock left-pads every non-empty line of s by n spaces (for embedding a
 // script under a YAML `content: |` block scalar).

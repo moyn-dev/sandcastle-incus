@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"encoding/base64"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -839,5 +840,39 @@ func TestPublicationFixupsRepairOnlyMachineLocalState(t *testing.T) {
 	}
 	if !strings.Contains(cloudflaredApply, "/.sc/platform/sbin/cloudflared") || !strings.Contains(cloudflaredApply, "systemctl enable --now") || !strings.Contains(cloudflaredCheck, "cloudflared launcher is in /.sc/platform") {
 		t.Fatalf("cloudflared fixup does not repair/read the local connector")
+	}
+}
+
+// Every machine with a login user lets that user ping without sudo: the
+// sysctl persists in write_files and runcmd applies it for the first boot.
+func TestV2UserDataEnablesUnprivilegedPing(t *testing.T) {
+	for name, data := range map[string]string{
+		"caddy":     V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "default", "acme", "http://10.0.0.3:9443"),
+		"no-signer": V2DefaultProfileUserData("dev", "ssh-ed25519 AAAA", "", "", ""),
+		"dev-image": V2DevUserData("dev", "ssh-ed25519 AAAA", "default.acme"),
+	} {
+		rendered := strings.ReplaceAll(data, "{{ v1.local_hostname }}", "machine")
+		var doc struct {
+			WriteFiles []struct {
+				Path    string `yaml:"path"`
+				Content string `yaml:"content"`
+			} `yaml:"write_files"`
+			Runcmd []any `yaml:"runcmd"`
+		}
+		if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+			t.Fatalf("%s: user-data is not valid YAML: %v\n%s", name, err, data)
+		}
+		found := false
+		for _, f := range doc.WriteFiles {
+			if f.Path == pingSysctlPath && strings.TrimSpace(f.Content) == "net.ipv4.ping_group_range = "+PingGroupRange {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: write_files lacks %s:\n%s", name, pingSysctlPath, data)
+		}
+		if len(doc.Runcmd) == 0 || !strings.Contains(fmt.Sprint(doc.Runcmd[0]), "/proc/sys/net/ipv4/ping_group_range") {
+			t.Fatalf("%s: runcmd must apply ping_group_range first, got %v", name, doc.Runcmd)
+		}
 	}
 }

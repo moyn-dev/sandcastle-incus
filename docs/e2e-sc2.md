@@ -1108,6 +1108,14 @@ created with `--home-share`.
 > containers **and** VMs pick the new mounts up live (validated on Incus 7.2);
 > a machine without zsh gets the shim only in `/etc/bash.bashrc` (`/etc/zsh/`
 > is skipped, not pre-created).
+>
+> **Unprivileged ping.** cloud-init writes
+> `/etc/sysctl.d/99-sandcastle-ping.conf` (`net.ipv4.ping_group_range = 0
+> 65535`) and applies it at first boot, on the default profile (with and
+> without Caddy ingress) and the Dev Image. **PASS:** on a fresh machine the
+> login user's `ping -c1 1.1.1.1` succeeds without `sudo`; on an older machine
+> `sc fix <m> --only ping --check` prints `ping: NEEDS FIX`, and after
+> `sc fix <m> --only ping` plain `ping` works and the check prints `ping: OK`.
 
 > **Login user + key provenance.** `sc login` prepares the SSH key itself —
 > it uses `~/.ssh/id_ed25519.pub` when present, otherwise generates
