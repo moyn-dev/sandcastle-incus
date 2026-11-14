@@ -311,6 +311,21 @@ remote: sc-alice</code></pre>
   </div>
 
   <div class="step">
+    <h3>Plain <code>incus</code> and the native incus mirror</h3>
+    <p><code>sc login</code> puts its remotes in <code>~/.config/incus</code> when that dir has no client certificate.
+    When it already holds one (an admin identity), Sandcastle uses <code>~/.config/sandcastle/incus</code> instead and
+    mirrors each Sandcastle remote into <code>~/.config/incus</code>. A mirrored remote carries the Sandcastle keypair as
+    <code>clientcerts/&lt;remote&gt;.crt</code> and <code>.key</code>, which <code>incus</code> uses for that remote only.
+    So <code>incus list &lt;remote&gt;:</code> works with no <code>INCUS_CONF</code>, and every other remote keeps the admin identity.</p>
+    <p>The mirror is synced after <code>sc login</code>, <code>sc remote add</code>, <code>sc enroll</code>, shared-tenant
+    enrollment, and by <code>sc update</code>, which shows it as the <code>native incus mirror</code> row. It never changes
+    <code>client.crt</code>, <code>default-remote</code>, aliases, or a remote it did not create; a name clash is skipped
+    with a note. Turn it off with <code>incus_native_mirror: false</code> in <code>~/.config/sandcastle/config.yml</code>
+    or <code>SANDCASTLE_INCUS_NATIVE_MIRROR=0</code>. Turning it off stops the sync; it does not delete mirrors already
+    made. Remove those with <code>incus remote remove &lt;remote&gt;</code>.</p>
+  </div>
+
+  <div class="step">
     <h3>Enable verbose output</h3>
     <p>Set <code>VERBOSE=1</code> to see the Incus config directory and remote being used, per-operation detail from executors, and every Incus REST call with its method, path, status, and duration.</p>
     <pre><code><span class="env">export VERBOSE</span>=1
@@ -1322,6 +1337,7 @@ sc create tod0s:web --hostname web12.tc42.uk --fqdn shop.tc42.uk</code></pre>
         <tr><td><code>SANDCASTLE_DARWIN_TRUST_KEYCHAIN</code></td><td><code>sc trust</code></td><td>macOS keychain path used for trust install/uninstall.</td></tr>
         <tr><td><code>SANDCASTLE_TRUST_DIR</code></td><td><code>sc trust</code>, tests</td><td>Override Sandcastle trust cache directory.</td></tr>
         <tr><td><code>INCUS_CONF</code></td><td><code>sc incus</code>, <code>sc login</code>, local DNS sudo handoff</td><td>Incus CLI config directory. <code>sc</code> sets this to the restricted Sandcastle Incus config when needed.</td></tr>
+        <tr><td><code>SANDCASTLE_INCUS_NATIVE_MIRROR</code></td><td><code>sc login</code>, <code>sc remote add</code>, <code>sc enroll</code>, <code>sc update</code></td><td><code>0</code> turns the native incus mirror off, <code>1</code> on; overrides <code>incus_native_mirror</code> in <code>config.yml</code>. Default on.</td></tr>
         <tr><td><code>INCUS_PROJECT</code></td><td><code>sc incus</code></td><td>Incus CLI project selected for wrapped <code>incus</code> commands.</td></tr>
       </tbody>
     </table>

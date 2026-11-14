@@ -3335,3 +3335,22 @@ restart repair one machine). Run every guest step on a container AND a VM
 | **15h** opt-out and legacy | `sc create s3 --no-scratch` creates no volume, `/tmp` stays on the root disk, `systemctl --failed` lists nothing, and after `sc restart s3` `systemctl is-active sc-scratch` is `active` (the unit ran and found no volume); `sc create s4 --scratch-size lots` fails before anything is created; a machine created by an older binary (no unit) boots unchanged with no failed units; in a project not yet re-rendered, a new machine gets `/scratch` but `systemctl cat sc-scratch` fails until `sc project rerender` (new machines) or `sc fix <m> --only scratch` (that machine) |
 | **15i** project delete | a project holding machines with scratch volumes is deleted by `sc project delete` without a volume-in-use or volume-left error |
 | **15j** migration | on a tenant with a machine `old` created by a pre-#210 binary (container, running) and a stopped VM `oldvm`: `sc-adm tenant scratch-migrate <tenant> --check` lists both as `would attach` and creates nothing (`incus storage volume list` unchanged); the real run reports `old` as `attached (live)` and `oldvm` as `attached (mounted at next start)`, and `old` sees `/scratch` without a restart; a second run reports every machine as `already has scratch` and changes nothing; the sidecar is never listed. A pre-#210 `--bare` machine is listed as `skipped (bare machine: re-create it to get scratch)` by both runs and gets no volume; a hand-made unmarked `<m>-scratch` volume makes `--check` report that machine `FAILED` with the same reason as the real run. Run without `SANDCASTLE_INCUS_PROJECT_PREFIX` against a non-default install (obelix): stderr notes the install and the run proceeds. With a second app project, `--check --project <short>` and `--project <full incus name>` list only that project's machines, and `--project nope` fails naming `"nope"` before touching anything. Then `sc fix old --only scratch` and `sc restart old`: `findmnt /tmp` shows the bind. A file put in `/var/tmp` before the restart (`touch /var/tmp/keep`) is still there after it, now on the volume (`ls /scratch/var-tmp/keep`); data in the old `/tmp` is not copied and nothing is deleted |
+
+---
+
+## Phase 16 — Native Incus Mirror ⚠️ not yet run
+
+On a client whose `~/.config/incus` already holds an admin `client.crt`,
+`sc login` enrolls into `~/.config/sandcastle/incus`. The mirror copies each
+Sandcastle remote into `~/.config/incus` with the Sandcastle keypair as
+`clientcerts/<remote>.crt`/`.key`, so plain `incus` reaches it. Unit coverage:
+`go test ./internal/config -run NativeMirror` and
+`go test ./internal/cli -run SyncNativeIncusMirror`.
+
+| Step | PASS criteria |
+|---|---|
+| **16a** login | `sc login <auth-hostname>` prints ``Plain `incus` remotes in ~/.config/incus: added <remote>.``; with no `INCUS_CONF`, `incus list <remote>:` lists the tenant's machines, and `incus list <admin-remote>:` still works with the admin identity |
+| **16b** untouched | `~/.config/incus/client.crt`, `default-remote`, aliases and every admin remote are byte-identical before and after; a native remote that already had the Sandcastle remote's name is left as-is and the login prints `Note: not mirroring <name>: …` |
+| **16c** idempotent | `sc update --check` shows `native incus mirror … N remote(s) current`; a second `sc login` leaves `~/.config/incus/config.yml` unmodified (same mtime) |
+| **16d** removal | after the remote is dropped from `~/.config/sandcastle/incus` (`INCUS_CONF=~/.config/sandcastle/incus incus remote remove <remote>`), `sc update --yes` removes it and its `clientcerts`/`servercerts` files from `~/.config/incus` |
+| **16e** opt-out | with `SANDCASTLE_INCUS_NATIVE_MIRROR=0` (or `incus_native_mirror: false` in `~/.config/sandcastle/config.yml`) no sync runs and `sc update --check` shows no mirror row; mirrors made earlier stay |

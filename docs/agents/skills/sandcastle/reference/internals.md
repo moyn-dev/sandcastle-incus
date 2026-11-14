@@ -74,7 +74,7 @@ Tenant
 | `~/.config/sandcastle/config.yml` | tenant, project, remote, admin_remote, auth_hostname, and the per-install / per-remote token, broker, and tenant maps |
 | `~/.config/sandcastle/incus/` | the shared Incus config dir: one client keypair, every enrolled install as a remote |
 | `~/.config/sandcastle/<remote>/incus/` | per-remote restricted certificates (older layout) |
-| `~/.config/incus/` | the **admin** Incus config — what `sc-adm` uses |
+| `~/.config/incus/` | the **admin** Incus config — what `sc-adm` uses. When it holds its own `client.crt`, Sandcastle mirrors its remotes here with `clientcerts/<remote>.crt`/`.key` so plain `incus` reaches them (Native Incus Mirror; opt out with `SANDCASTLE_INCUS_NATIVE_MIRROR=0` or `incus_native_mirror: false`) |
 | `~/.ssh/known_hosts` | Sandcastle host keys, tagged `# sandcastle:<remote>/<tenant>` |
 | `~/.config/sandcastle/update-state.json` | update-notifier throttle state |
 
