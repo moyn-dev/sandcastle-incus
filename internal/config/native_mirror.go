@@ -186,6 +186,16 @@ func SyncNativeIncusMirror(dryRun bool) (NativeMirrorReport, error) {
 			return report, err
 		}
 	}
+	// Drop a removed remote's keypair before the config stops naming it: a
+	// crash in between must not leave the Sandcastle keypair under a name an
+	// admin remote could later reuse.
+	for _, name := range drop {
+		for _, p := range []string{"clientcerts/" + name + ".crt", "clientcerts/" + name + ".key", "servercerts/" + name + ".crt"} {
+			if err := os.Remove(filepath.Join(native, p)); err != nil && !os.IsNotExist(err) {
+				return report, err
+			}
+		}
+	}
 	if docChanged {
 		setKey(&doc, "remotes", remotes)
 		out, err := yaml.Marshal(doc)
@@ -198,13 +208,6 @@ func SyncNativeIncusMirror(dryRun bool) (NativeMirrorReport, error) {
 		}
 		if err := writeFileAtomic(configPath, out, mode); err != nil {
 			return report, err
-		}
-	}
-	for _, name := range drop {
-		for _, p := range []string{"clientcerts/" + name + ".crt", "clientcerts/" + name + ".key", "servercerts/" + name + ".crt"} {
-			if err := os.Remove(filepath.Join(native, p)); err != nil && !os.IsNotExist(err) {
-				return report, err
-			}
 		}
 	}
 	return report, nil
