@@ -19,18 +19,22 @@ type DirectoryConfig struct {
 	Tenant         string            `yaml:"tenant,omitempty"`
 	RemoteProjects map[string]string `yaml:"remote_projects,omitempty"`
 	// Level truncates the Current Position above the project: "root",
-	// "remote" or "tenant" (empty means the project level, the only level
-	// before path navigation existed). Remote and Project stay filled in so
+	// "install" or "tenant" (empty means the project level, the only level
+	// before path navigation existed). "remote", the install level's name
+	// before ADR-0032, is read as "install". Remote and Project stay filled in so
 	// the credentials and the remembered project survive a `cd ..`.
 	Level string `yaml:"level,omitempty"`
 	// Previous is the absolute Sandcastle Path the directory stood at before
-	// the last `sc cd`, for `sc cd -`.
+	// the last `sc cd`, for `sc cd -`. Written in the install form; a
+	// remote-form path from an older binary is rewritten when read.
 	Previous string `yaml:"previous,omitempty"`
 }
 
 // Position levels of a directory selection, in tree order.
 const (
 	PositionRoot    = "root"
+	PositionInstall = "install"
+	// PositionRemote is the pre-ADR-0032 name of PositionInstall, still read.
 	PositionRemote  = "remote"
 	PositionTenant  = "tenant"
 	PositionProject = "project"
@@ -51,7 +55,7 @@ func PositionDepth(level string) int {
 	switch level {
 	case PositionRoot:
 		return 0
-	case PositionRemote:
+	case PositionInstall, PositionRemote:
 		return 1
 	case PositionTenant:
 		return 2
@@ -109,7 +113,7 @@ func (c DirectoryConfig) validate() error {
 		return err
 	}
 	switch strings.TrimSpace(c.Level) {
-	case "", PositionRoot, PositionRemote, PositionTenant, PositionProject:
+	case "", PositionRoot, PositionInstall, PositionRemote, PositionTenant, PositionProject:
 	default:
 		return fmt.Errorf("invalid level %q", c.Level)
 	}
