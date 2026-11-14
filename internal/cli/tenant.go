@@ -86,7 +86,7 @@ func newTenantListCommand(config commandConfig, opts *rootOptions) *cobra.Comman
 			return writeOutput(config.stdout, opts.output, formatPath([]string{loadInstallIndex().installNameOf(config.adminConfig.Remote)})+"\n"+text, output)
 		},
 	}
-	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: Tenant Role Personal table (default: names only)")
+	command.Flags().BoolVarP(&long, "long", "l", false, "long listing: Tenant Role Shared table (default: names only)")
 	return command
 }
 
@@ -399,7 +399,7 @@ func formatTenantAccessList(output tenantListOutput) string {
 		return "No accessible tenants"
 	}
 	var builder strings.Builder
-	builder.WriteString("  Tenant\tRole\tPersonal\n")
+	builder.WriteString("  Tenant\tRole\tShared\n")
 	for _, tenant := range output.Tenants {
 		if tenant.Current {
 			builder.WriteString("* ")
@@ -410,7 +410,7 @@ func formatTenantAccessList(output tenantListOutput) string {
 		builder.WriteByte('\t')
 		builder.WriteString(tenant.Role)
 		builder.WriteByte('\t')
-		builder.WriteString(yesNo(tenant.Personal))
+		builder.WriteString(yesNo(tenant.Shared))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimRight(builder.String(), "\n")

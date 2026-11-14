@@ -66,7 +66,7 @@ func longColumns(depth int) []string {
 	case levelRoot:
 		return []string{"INSTALL", "AUTH", "REMOTES"}
 	case levelInstall:
-		return []string{"TENANT", "ROLE", "PERSONAL", "REMOTE"}
+		return []string{"TENANT", "ROLE", "SHARED", "REMOTE"}
 	case levelTenant:
 		return []string{"PROJECT", "DOMAIN", "IMAGE"}
 	default:
@@ -193,7 +193,7 @@ func tenantEntries(ctx context.Context, config commandConfig, ix installIndex, i
 	tenants, err := installTenants(ctx, config, ix, install)
 	if err == nil {
 		for _, row := range tenantListRows(tenants, strings.TrimSpace(config.adminConfig.Tenant)) {
-			entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal), displayValue(record.Remotes[row.Tenant])}})
+			entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Shared), displayValue(record.Remotes[row.Tenant])}})
 		}
 	} else {
 		recorded := record.sortedTenants()
