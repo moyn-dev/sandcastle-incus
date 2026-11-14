@@ -7292,3 +7292,44 @@ bind-on-first-login by email). Decisions it left open:
 - `validatePathSegment` was called with a zero-based index, so the first
   segment was checked as a machine name, the second as an install suffix.
   Install Names such as `a` (one character) exposed it; fixed to the level.
+
+## 2026-11-14 — Native Incus Mirror
+
+Operators whose `~/.config/incus` holds an admin `client.crt` enroll into
+`~/.config/sandcastle/incus`, so plain `incus` saw none of their Sandcastle
+remotes. `config.SyncNativeIncusMirror` copies them into the native dir with
+the Sandcastle keypair as `clientcerts/<remote>.crt`/`.key`. Decisions the
+brief left open:
+
+- The native config is round-tripped as a yaml.v2 `MapSlice`, not through
+  `cliconfig.Config`: the vendored struct drops fields newer incus CLIs write
+  (`last_working_address`), and the repo has no yaml.v3. Key order and
+  unknown keys survive.
+- Ownership is DER equality of `clientcerts/<name>.crt` with the dedicated
+  `client.crt`. A remote whose clientcert is another keypair is foreign, so
+  it is skipped like any name clash.
+- An owned remote that is no longer enrolled is kept when it is the native
+  `default-remote`, with a note: removing it would break plain `incus`, and
+  the brief forbids touching `default-remote`. It goes on the first sync
+  after the user switches away.
+- On an address change the mirrored entry drops `last_working_address`, so
+  a newer incus CLI does not go back to the old address.
+- `clientcerts/<name>.crt` and the server pin are written 0644 and the key
+  0600. A matching pair with another mode is left alone, except a key that
+  others can read, which is rewritten 0600. Hand-made mirrors with the same
+  content are adopted with no write.
+- Sync runs at each writer of the dedicated remotes
+  (`addIncusRemoteWithToken`, the shared-tenant installer, the legacy-remote
+  migration when it changed something, `sc enroll`), not in a root
+  post-run hook. A hook would also fix hand edits, but it would run on every
+  `sc` command, including in any test that forgets to isolate HOME, and
+  write to the real `~/.config/incus`.
+- `sc update` shows a `native incus mirror` row from a dry run and applies
+  pending changes with the other updates; `--check` writes nothing. There
+  is no `sc doctor`, and `sc status` does not list incus config.
+- The target is `~/.config/incus` (`NativeIncusDir`), as in the shared-dir
+  resolution. On macOS plain `incus` reads `~/Library/Application
+  Support/incus`, so the mirror does not help there; that matches the
+  existing resolution's view of "native" and is left for a separate change.
+- No `sc config set` key for the opt-out; the config field and env var
+  cover it.

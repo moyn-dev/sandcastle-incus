@@ -372,6 +372,7 @@ func (i incusTenantRemoteInstaller) InstallTenantRemote(ctx context.Context, req
 			return fmt.Errorf("pin remote %s to project %s: %w", request.RemoteName, p, err)
 		}
 	}
+	syncNativeIncusMirror(i.stderr)
 	return nil
 }
 

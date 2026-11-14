@@ -175,6 +175,10 @@ _Avoid_: API token login, password login
 A one-time Incus token that lets the CLI add its locally generated client certificate as the User's restricted Incus credential.
 _Avoid_: Incus auth token, Sandcastle API token, private key
 
+**Native Incus Mirror**:
+A copy of the client's Sandcastle remotes in the native `~/.config/incus`, kept when that dir holds another client identity and the remotes therefore live in `~/.config/sandcastle/incus`. Each copy carries the Sandcastle keypair as a per-remote client certificate, so plain `incus` reaches it while every other remote keeps the native identity.
+_Avoid_: Incus symlink, shared incus dir
+
 **User SSH Public Key**:
 The single current public SSH key uploaded by the CLI during device login and authorized for Machine shell access.
 _Avoid_: SSH private key, browser-uploaded SSH key, named SSH key set
