@@ -111,7 +111,7 @@ func TestTenantListShowsRoleColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  Tenant\tRole\tPersonal", "  skorfmann\towner\tno", "* moyn-dev\tmember\tno"} {
+	for _, want := range []string{"  Tenant\tRole\tShared", "  skorfmann\towner\tno", "* moyn-dev\tmember\tyes"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}

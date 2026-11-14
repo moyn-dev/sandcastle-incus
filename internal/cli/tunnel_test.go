@@ -15,6 +15,7 @@ import (
 )
 
 func TestUninstallMachineTunnelRemovesOnlyNamedSandcastleConnector(t *testing.T) {
+	useLoginHomeForTest(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	remote := "tunnel-test"
 	incusDir := scconfig.RemoteIncusDir(remote)
@@ -44,6 +45,7 @@ func TestUninstallMachineTunnelRemovesOnlyNamedSandcastleConnector(t *testing.T)
 }
 
 func TestReadMachineTunnelHostnamesUnionsLegacyAndCollectionRecords(t *testing.T) {
+	useLoginHomeForTest(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	remote := "tunnel-record"
 	incusDir := scconfig.RemoteIncusDir(remote)
@@ -77,6 +79,7 @@ func TestReadMachineTunnelHostnamesUnionsLegacyAndCollectionRecords(t *testing.T
 }
 
 func TestRecordMachineTunnelPublicationPersistsPendingBeforeConnectorStart(t *testing.T) {
+	useLoginHomeForTest(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	remote := "tunnel-pending"
 	incusDir := scconfig.RemoteIncusDir(remote)

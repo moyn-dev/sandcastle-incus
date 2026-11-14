@@ -702,6 +702,7 @@ func TestLoginVerboseReportsPollResult(t *testing.T) {
 }
 
 func TestLoginRunsPostSetupForSingleTenant(t *testing.T) {
+	useLoginHomeForTest(t)
 	installer := &fakeLoginRemoteInstaller{}
 	setup := &fakeLoginSetupRunner{}
 	client := &fakeAuthDeviceClient{
@@ -746,6 +747,7 @@ func TestLoginRunsPostSetupForSingleTenant(t *testing.T) {
 }
 
 func TestLoginUsesE2ETailscaleAuthKeyFallback(t *testing.T) {
+	useLoginHomeForTest(t)
 	t.Setenv("SANDCASTLE_E2E_TAILSCALE_AUTHKEY", "tskey-e2e")
 	installer := &fakeLoginRemoteInstaller{}
 	setup := &fakeLoginSetupRunner{}
@@ -774,6 +776,7 @@ func TestLoginUsesE2ETailscaleAuthKeyFallback(t *testing.T) {
 }
 
 func TestLoginUsesAuthAppTailscaleAuthKeyBeforeEnvFallback(t *testing.T) {
+	useLoginHomeForTest(t)
 	t.Setenv("SANDCASTLE_E2E_TAILSCALE_AUTHKEY", "tskey-e2e")
 	installer := &fakeLoginRemoteInstaller{}
 	setup := &fakeLoginSetupRunner{}
@@ -823,6 +826,7 @@ func TestLoginSetupIncusConfigPaths(t *testing.T) {
 }
 
 func TestLoginSkipSetupDoesNotRunPostSetup(t *testing.T) {
+	useLoginHomeForTest(t)
 	installer := &fakeLoginRemoteInstaller{}
 	setup := &fakeLoginSetupRunner{}
 	client := &fakeAuthDeviceClient{
@@ -1054,8 +1058,8 @@ func TestTenantListShowsAccessibleTenantsAndCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"  Tenant\tRole\tPersonal",
-		"* acme\towner\tyes",
+		"  Tenant\tRole\tShared",
+		"* acme\towner\tno",
 		"  skorfman\towner\tno",
 	} {
 		if !strings.Contains(stdout, want) {

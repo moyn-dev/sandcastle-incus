@@ -175,7 +175,7 @@ func TestLsListsInstallsThenTheAuthAppTenants(t *testing.T) {
 		t.Fatalf("ls /obelix: %q %v", out, err)
 	}
 	out, err := executeForTestWithConfig(t, config, "ls", "-l", "/obelix")
-	if err != nil || !strings.Contains(out, "REMOTE") || !strings.Contains(out, "skorfmann   owner   no        asterix") {
+	if err != nil || !strings.Contains(out, "SHARED") || !strings.Contains(out, "moyn-dev    member  yes     moyn-dev") || !strings.Contains(out, "skorfmann   owner   no      asterix") {
 		t.Fatalf("ls -l /obelix: %q %v", out, err)
 	}
 }
