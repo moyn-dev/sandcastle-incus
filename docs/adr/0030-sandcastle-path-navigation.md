@@ -2,6 +2,9 @@
 
 Date: 2026-09-21. Status: accepted. Wayfinder map: issue #190.
 
+> **2026-11-14:** [ADR-0032](0032-install-first-sandcastle-path.md) proposes
+> making the first path level the install instead of the remote.
+
 ## Context
 
 The user CLI addresses machines with the colon grammar of ADR-0020,
