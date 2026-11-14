@@ -38,26 +38,27 @@ Switch context with `sc remote switch <name>` (install), `sc tenant switch
 then parents; with none, they create it in the current directory. `sc tenant
 list` marks the active tenant with `*` and shows the Role (`owner` for your
 Personal Tenant, `member` for a Shared Tenant). Messages name machines by their
-Sandcastle Path `/remote/tenant/project/machine`, which pastes back into any command.
+Sandcastle Path `/install/tenant/project/machine`, which pastes back into any command.
 Switches report the path written; `sc remote list` and `sc project list` report
 the file read. Global defaults are fallback only, and raw Incus defaults remain
 unchanged. `SANDCASTLE_REMOTE` / `SANDCASTLE_PROJECT` override local selection
 for one invocation; credentials stay in the global enrollment store.
 
 **Path navigation.** The same four levels form a tree you can walk with a
-second, slash grammar — a **Sandcastle Path** `/remote/tenant/project/machine`,
+second, slash grammar — a **Sandcastle Path** `/install/tenant/project/machine`
+(the install is the first label of its Auth Hostname; the remote is resolved),
 absolute or relative to the **Current Position** (what `sc pwd` prints; the
 nearest `.sandcastle`). It is additive: the colon grammar and the switch
 commands are unchanged, and any command that takes a machine also takes a path.
 
 ```bash
-sc pwd                      # /obelix/acme/web  (remote / tenant / project)
+sc pwd                      # /obelix/acme/web  (install / tenant / project)
 sc cd backend               # sibling project (from a project, a bare name is ../name)
 sc cd ..                    # up to the tenant: sc ls now lists projects
 sc cd /obelix/acme/web      # absolute; sc cd -  goes back; sc cd  goes home (global config)
 sc ls ../*dev               # every sibling project matching *dev, each block headed by its path
 sc ls -d ../*dev            # just their names;  -l a table per level;  -R recurse
-sc ls /                     # enrolled remotes; sc ls /obelix  the tenant that remote is enrolled for
+sc ls /                     # installs; sc ls /obelix  every tenant its Auth App lists
 sc ls -d '../**'            # ** matches across levels: every project and machine of the tenant
 sc stop '/**/dev'           # in a machine reference ** is as many * as reach a machine (= '*:*:dev')
 sc c ../api/dev             # any machine command takes a path
@@ -230,7 +231,7 @@ a TTY; `SANDCASTLE_NO_UPDATE_NOTIFIER=1` silences them.
 |---|---|
 | `sc info` / `sc status` / `sc version` | active context / tenant health / CLI version |
 | `sc ls`, `sc create`, `sc c`, `sc start\|stop\|restart\|delete`, `sc fix` | machine lifecycle |
-| `sc cd`, `sc pwd`, `sc ls <path>`, `sc mkdir`, `sc rm`, `sc completion` | path navigation over /remote/tenant/project/machine |
+| `sc cd`, `sc pwd`, `sc ls <path>`, `sc mkdir`, `sc rm`, `sc completion` | path navigation over /install/tenant/project/machine |
 | `sc project …` | create, delete, list, switch, per-project settings |
 | `sc tenant …` / `sc remote …` | select tenant (Personal or Shared; `*` marks the active one) / manage and switch installs |
 | `sc login` / `sc enroll` | device login and provisioning / enroll from a token |

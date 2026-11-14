@@ -333,11 +333,15 @@ The release whose cloud-init document a Machine booted with, frozen on the Machi
 _Avoid_: Profile version on a machine, image version, CLI version
 
 **Sandcastle Path**:
-The slash form of a reference, `/remote/tenant/project/machine`, absolute or relative to the Current Position, with `.`, `..`, `~` (home), `-` (previous) and shell globs in any segment. A second grammar beside the colon reference, selected by shape; a machine is its leaf.
-_Avoid_: Resource path, URL, colon path
+The slash form of a reference, `/install/tenant/project/machine`, absolute or relative to the Current Position, with `.`, `..`, `~` (home), `-` (previous) and shell globs in any segment. The first segment is an Install Name; the client resolves (install, tenant) to the Incus remote enrolled for it, so remote names never appear in a path. A second grammar beside the colon reference, selected by shape; a machine is its leaf.
+_Avoid_: Resource path, URL, colon path, remote path
+
+**Install Name**:
+The first segment of a Sandcastle Path: the first DNS label of the install's Auth Hostname (`obelix` for `https://obelix.thieso2.dev`). When two installs the client knows share that label, both use their full Install Label (`obelix-thieso2-dev`). The client knows an install by its Auth Hostname in the user config.
+_Avoid_: Remote name, Tenant DNS Suffix, install prefix
 
 **Current Position**:
-The remote, tenant and project every unqualified user command acts in, recorded per directory tree in the nearest `.sandcastle` and shown by `sc pwd`. It may stand above a project (at the tenant, remote or root level) after `sc cd ..`; the switch commands and `sc cd` both move it.
+The install, tenant and project every unqualified user command acts in, recorded per directory tree in the nearest `.sandcastle` (as the remote serving them) and shown by `sc pwd`. Its levels are root, install, tenant and project; it may stand above a project after `sc cd ..`. The switch commands and `sc cd` both move it.
 _Avoid_: Working directory, context, cwd, session position
 
 **Current Project**:
