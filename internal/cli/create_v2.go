@@ -507,6 +507,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 		}
 		payload.CertificateDecisions = createCertificateDecisions(publicHostnames, outcomes)
 		payload.Path = machinePath(config.adminConfig.Remote, summary.Tenant, project, payload.Name)
+		payload.RemotePath = remoteMachinePath(config.adminConfig.Remote, summary.Tenant, project, payload.Name)
 		return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, payload, true, outcomes), payload)
 	}
 	var claimed []claimedHostname
@@ -534,6 +535,7 @@ func runCreateMachineV2(ctx context.Context, config commandConfig, opts *rootOpt
 	}
 	result.CertificateDecisions = createCertificateDecisions(result.PublicHostnames, outcomes)
 	result.Path = machinePath(config.adminConfig.Remote, summary.Tenant, project, result.Name)
+	result.RemotePath = remoteMachinePath(config.adminConfig.Remote, summary.Tenant, project, result.Name)
 	return writeOutput(config.stdout, opts.output, formatCreateMachineV2(config.adminConfig.Remote, summary, project, result, false, outcomes), result)
 }
 

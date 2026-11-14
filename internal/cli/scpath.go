@@ -8,7 +8,8 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
-// Sandcastle Path: the slash form of a reference, /remote/tenant/project/machine.
+// Sandcastle Path: the slash form of a reference, /install/tenant/project/machine
+// (ADR-0032; the install segment is the Install Name, see installIndex).
 //
 // It is a second grammar beside the colon one ([tenant@][[remote:]project:]
 // machine, ADR-0020) and is selected purely by shape: an argument that starts
@@ -17,12 +18,13 @@ import (
 // against the Current Position (the nearest .sandcastle) like a shell path
 // resolves against the working directory, and every segment may be a shell
 // glob. Machine commands then see the resolved path as the colon reference
-// remote:project:machine, so nothing below the parser changes.
+// remote:project:machine, the remote being the one enrolled for the path's
+// install and tenant, so nothing below the parser changes.
 
 // Tree levels, by depth (the number of segments of an absolute path).
 const (
 	levelRoot    = 0
-	levelRemote  = 1
+	levelInstall = 1
 	levelTenant  = 2
 	levelProject = 3
 	levelMachine = 4
@@ -33,8 +35,8 @@ func levelName(depth int) string {
 	switch depth {
 	case levelRoot:
 		return "root"
-	case levelRemote:
-		return "remote"
+	case levelInstall:
+		return "install"
 	case levelTenant:
 		return "tenant"
 	case levelProject:
@@ -49,8 +51,8 @@ func levelKeyword(depth int) string {
 	switch depth {
 	case levelRoot:
 		return scconfig.PositionRoot
-	case levelRemote:
-		return scconfig.PositionRemote
+	case levelInstall:
+		return scconfig.PositionInstall
 	case levelTenant:
 		return scconfig.PositionTenant
 	default:
@@ -73,13 +75,14 @@ func formatPath(segments []string) string {
 	return "/" + strings.Join(segments, "/")
 }
 
-// currentPosition is the Current Position as path segments: remote, tenant
-// and project, cut at the selection's level. The project falls back to
+// currentPosition is the Current Position as path segments: install, tenant
+// and project, cut at the selection's level; the install is the selected
+// remote's. The project falls back to
 // "default" only at project level, matching what every command assumes when
 // the selection names no project.
 func currentPosition(config commandConfig) []string {
 	admin := config.adminConfig
-	segments := []string{strings.TrimSpace(admin.Remote), strings.TrimSpace(admin.Tenant), strings.TrimSpace(admin.Project)}
+	segments := []string{loadInstallIndex().installNameOf(admin.Remote), strings.TrimSpace(admin.Tenant), strings.TrimSpace(admin.Project)}
 	depth := scconfig.PositionDepth(admin.PositionLevel)
 	if admin.PositionLevel == "" {
 		depth = levelProject
@@ -91,7 +94,8 @@ func currentPosition(config commandConfig) []string {
 }
 
 // homePosition is what `cd` with no argument and "~" mean: the global
-// config's remote, tenant and project — the layer beneath every .sandcastle.
+// config's remote (as its install), tenant and project — the layer beneath
+// every .sandcastle.
 func homePosition() ([]string, error) {
 	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
 	if err != nil {
@@ -109,7 +113,7 @@ func homePosition() ([]string, error) {
 	if project == "" {
 		project = naming.DefaultProjectName
 	}
-	return []string{remote, tenant, project}, nil
+	return []string{buildInstallIndex(cfg).installNameOf(remote), tenant, project}, nil
 }
 
 // previousPosition is the position recorded by the last `sc cd`, for "-".
@@ -152,7 +156,11 @@ func resolvePath(config commandConfig, arg string) ([]string, error) {
 	rest := arg
 	switch {
 	case arg == "-":
-		return previousPosition()
+		previous, err := previousPosition()
+		if err != nil {
+			return nil, err
+		}
+		base, rest = previous, ""
 	case arg == "~" || strings.HasPrefix(arg, "~/"):
 		home, err := homePosition()
 		if err != nil {
@@ -176,14 +184,18 @@ func resolvePath(config commandConfig, arg string) ([]string, error) {
 			segments = append(segments, part)
 		}
 	}
+	segments, err := canonicalSegments(config, segments)
+	if err != nil {
+		return nil, err
+	}
 	if fixedSegments(segments) > levelMachine {
-		return nil, fmt.Errorf("path %q is deeper than a machine: expected /remote/tenant/project/machine", arg)
+		return nil, fmt.Errorf("path %q is deeper than a machine: expected /install/tenant/project/machine", arg)
 	}
 	for depth, segment := range segments {
 		if segment == globstar {
 			continue
 		}
-		if err := validatePathSegment(depth, segment); err != nil {
+		if err := validatePathSegment(depth+1, segment); err != nil {
 			return nil, err
 		}
 	}
@@ -228,13 +240,14 @@ func expandGlobstarToMachine(segments []string) []string {
 }
 
 // validatePathSegment validates one segment as a literal or a glob for its
-// level, with the same rules the colon grammar applies to its parts.
+// level (1 for the install), with the same rules the colon grammar applies
+// to its parts.
 func validatePathSegment(depth int, value string) error {
 	if naming.IsPattern(value) {
 		return naming.ValidateNamePattern(levelName(depth), value)
 	}
 	switch depth {
-	case levelRemote:
+	case levelInstall:
 		return naming.ValidateInstallSuffix(value)
 	case levelTenant:
 		if value == "" {
@@ -248,30 +261,44 @@ func validatePathSegment(depth int, value string) error {
 	}
 }
 
-// tenantOfRemote is the tenant a remote is enrolled for: the enrollment
-// recorded at login or tenant switch (remote_tenants), which is the
-// authority (ADR-0021); only an unrecorded current remote falls back to the
-// Current Tenant. The order matters: a directory may pair a remote with
-// another tenant of the same install (`sc cd /moyn-dev/thieso2/…`), and
-// that pairing must not make the tree list thieso2 under moyn-dev.
-func tenantOfRemote(config commandConfig, remote string) string {
-	if cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath()); err == nil {
-		if tenant := cfg.TenantForRemote(remote); tenant != "" {
-			return tenant
-		}
+// canonicalSegments rewrites a remote-form path (ADR-0030,
+// /remote/tenant/…) into the install form and says so once on stderr. Only a
+// first segment that is no Install Name but an enrolled remote is rewritten:
+// when a name is both, the install reading wins (ADR-0032 decision 5).
+func canonicalSegments(config commandConfig, segments []string) ([]string, error) {
+	if len(segments) == 0 || segments[0] == globstar || naming.IsPattern(segments[0]) {
+		return segments, nil
 	}
-	if remote == strings.TrimSpace(config.adminConfig.Remote) {
-		return strings.TrimSpace(config.adminConfig.Tenant)
+	ix := loadInstallIndex()
+	if _, ok := ix.install(segments[0]); ok {
+		return segments, nil
 	}
-	return ""
+	place, ok := ix.remotes[segments[0]]
+	if !ok || place.Install == "" || place.Tenant == "" {
+		return segments, nil
+	}
+	rewritten := []string{place.Install, place.Tenant}
+	switch {
+	case len(segments) == 1:
+	case segments[1] == globstar:
+		rewritten = append(rewritten, segments[1:]...)
+	case naming.MatchName(segments[1], place.Tenant):
+		rewritten = append(rewritten, segments[2:]...)
+	default:
+		return nil, fmt.Errorf("remote %q serves tenant %q, not %q: use %s", segments[0], place.Tenant, segments[1], formatPath(append([]string{place.Install}, segments[1:]...)))
+	}
+	if config.stderr != nil {
+		fmt.Fprintf(config.stderr, "note: %s is %s (paths start at the install)\n", formatPath(segments), formatPath(rewritten))
+	}
+	return rewritten, nil
 }
 
 // pathToMachineReference converts a machine-level path into the colon
 // reference remote:project:machine that every machine command parses. The
-// tenant segment must be the tenant the remote serves — a remote is enrolled
-// for exactly one tenant (ADR-0021), so another tenant's machines are reached
-// by `sc cd` into that tenant, which enrolls its remote. A shorter path names
-// a directory, which no machine command accepts.
+// install and tenant segments pick the remote. A glob there must narrow to
+// one remote, or span every one ("*"): the colon grammar's remote part
+// cannot name a set. A shorter path names a directory, which no machine
+// command accepts.
 func pathToMachineReference(config commandConfig, arg string) (string, error) {
 	segments, err := resolvePath(config, arg)
 	if err != nil {
@@ -279,26 +306,36 @@ func pathToMachineReference(config commandConfig, arg string) (string, error) {
 	}
 	segments = expandGlobstarToMachine(segments)
 	if len(segments) != levelMachine {
-		return "", fmt.Errorf("path %s names a %s, not a machine: expected /remote/tenant/project/machine", formatPath(segments), levelName(len(segments)))
+		return "", fmt.Errorf("path %s names a %s, not a machine: expected /install/tenant/project/machine", formatPath(segments), levelName(len(segments)))
 	}
-	remote, tenant, project, machine := segments[0], segments[1], segments[2], segments[3]
-	if !naming.IsPattern(remote) {
-		names, err := enrolledRemoteNames()
-		if err != nil {
-			return "", err
-		}
-		if !containsString(names, remote) {
-			hint := "run `sc remote list` to see enrolled installs, or `sc login <auth-hostname>` to enroll"
-			if len(names) > 0 {
-				hint = "enrolled remotes: " + strings.Join(names, ", ")
-			}
-			return "", fmt.Errorf("no enrolled Sandcastle remote %q in path %s; %s", remote, formatPath(segments), hint)
-		}
-		if served := tenantOfRemote(config, remote); served != "" && !naming.MatchName(tenant, served) {
-			return "", fmt.Errorf("remote %q serves tenant %q, not %q: `sc cd /%s/%s` first", remote, served, tenant, remote, tenant)
-		}
+	install, tenantName, project, machine := segments[0], segments[1], segments[2], segments[3]
+	remote, err := pathRemote(config, install, tenantName)
+	if err != nil {
+		return "", err
 	}
 	return remote + ":" + project + ":" + machine, nil
+}
+
+// pathRemote is the colon reference's remote part for a path's install and
+// tenant segments.
+func pathRemote(config commandConfig, install, tenantName string) (string, error) {
+	if install == "*" && tenantName == "*" {
+		return "*", nil
+	}
+	ix := loadInstallIndex()
+	if !naming.IsPattern(install) && !naming.IsPattern(tenantName) {
+		return ix.positionRemote(config, install, tenantName)
+	}
+	remotes := ix.matchingRemotes(install, tenantName)
+	switch {
+	case len(remotes) == 0:
+		return "", fmt.Errorf("no enrolled tenant matches /%s/%s; installs: %s", install, tenantName, strings.Join(ix.names(), ", "))
+	case len(remotes) == 1:
+		return remotes[0], nil
+	case len(remotes) == len(ix.matchingRemotes("*", "*")):
+		return "*", nil
+	}
+	return "", fmt.Errorf("/%s/%s spans %d tenants (remotes %s); machine commands take one tenant or all of them (/*/*/…)", install, tenantName, len(remotes), strings.Join(remotes, ", "))
 }
 
 // normalizeReference is the one hook every reference-taking command goes

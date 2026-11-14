@@ -187,3 +187,21 @@ func TestDirectorySelectionFileSymlink(t *testing.T) {
 		t.Fatal("dangling file symlink silently ignored")
 	}
 }
+
+// ADR-0032 renamed the install level; a selection written before it reads
+// as the same level.
+func TestDirectoryLevelInstallAndRemoteAlias(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, level := range []string{PositionInstall, PositionRemote} {
+		if err := os.WriteFile(".sandcastle", []byte("remote: obelix\nproject: default\nlevel: "+level+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, _, err := LoadDirectoryConfig("")
+		if err != nil {
+			t.Fatalf("level %s: %v", level, err)
+		}
+		if depth := PositionDepth(cfg.PositionLevel()); depth != 1 {
+			t.Fatalf("level %s: depth %d, want 1", level, depth)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
@@ -11,7 +12,9 @@ import (
 )
 
 // pathCompletionTimeout bounds one completion request: a keystroke waits for
-// the Auth App cache (one HTTPS round trip), never for a slow live Incus.
+// the Auth App (one HTTPS round trip for an install's tenants or the resource
+// cache), never for a slow live Incus. Install Names at the first level come
+// from the local config alone.
 const pathCompletionTimeout = 3 * time.Second
 
 // pathCompletion completes a Sandcastle Path argument: the children of the
@@ -31,6 +34,10 @@ func pathCompletion(config commandConfig, maxDepth int) func(*cobra.Command, []s
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), pathCompletionTimeout)
 		defer cancel()
+		// Notes (a rewritten remote-form path, an offline tenant list) would
+		// land in the shell's completion output.
+		config := config
+		config.stderr = io.Discard
 		if !isPathReference(toComplete) {
 			if maxDepth < levelMachine || strings.Contains(toComplete, ":") {
 				return nil, cobra.ShellCompDirectiveNoFileComp

@@ -1,6 +1,6 @@
 # ADR-0032: The Sandcastle Path starts at the install
 
-Date: 2026-11-14. Status: proposed. Amends ADR-0030 decision 1 (the first
+Date: 2026-11-14. Status: accepted (2026-11-14). Amends ADR-0030 decision 1 (the first
 path level) and the printed form in its Consequences. Builds on ADR-0017
 (Incus Reach), ADR-0021 (one remote per install) and ADR-0029 (Shared
 Tenants).

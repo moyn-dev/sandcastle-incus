@@ -82,13 +82,15 @@ func v2MachineProfiles(homeShare bool) []string {
 
 type CreateMachineV2Result struct {
 	CertificateDecisions map[string]string `json:"certificateDecisions,omitempty"`
-	// Path is the machine's Sandcastle Path, filled in by the CLI.
-	Path      string `json:"path,omitempty"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Project   string `json:"incusProject"`
-	Image     string `json:"image"`
-	PrivateIP string `json:"privateIP,omitempty"`
+	// Path is the machine's Sandcastle Path, filled in by the CLI;
+	// RemotePath is its remote form (ADR-0030), kept for one minor release.
+	Path       string `json:"path,omitempty"`
+	RemotePath string `json:"remote_path,omitempty"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Project    string `json:"incusProject"`
+	Image      string `json:"image"`
+	PrivateIP  string `json:"privateIP,omitempty"`
 	// PrivateCIDR is the subnet the machine leased its address on, read from
 	// the machine's own interface. A restricted tenant certificate cannot see
 	// the tenant bridge's config, so this is the only authoritative source.

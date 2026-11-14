@@ -57,7 +57,7 @@ func newProjectListCommand(config commandConfig, opts *rootOptions) *cobra.Comma
 			if long {
 				text = formatProjectNamespaceTable(tenantSummary, current)
 			}
-			listed := formatPath([]string{strings.TrimSpace(config.adminConfig.Remote), strings.TrimSpace(tenantSummary.Tenant)})
+			listed := scopePath(config.adminConfig.Remote, tenantSummary.Tenant)
 			return writeOutput(config.stdout, opts.output, listed+"\n"+selectionSource(config)+"\n"+text, payload)
 		},
 	}

@@ -2,8 +2,9 @@
 
 Date: 2026-09-21. Status: accepted. Wayfinder map: issue #190.
 
-> **2026-11-14:** [ADR-0032](0032-install-first-sandcastle-path.md) proposes
-> making the first path level the install instead of the remote.
+> **2026-11-14:** [ADR-0032](0032-install-first-sandcastle-path.md) makes
+> the first path level the install instead of the remote
+> (`/install/tenant/project/machine`). Remote-form paths still resolve.
 
 ## Context
 

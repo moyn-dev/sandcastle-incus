@@ -7251,3 +7251,44 @@ bind-on-first-login by email). Decisions it left open:
   with OIDC configured, rather than branching inside `/admin/allowlist`.
 - The Onboarding Page still labels the user key "GitHub Username" for
   OIDC-only users. Left as is to keep the diff focused.
+
+## 2026-11-14 — ADR-0032: paths start at the install
+
+- One data shape, `installIndex` (`internal/cli/install_index.go`), built
+  from the user config on each lookup: installs keyed by full Install Label
+  (so `https://x.dev` and `x.dev/` are one install), each with
+  tenant → remote, plus remote → (install, tenant). Every path lookup goes
+  through it instead of reading `installs` and `remote_tenants` ad hoc. It
+  is rebuilt per call, not cached: `sc cd` rewrites the config mid-command,
+  and a file read is cheap next to an Auth App call.
+- A remote with `remote_tenants` but no `installs` entry (a login from
+  before installs were recorded) stands in as an install of its own name,
+  so its paths keep working. A remote with neither is reached by name only
+  when it is the current remote or an enrolled Incus remote, as before.
+- When two remotes are recorded for one (install, tenant), the smaller name
+  wins. The ADR does not say; the choice only has to be stable.
+- After `sc tenant switch` as an owner (no member enrollment) the directory
+  pairs the install's remote with another tenant. That pairing resolves the
+  path too, but only from that directory; elsewhere the pair is "not
+  enrolled". This keeps ADR-0029's owner behaviour without inventing a
+  record for it.
+- `sc cd /<install>` needs a remote to write into `.sandcastle`: the current
+  one when it belongs to the install, else the remote named like the
+  install, else the first by name.
+- A machine path whose install or tenant segment globs must narrow to one
+  remote or cover all of them (`/*/*/…`); a subset (`/obelix/*/…`) is an
+  error. The colon grammar's remote part is a single glob and cannot name a
+  set, and teaching the fan-out a remote list was more change than the case
+  is worth. Before, the tenant segment was ignored under a remote glob;
+  `sc ls` path mode handles subsets, since it walks the tree.
+- A remote-form path whose tenant segment does not match the remote's
+  tenant is still refused, as under ADR-0030, rather than rewritten into the
+  install's other tenant: the old path never meant that.
+- The rewrite note and the offline tenant-list note go to stderr. Shell
+  completion discards them.
+- Before enrolling, `sc cd` lists the install's tenants itself so an
+  unlisted tenant fails naming the install; `sc tenant switch` then lists
+  them again. One extra Auth App call on a rare path.
+- `validatePathSegment` was called with a zero-based index, so the first
+  segment was checked as a machine name, the second as an install suffix.
+  Install Names such as `a` (one character) exposed it; fixed to the level.
