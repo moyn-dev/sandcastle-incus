@@ -108,6 +108,7 @@ func newConnectV2Command(config commandConfig, opts *rootOptions) *cobra.Command
 			if _, _, err := saveRemoteDefaults(scconfig.DefaultConfigPath(), name, tenant); err != nil {
 				fmt.Fprintf(config.stderr, "Note: could not save local defaults: %v\n", err)
 			}
+			syncNativeIncusMirror(config.stderr)
 			fmt.Fprintf(config.stdout, "connected tenant %q — config at %s (remote %q → %s)\n", tenant, dir, name, pin)
 			fmt.Fprintf(config.stdout, "use it with:  `sc project switch <name>` moves it; raw:  INCUS_CONF=%s incus list %s:\n", dir, name)
 			return nil

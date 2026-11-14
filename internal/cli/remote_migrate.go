@@ -164,6 +164,9 @@ func migrateLegacyRemotes(ctx context.Context, incusDir, tenant, suffix, install
 	for _, name := range m.Removes {
 		removeUnlessCurrent(ctx, incusDir, current, name, stderr)
 	}
+	if len(m.Renames)+len(m.Removes) > 0 {
+		syncNativeIncusMirror(stderr)
+	}
 }
 
 // removeUnlessCurrent removes an incus remote unless it is the current

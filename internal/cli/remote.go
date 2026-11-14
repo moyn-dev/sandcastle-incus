@@ -515,6 +515,8 @@ func addIncusRemoteWithToken(ctx context.Context, ioConfig remoteAddIO, name str
 		}
 	}
 
+	syncNativeIncusMirror(ioConfig.stderr)
+
 	cfgPath := scconfig.DefaultConfigPath()
 	defaultRemoteSet, tenant, err := saveRemoteDefaults(cfgPath, name, tenant)
 	if err != nil {

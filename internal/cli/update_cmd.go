@@ -16,6 +16,7 @@ import (
 
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	"github.com/thieso2/sandcastle-incus/internal/cidr"
+	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 	"github.com/thieso2/sandcastle-incus/internal/update"
@@ -80,6 +81,10 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			// check is read-only and deliberately does not run `sc fix` or SSH to
 			// individual Machines.
 			payloadRows, payloadCheckErr := projectPayloadUpdateRows(ctx, config)
+
+			// Native Incus Mirror: a dry run here, applied below.
+			mirror, mirrorErr := scconfig.SyncNativeIncusMirror(true)
+			mirrorOutdated := mirrorErr == nil && mirror.Changed()
 			payloadsOutdated := false
 			for _, r := range payloadRows {
 				payloadsOutdated = payloadsOutdated || r.outdated
@@ -120,6 +125,9 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if payloadCheckErr != nil {
 				fmt.Fprintf(w, "project payloads\tunknown\tunknown\tunknown (%v)\n", payloadCheckErr)
 			}
+			if mirror.Active || mirrorErr != nil {
+				fmt.Fprintf(w, "native incus mirror\t-\t-\t%s\n", nativeMirrorStatus(mirror, mirrorErr))
+			}
 			w.Flush()
 			if release.HTMLURL != "" && cliOutdated {
 				fmt.Fprintf(config.stdout, "\nRelease notes: %s\n", release.HTMLURL)
@@ -128,7 +136,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if check {
 				return nil
 			}
-			if !cliOutdated && !sidecarOutdated && !skillsOutdated && !payloadsOutdated {
+			if !cliOutdated && !sidecarOutdated && !skillsOutdated && !payloadsOutdated && !mirrorOutdated {
 				fmt.Fprintln(config.stdout, "\nEverything is up to date.")
 				return nil
 			}
@@ -156,7 +164,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 					if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
 						return err
 					}
-					if sidecarOutdated || skillsOutdated || payloadsOutdated {
+					if sidecarOutdated || skillsOutdated || payloadsOutdated || mirrorOutdated {
 						// The skill and the platform payload are embedded in the
 						// executable; this process still carries the old ones. Hand
 						// the rest over to the binary just installed instead of
@@ -179,6 +187,10 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			if skillsOutdated {
 				fmt.Fprintf(config.stdout, "\n== agent skills\n")
 				refreshManagedSkills(config.stdout, config.stderr, skillRows, skillHome(config))
+			}
+			if mirrorOutdated {
+				fmt.Fprintf(config.stdout, "\n== native incus mirror (%s)\n", mirror.Native)
+				syncNativeIncusMirror(config.stdout)
 			}
 			if payloadsOutdated {
 				fmt.Fprintf(config.stdout, "\n== platform payload (/.sc/platform, shared by every Machine of a project)\n")
