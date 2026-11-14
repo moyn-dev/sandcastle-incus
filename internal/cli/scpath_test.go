@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
@@ -24,6 +25,7 @@ func TestIsPathReference(t *testing.T) {
 }
 
 func TestResolvePathAgainstPosition(t *testing.T) {
+	useLoginHomeForTest(t)
 	at := func(level string) commandConfig {
 		return commandConfig{adminConfig: scconfig.Admin{Remote: "obelix", Tenant: "acme", Project: "web", PositionLevel: level}}
 	}
@@ -73,7 +75,7 @@ func seedEnrolledRemotes(t *testing.T) {
 	for _, key := range []string{"SANDCASTLE_REMOTE", "SANDCASTLE_PROJECT", "SANDCASTLE_TENANT", "SANDCASTLE_AUTH_TOKEN", "SANDCASTLE_BROKER"} {
 		t.Setenv(key, "")
 	}
-	global := scconfig.SandcastleConfig{Remote: "alpha", Project: "default", Tenant: "acme", Installs: map[string]string{"alpha": "a.test", "beta": "b.test"}, RemoteTenants: map[string]string{"alpha": "acme", "beta": "globex"}, RemoteAuthTokens: map[string]string{"alpha": "alpha-secret", "beta": "beta-secret"}}
+	global := scconfig.SandcastleConfig{Remote: "alpha", Project: "default", Tenant: "acme", Installs: map[string]string{"alpha": "https://alpha.test", "beta": "https://beta.test"}, RemoteTenants: map[string]string{"alpha": "acme", "beta": "globex"}, RemoteAuthTokens: map[string]string{"alpha": "alpha-secret", "beta": "beta-secret"}}
 	if err := scconfig.SaveSandcastleConfig(scconfig.DefaultConfigPath(), global); err != nil {
 		t.Fatal(err)
 	}
@@ -120,8 +122,8 @@ func TestPathToMachineReference(t *testing.T) {
 	}
 	for arg, want := range map[string]string{
 		"..":                     "names a tenant",
-		"/gamma/acme/web/dev":    "no enrolled Sandcastle remote",
-		"/beta/acme/backend/dev": "serves tenant",
+		"/gamma/acme/web/dev":    `no install "gamma"`,
+		"/beta/acme/backend/dev": "not enrolled on this client",
 	} {
 		if _, err := pathToMachineReference(config, arg); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want error containing %q", arg, err, want)
@@ -147,7 +149,7 @@ func TestCdPwdLsAcrossLevels(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := executeForTestWithConfig(t, commandConfig{adminConfig: cfg, tenantStore: store, machineStore: fakeInstallMachineStore{byInfraProject: map[string][]meta.Machine{
+		out, err := executeForTestWithConfig(t, commandConfig{adminConfig: cfg, authTenants: &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "acme"}}}, tenantStore: store, machineStore: fakeInstallMachineStore{byInfraProject: map[string][]meta.Machine{
 			"sc2-acme": {{Name: "dev", Project: "web", Running: true}, {Name: "ci", Project: "web"}},
 		}}}, args...)
 		if err != nil {
@@ -213,13 +215,13 @@ func TestCdPwdLsAcrossLevels(t *testing.T) {
 	if out := run("cd", "/"); out != "/" {
 		t.Fatalf("cd /: %q", out)
 	}
-	if out := run("ls", "/alpha", "/beta"); out != "/alpha\nacme\n\n/beta\nglobex" {
+	if out := run("ls", "/alpha"); out != "/alpha\nacme" {
 		t.Fatalf("ls remotes: %q", out)
 	}
 	if out := run("ls"); out != "/\nalpha\nbeta" {
 		t.Fatalf("ls at root: %q", out)
 	}
-	if out := run("ls", "-l"); !strings.HasPrefix(out, "/\nREMOTE") || !strings.Contains(out, "globex") {
+	if out := run("ls", "-l"); !strings.HasPrefix(out, "/\nINSTALL") || !strings.Contains(out, "https://beta.test") {
 		t.Fatalf("ls -l at root: %q", out)
 	}
 }
@@ -234,8 +236,10 @@ func TestCdRefusesMachinesAndPatterns(t *testing.T) {
 	if _, err := runCd(context.Background(), config, "../*", true); err == nil || !strings.Contains(err.Error(), "not the pattern") {
 		t.Fatalf("pattern cd: %v", err)
 	}
-	if _, err := runCd(context.Background(), config, "/beta/acme/web", false); err == nil || !strings.Contains(err.Error(), `serves tenant "globex"`) || !strings.Contains(err.Error(), "/alpha/acme/web") {
-		t.Fatalf("cd to a tenant the remote does not serve: %v", err)
+	listing := config
+	listing.authTenants = &fakeAuthTenantClient{tenants: []authapp.TenantAccessSummary{{Tenant: "globex"}}}
+	if _, err := runCd(context.Background(), listing, "/beta/acme/web", false); err == nil || !strings.Contains(err.Error(), `install beta does not list tenant "acme"`) {
+		t.Fatalf("cd to a tenant the install does not list: %v", err)
 	}
 	if _, err := runCd(context.Background(), config, "-", true); err == nil || !strings.Contains(err.Error(), "no previous position") {
 		t.Fatalf("cd - without history: %v", err)

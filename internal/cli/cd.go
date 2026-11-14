@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -14,10 +15,12 @@ import (
 )
 
 // positionOutput is what `sc cd` and `sc pwd` report: the Current Position
-// as a Sandcastle Path plus its parts.
+// as a Sandcastle Path plus its parts. Remote is the Incus remote the
+// position resolves to, not a path segment.
 type positionOutput struct {
 	Path       string `json:"path"`
 	Level      string `json:"level"`
+	Install    string `json:"install,omitempty"`
 	Remote     string `json:"remote,omitempty"`
 	Tenant     string `json:"tenant,omitempty"`
 	Project    string `json:"project,omitempty"`
@@ -25,12 +28,13 @@ type positionOutput struct {
 	ConfigPath string `json:"config_path,omitempty"`
 }
 
-func positionFromSegments(segments []string) positionOutput {
+func positionFromSegments(segments []string, remote string) positionOutput {
 	out := positionOutput{Path: formatPath(segments), Level: levelName(len(segments))}
 	if len(segments) > levelRoot {
-		out.Remote = segments[0]
+		out.Install = segments[0]
+		out.Remote = strings.TrimSpace(remote)
 	}
-	if len(segments) > levelRemote {
+	if len(segments) > levelInstall {
 		out.Tenant = segments[1]
 	}
 	if len(segments) > levelTenant {
@@ -43,10 +47,10 @@ func positionFromSegments(segments []string) positionOutput {
 func newPwdCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pwd",
-		Short: "Print the Current Position as a Sandcastle Path (/remote/tenant/project)",
+		Short: "Print the Current Position as a Sandcastle Path (/install/tenant/project)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := positionFromSegments(currentPosition(config))
+			out := positionFromSegments(currentPosition(config), config.adminConfig.Remote)
 			out.ConfigPath = config.adminConfig.DirectoryConfigPath
 			if local, _, err := scconfig.LoadDirectoryConfig(""); err == nil {
 				out.Previous = strings.TrimSpace(local.Previous)
@@ -56,31 +60,35 @@ func newPwdCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	}
 }
 
-// newCdCommand moves the Current Position: `sc cd /remote/tenant/project`,
+// newCdCommand moves the Current Position: `sc cd /install/tenant/project`,
 // `sc cd ..`, `sc cd -`, `sc cd` (home). It is the path-shaped front of the
 // three switch commands and writes the same .sandcastle they do.
 func newCdCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var localOnly bool
 	command := &cobra.Command{
 		Use:   "cd [path]",
-		Short: "Change the Current Position (remote, tenant, project) by Sandcastle Path",
-		Long: `Change the Current Position, the remote/tenant/project every unqualified
+		Short: "Change the Current Position (install, tenant, project) by Sandcastle Path",
+		Long: `Change the Current Position, the install/tenant/project every unqualified
 command acts in, by Sandcastle Path:
 
-  sc cd /obelix/acme/web     absolute: remote obelix, tenant acme, project web
+  sc cd /obelix/acme/web     absolute: install obelix, tenant acme, project web
   sc cd backend              from a project: the sibling project backend
   sc cd ../backend           the same, spelled out
   sc cd ..                   up to the tenant level (sc ls then lists projects)
   sc cd -                    back to the previous position
-  sc cd                      home: the global config's remote, tenant and project
-  sc cd ~/web                project web under the home remote and tenant
+  sc cd                      home: the global config's install, tenant and project
+  sc cd ~/web                project web under the home install and tenant
 
-Like a shell cd, the target must exist: the remote must be enrolled, the tenant
-accessible (a Shared Tenant is entered through the Auth App, as sc tenant
-switch does) and the project present in the tenant. --local-only records the
-position without those lookups. A machine is a leaf: use sc connect to enter
-one. The position is saved in the nearest .sandcastle, the file the switch
-commands write, so it is per directory tree, not per terminal.`,
+The install is the first label of its Auth Hostname (obelix for
+https://obelix.example.com). Like a shell cd, the target must exist: the
+install must be enrolled, the tenant listed by its Auth App and the project
+present in the tenant. A tenant with no Incus remote on this client yet is
+enrolled the way sc tenant switch enrols it. --local-only records the position
+without those lookups. A machine is a leaf: use sc connect to enter one. The
+position is saved in the nearest .sandcastle, the file the switch commands
+write, so it is per directory tree, not per terminal. A path that starts with
+a remote name instead of an install (/moyn-dev-miraculix/moyn-dev) still works
+and prints its install form.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: pathCompletion(config, levelProject),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -95,15 +103,16 @@ commands write, so it is per directory tree, not per terminal.`,
 			return writeOutput(config.stdout, opts.output, out.Path, out)
 		},
 	}
-	command.Flags().BoolVar(&localOnly, "local-only", false, "record the position without checking the remote, tenant or project exist")
+	command.Flags().BoolVar(&localOnly, "local-only", false, "record the position without checking the install, tenant or project exist")
 	return command
 }
 
 // runCd resolves the target and applies the switches it implies, in tree
-// order: remote, then tenant, then project. Each switch writes .sandcastle
-// and the global config exactly as its command does; the config is reloaded
-// between them so the next step sees the new state. The level and the
-// previous position are recorded last.
+// order: the remote serving the install and tenant (enrolling one when the
+// tenant has none yet), then the tenant, then the project. Each switch
+// writes .sandcastle and the global config exactly as its command does; the
+// config is reloaded between them so the next step sees the new state. The
+// level and the previous position are recorded last.
 func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool) (positionOutput, error) {
 	if !isPathReference(arg) {
 		// A bare name is relative: `sc cd web` from a tenant is the project
@@ -128,44 +137,68 @@ func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool
 	if len(target) == levelMachine {
 		return positionOutput{}, fmt.Errorf("%s is a machine: a machine is a leaf, use `sc connect %s`", formatPath(target), formatPath(target))
 	}
-	// A remote serves one tenant (ADR-0021). A path pairing it with another
-	// tenant of the same install would record a position the tree never
-	// lists; name the remotes enrolled for that tenant instead.
-	if len(target) > levelRemote && !localOnly {
-		if served := tenantOfRemote(config, target[0]); served != "" && served != target[1] {
-			hint := fmt.Sprintf("`sc tenant switch %s` enrolls one", target[1])
-			if remotes := remotesEnrolledFor(target[1]); len(remotes) > 0 {
-				paths := make([]string, 0, len(remotes))
-				for _, remote := range remotes {
-					paths = append(paths, formatPath(append([]string{remote}, target[1:]...)))
-				}
-				hint = "use " + strings.Join(paths, " or ")
-			}
-			return positionOutput{}, fmt.Errorf("remote %q serves tenant %q, not %q: %s", target[0], served, target[1], hint)
-		}
-	}
-	before := currentPosition(config)
-	previous := formatPath(before)
+	previous := formatPath(currentPosition(config))
 	notes := config.stderr
 	if notes == nil {
 		notes = io.Discard
 	}
 
 	current := config
-	if len(target) > levelRoot && target[0] != strings.TrimSpace(current.adminConfig.Remote) {
-		if _, _, _, err := switchRemoteSelection(current, target[0]); err != nil {
-			return positionOutput{}, err
+	if len(target) > levelRoot {
+		ix := loadInstallIndex()
+		remote, enrol := ix.anchorRemote(config, target[0]), false
+		if len(target) > levelInstall {
+			resolved, err := ix.positionRemote(config, target[0], target[1])
+			var missing errTenantNotEnrolled
+			switch {
+			case errors.As(err, &missing):
+				enrol = true
+			case err != nil:
+				return positionOutput{}, err
+			default:
+				remote = resolved
+			}
+		} else if _, known := ix.install(target[0]); !known && remote == "" {
+			if remote, err = ix.positionRemote(config, target[0], ""); err != nil {
+				return positionOutput{}, err
+			}
 		}
-		if current, err = reloadCommandConfig(current); err != nil {
-			return positionOutput{}, err
+		if enrol && !localOnly {
+			if err := requireInstallListsTenant(ctx, config, ix, target[0], target[1]); err != nil {
+				return positionOutput{}, err
+			}
 		}
-	}
-	if len(target) > levelRemote && target[1] != strings.TrimSpace(current.adminConfig.Tenant) {
-		if _, err := runTenantSwitch(ctx, current, target[1], localOnly, notes); err != nil {
-			return positionOutput{}, err
+		if remote == "" {
+			return positionOutput{}, fmt.Errorf("install %s has no enrolled remote on this client: run sc login %s", target[0], firstNonEmptyString(installHost(ix, target[0]), "<auth-hostname>"))
 		}
-		if current, err = reloadCommandConfig(current); err != nil {
-			return positionOutput{}, err
+		if remote != strings.TrimSpace(current.adminConfig.Remote) {
+			if _, _, _, err := switchRemoteSelection(current, remote); err != nil {
+				return positionOutput{}, err
+			}
+			if current, err = reloadCommandConfig(current); err != nil {
+				return positionOutput{}, err
+			}
+		}
+		switch {
+		case enrol:
+			if _, err := runTenantSwitch(ctx, current, target[1], localOnly, notes); err != nil {
+				return positionOutput{}, err
+			}
+			if current, err = reloadCommandConfig(current); err != nil {
+				return positionOutput{}, err
+			}
+		case len(target) > levelInstall && target[1] != strings.TrimSpace(current.adminConfig.Tenant):
+			local, err := directorySelection(current)
+			if err != nil {
+				return positionOutput{}, err
+			}
+			local.Tenant = target[1]
+			if _, err := scconfig.SaveDirectoryConfig(local); err != nil {
+				return positionOutput{}, fmt.Errorf("save selection: %w", err)
+			}
+			if current, err = reloadCommandConfig(current); err != nil {
+				return positionOutput{}, err
+			}
 		}
 	}
 	if len(target) > levelTenant && target[2] != strings.TrimSpace(current.adminConfig.Project) {
@@ -182,10 +215,7 @@ func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool
 	if err != nil {
 		return positionOutput{}, err
 	}
-	if len(target) > levelRoot {
-		local.Remote = target[0]
-	}
-	if len(target) > levelRemote {
+	if len(target) > levelInstall {
 		local.Tenant = target[1]
 	}
 	if len(target) > levelTenant {
@@ -206,26 +236,33 @@ func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool
 	if err != nil {
 		return positionOutput{}, fmt.Errorf("save selection: %w", err)
 	}
-	out := positionFromSegments(target)
+	out := positionFromSegments(target, local.Remote)
 	out.Previous = previous
 	out.ConfigPath = path
 	return out, nil
 }
 
-// remotesEnrolledFor lists the enrolled remotes recorded for a tenant, sorted.
-func remotesEnrolledFor(tenantName string) []string {
-	cfg, err := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+// requireInstallListsTenant refuses to enrol a tenant the install's Auth App
+// does not list, naming the install, before any remote is switched.
+func requireInstallListsTenant(ctx context.Context, config commandConfig, ix installIndex, install, tenantName string) error {
+	tenants, err := installTenants(ctx, config, ix, install)
 	if err != nil {
-		return nil
+		return fmt.Errorf("install %s: list tenants: %w", install, err)
 	}
-	remotes := []string{}
-	for remote, tenant := range cfg.RemoteTenants {
-		if strings.TrimSpace(tenant) == tenantName {
-			remotes = append(remotes, remote)
+	names := make([]string, 0, len(tenants))
+	for _, candidate := range tenants {
+		if candidate.Tenant == tenantName {
+			return nil
 		}
+		names = append(names, candidate.Tenant)
 	}
-	sort.Strings(remotes)
-	return remotes
+	sort.Strings(names)
+	return fmt.Errorf("install %s does not list tenant %q (tenants: %s)", install, tenantName, strings.Join(names, ", "))
+}
+
+func installHost(ix installIndex, install string) string {
+	record, _ := ix.install(install)
+	return record.AuthHost
 }
 
 // reloadCommandConfig rebuilds the command config from the files a switch
@@ -242,6 +279,9 @@ func reloadCommandConfig(config commandConfig) (commandConfig, error) {
 	}
 	if config.authResources != nil {
 		rebuilt.authResources = config.authResources
+	}
+	if config.tenantRemote != nil {
+		rebuilt.tenantRemote = config.tenantRemote
 	}
 	return rebuilt, nil
 }

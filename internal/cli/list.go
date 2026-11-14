@@ -147,9 +147,9 @@ func newListCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 		ValidArgsFunction: pathCompletion(config, levelMachine),
 		Long: `List Sandcastle machines in the current install's project.
 
-With a Sandcastle Path (/remote/tenant/project/machine, or a relative path
+With a Sandcastle Path (/install/tenant/project/machine, or a relative path
 such as .., ../*dev or ~), ls lists like a shell: the children of every
-directory the path matches — remotes under /, tenants under a remote,
+directory the path matches — installs under /, tenants under an install,
 projects under a tenant, machines under a project — each under a "path:"
 header when there are several. -d prints the matching names instead of
 their contents, -l a table with the level's columns, -R recurses. With no
@@ -182,7 +182,7 @@ expand it first.`,
 				return writeOutput(config.stdout, opts.output, formatPathList(payload, pathOpts), payload)
 			}
 			if len(args) > 1 {
-				return fmt.Errorf("several arguments need Sandcastle Paths (/remote/tenant/project/machine); the colon grammar takes one reference")
+				return fmt.Errorf("several arguments need Sandcastle Paths (/install/tenant/project/machine); the colon grammar takes one reference")
 			}
 			remoteOverride, project, machineName := splitListReference(optionalArg(args), localRemoteExists)
 			request := listMachinesRequest{
@@ -262,6 +262,7 @@ func stampMachinePaths(remote string, result *listPayload) {
 	for i := range result.Machines {
 		m := &result.Machines[i]
 		m.Path = machinePath(remote, result.Tenant.Tenant, m.Project, m.Name)
+		m.RemotePath = remoteMachinePath(remote, result.Tenant.Tenant, m.Project, m.Name)
 	}
 }
 
@@ -274,11 +275,11 @@ func listedScopePath(config commandConfig, result listPayload) string {
 	if remote == "" {
 		remote = strings.TrimSpace(config.adminConfig.Remote)
 	}
-	segments := []string{remote, strings.TrimSpace(result.Tenant.Tenant)}
-	if project := strings.TrimSpace(result.Project); project != "" && !result.AllProjects && !naming.IsPattern(project) {
-		segments = append(segments, project)
+	project := strings.TrimSpace(result.Project)
+	if result.AllProjects || naming.IsPattern(project) {
+		project = ""
 	}
-	return formatPath(segments)
+	return scopePath(remote, result.Tenant.Tenant, project)
 }
 
 // formatMachineListShort is `sc ls` without -l: one machine per line, as a
@@ -313,11 +314,11 @@ func formatMultiMachineListShort(payload multiListPayload) string {
 	total := 0
 	for _, section := range payload.Remotes {
 		for _, m := range section.Machines {
-			fmt.Fprintln(&b, formatPath([]string{section.Remote, section.Tenant.Tenant, m.Project, m.Name}))
+			fmt.Fprintln(&b, machinePath(section.Remote, section.Tenant.Tenant, m.Project, m.Name))
 			total++
 		}
 		for _, u := range section.Unmanaged {
-			fmt.Fprintf(&b, "%s (unmanaged)\n", formatPath([]string{section.Remote, section.Tenant.Tenant, "-", u.Name}))
+			fmt.Fprintf(&b, "%s (unmanaged)\n", machinePath(section.Remote, section.Tenant.Tenant, "-", u.Name))
 			total++
 		}
 	}

@@ -15,12 +15,14 @@ import (
 // machineActionResult is one machine's outcome in a lifecycle run. Remote is
 // set only when the run spanned installs.
 type machineActionResult struct {
-	// Path is the machine's Sandcastle Path, the name text output uses.
-	Path    string `json:"path,omitempty"`
-	Remote  string `json:"remote,omitempty"`
-	Project string `json:"project"`
-	Machine string `json:"machine"`
-	Error   string `json:"error,omitempty"`
+	// Path is the machine's Sandcastle Path, the name text output uses;
+	// RemotePath its remote form (ADR-0030), kept for one minor release.
+	Path       string `json:"path,omitempty"`
+	RemotePath string `json:"remote_path,omitempty"`
+	Remote     string `json:"remote,omitempty"`
+	Project    string `json:"project"`
+	Machine    string `json:"machine"`
+	Error      string `json:"error,omitempty"`
 }
 
 // target renders the result for text output: its Sandcastle Path when the
@@ -75,7 +77,7 @@ reports every machine it acted on.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			yes = yes || force
 			if action == machine.ActionDelete && isPathReference(args[0]) {
-				// `sc rm /remote/tenant/project` removes a project; a machine
+				// `sc rm /install/tenant/project` removes a project; a machine
 				// path falls through to the machine grammar below.
 				handled, err := removeProjectPath(cmd.Context(), config, opts, args[0], recursive, yes, dryRun)
 				if handled || err != nil {
@@ -116,11 +118,15 @@ func removeProjectPath(ctx context.Context, config commandConfig, opts *rootOpti
 		return false, nil
 	case levelProject:
 	default:
-		return true, fmt.Errorf("%s is a %s: rm removes projects and machines; remotes and tenants are managed by sc remote, sc login and sc-adm", formatPath(segments), levelName(len(segments)))
+		return true, fmt.Errorf("%s is a %s: rm removes projects and machines; installs and tenants are managed by sc login, sc remote and sc-adm", formatPath(segments), levelName(len(segments)))
 	}
-	remote, tenantName, project := segments[0], segments[1], segments[2]
-	if naming.IsPattern(remote) || naming.IsPattern(tenantName) || naming.IsPattern(project) {
+	install, tenantName, project := segments[0], segments[1], segments[2]
+	if naming.IsPattern(install) || naming.IsPattern(tenantName) || naming.IsPattern(project) {
 		return true, fmt.Errorf("rm needs one project, not the pattern %s", formatPath(segments))
+	}
+	remote, err := loadInstallIndex().positionRemote(config, install, tenantName)
+	if err != nil {
+		return true, err
 	}
 	bound, restore, err := configForPosition(config, remote, tenantName)
 	if err != nil {
@@ -215,12 +221,13 @@ func runMachineLifecycle(ctx context.Context, config commandConfig, opts *rootOp
 		}
 		path := machinePath(config.adminConfig.Remote, targets[0].Summary.Tenant, result.Project, result.Machine)
 		payload := struct {
-			Action  string `json:"action"`
-			Path    string `json:"path"`
-			Tenant  string `json:"tenant"`
-			Project string `json:"project"`
-			Machine string `json:"machine"`
-		}{string(action), path, targets[0].Summary.Tenant, result.Project, result.Machine}
+			Action     string `json:"action"`
+			Path       string `json:"path"`
+			RemotePath string `json:"remote_path"`
+			Tenant     string `json:"tenant"`
+			Project    string `json:"project"`
+			Machine    string `json:"machine"`
+		}{string(action), path, remoteMachinePath(config.adminConfig.Remote, targets[0].Summary.Tenant, result.Project, result.Machine), targets[0].Summary.Tenant, result.Project, result.Machine}
 		return writeOutput(config.stdout, opts.output, fmt.Sprintf("%s %s", action, path), payload)
 	}
 	payload := machineActionPayload{
@@ -300,6 +307,7 @@ func runMachineAction(ctx context.Context, config commandConfig, fanout remoteFa
 				applied[index].Remote = remote
 			}
 			applied[index].Path = machinePath(remote, summary.Tenant, applied[index].Project, applied[index].Machine)
+			applied[index].RemotePath = remoteMachinePath(remote, summary.Tenant, applied[index].Project, applied[index].Machine)
 		}
 		results = append(results, applied...)
 		return nil
@@ -384,6 +392,7 @@ func planMachineLifecycle(ctx context.Context, config commandConfig, opts *rootO
 	}
 	type entry struct {
 		Path                string `json:"path"`
+		RemotePath          string `json:"remote_path"`
 		Project             string `json:"project"`
 		Machine             string `json:"machine"`
 		CertificateDecision string `json:"certificateDecision"`
@@ -403,7 +412,7 @@ func planMachineLifecycle(ctx context.Context, config commandConfig, opts *rootO
 			remote = strings.TrimSpace(config.adminConfig.Remote)
 		}
 		path := machinePath(remote, target.Summary.Tenant, target.Machine.Project, target.Machine.Name)
-		entries = append(entries, entry{path, target.Machine.Project, target.Machine.Name, decision})
+		entries = append(entries, entry{path, remoteMachinePath(remote, target.Summary.Tenant, target.Machine.Project, target.Machine.Name), target.Machine.Project, target.Machine.Name, decision})
 		fmt.Fprintf(&out, "[dry-run] %s %s — %s\n", action, path, decision)
 	}
 	return writeOutput(config.stdout, opts.output, strings.TrimSpace(out.String()), struct {

@@ -18,7 +18,7 @@ func newMkdirCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var image string
 	command := &cobra.Command{
 		Use:   "mkdir [-p] path",
-		Short: "Create a project (/remote/tenant/project) or a machine (…/project/machine) by Sandcastle Path",
+		Short: "Create a project (/install/tenant/project) or a machine (…/project/machine) by Sandcastle Path",
 		Long: `Create by Sandcastle Path: a three-segment path (or a relative path that
 resolves to one) creates a project, as sc project create does; a
 four-segment path creates a machine, as sc create does.
@@ -27,7 +27,7 @@ four-segment path creates a machine, as sc create does.
   sc mkdir ../api         sibling project api
   sc mkdir -p ../api/dev  project api, then machine dev in it
 
-Remotes and tenants are not created here: enroll installs with sc login and
+Installs and tenants are not created here: enroll installs with sc login and
 sc enroll, and tenants with sc-adm create tenant.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: pathCompletion(config, levelMachine),
@@ -61,17 +61,18 @@ func runMkdir(ctx context.Context, config commandConfig, opts *rootOptions, arg 
 		}
 	}
 	if len(segments) < levelProject {
-		return fmt.Errorf("%s is a %s: mkdir creates projects and machines; enroll remotes with sc login or sc enroll, create tenants with sc-adm create tenant", formatPath(segments), levelName(len(segments)))
+		return fmt.Errorf("%s is a %s: mkdir creates projects and machines; enroll installs with sc login, create tenants with sc-adm create tenant", formatPath(segments), levelName(len(segments)))
 	}
-	remote, tenantName, project := segments[0], segments[1], segments[2]
+	tenantName, project := segments[1], segments[2]
+	remote, err := loadInstallIndex().positionRemote(config, segments[0], tenantName)
+	if err != nil {
+		return err
+	}
 	bound, restore, err := configForPosition(config, remote, tenantName)
 	if err != nil {
 		return err
 	}
 	defer restore()
-	if served := tenantOfRemote(config, remote); served != "" && served != tenantName {
-		return fmt.Errorf("remote %q serves tenant %q, not %q: `sc cd /%s/%s` first", remote, served, tenantName, remote, tenantName)
-	}
 	if len(segments) == levelProject {
 		return createProjectViaPath(ctx, bound, opts, project, options.Image)
 	}

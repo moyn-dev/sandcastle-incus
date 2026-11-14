@@ -115,6 +115,7 @@ func newAdminTenantListCommand(config commandConfig, opts *rootOptions) *cobra.C
 			}
 			for i := range machines {
 				machines[i].Path = machinePath(config.adminConfig.Remote, summary.Tenant, machines[i].Project, machines[i].Name)
+				machines[i].RemotePath = remoteMachinePath(config.adminConfig.Remote, summary.Tenant, machines[i].Project, machines[i].Name)
 			}
 			result := tenantResourcesPayload{
 				Tenant:    summary,

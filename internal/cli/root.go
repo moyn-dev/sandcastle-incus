@@ -333,7 +333,7 @@ func newUserCommandConfig(name string, stdin io.Reader, stdout, stderr io.Writer
 // bare names are unaffected. A prefix naming the current remote is just stripped.
 func rebindForReference(base commandConfig, reference string) (commandConfig, string, func(), error) {
 	noop := func() {}
-	// A Sandcastle Path (/remote/tenant/project/machine) becomes its colon
+	// A Sandcastle Path (/install/tenant/project/machine) becomes its colon
 	// reference first, so the rest of the grammar is one code path.
 	reference, err := normalizeReference(base, reference)
 	if err != nil {

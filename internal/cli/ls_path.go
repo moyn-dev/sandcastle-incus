@@ -8,23 +8,29 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
 // The tree behind `sc ls <path>`: every level's children, one data source per
-// level, so a path listing is a walk over them. Root lists enrolled remotes
-// (local incus config), a remote its accessible tenants (Auth App), a tenant
-// its projects (Auth App resource cache, live Incus fallback) and a project
-// its machines (`sc ls`'s own cache-first listing).
+// level, so a path listing is a walk over them. Root lists the installs (the
+// user config's Auth Hostnames), an install its accessible tenants (its Auth
+// App, recorded enrollments offline), a tenant its projects (Auth App
+// resource cache, live Incus fallback) and a project its machines (`sc ls`'s
+// own cache-first listing). Below the install level every lookup goes
+// through the remote enrolled for the tenant.
 
 // pathEntry is one child of a directory in the tree.
 type pathEntry struct {
 	Name string `json:"name"`
 	// Path is the entry's absolute Sandcastle Path.
 	Path string `json:"path,omitempty"`
-	// Kind is the child's level: remote, tenant, project or machine.
+	// RemotePath is a machine's path in the remote form of ADR-0030
+	// (/remote/tenant/project/machine), kept for one minor release.
+	RemotePath string `json:"remote_path,omitempty"`
+	// Kind is the child's level: install, tenant, project or machine.
 	Kind string `json:"kind"`
 	// Fields carries the long-format columns for the entry, in column order.
 	Fields []string `json:"fields,omitempty"`
@@ -58,9 +64,9 @@ type pathListOptions struct {
 func longColumns(depth int) []string {
 	switch depth {
 	case levelRoot:
-		return []string{"REMOTE", "TENANT", "PROJECT", "AUTH"}
-	case levelRemote:
-		return []string{"TENANT", "ROLE", "PERSONAL"}
+		return []string{"INSTALL", "AUTH", "REMOTES"}
+	case levelInstall:
+		return []string{"TENANT", "ROLE", "PERSONAL", "REMOTE"}
 	case levelTenant:
 		return []string{"PROJECT", "DOMAIN", "IMAGE"}
 	default:
@@ -108,67 +114,98 @@ func configForPosition(config commandConfig, remote string, tenant string) (comm
 
 // childrenOf lists the children of a directory in the tree.
 func childrenOf(ctx context.Context, config commandConfig, segments []string) ([]pathEntry, error) {
+	ix := loadInstallIndex()
 	switch len(segments) {
 	case levelRoot:
-		return remoteEntries()
-	case levelRemote:
-		return tenantEntries(ctx, config, segments[0])
-	case levelTenant:
-		return projectEntries(ctx, config, segments[0], segments[1])
-	case levelProject:
-		return machineEntries(ctx, config, segments[0], segments[1], segments[2])
-	default:
+		return installEntries(ix), nil
+	case levelInstall:
+		return tenantEntries(ctx, config, ix, segments[0])
+	}
+	if len(segments) > levelProject {
 		return nil, fmt.Errorf("%s is a machine, not a directory", formatPath(segments))
 	}
-}
-
-func remoteEntries() ([]pathEntry, error) {
-	incusDir, _ := scconfig.SharedIncusDirExplained()
-	remotes, err := readLocalRemotes(incusDir)
-	if err != nil {
-		return nil, fmt.Errorf("read incus remotes from %s: %w", incusDir, err)
-	}
-	cfg, _ := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
-	entries := []pathEntry{}
-	for _, row := range sandcastleRemoteRows(remotes, cfg) {
-		tenant := cfg.TenantForRemote(row.Name)
-		entries = append(entries, pathEntry{Name: row.Name, Kind: "remote", Fields: []string{row.Name, tenant, shortProjectName(row.Project, tenant), row.AuthHostname}})
-	}
-	return entries, nil
-}
-
-// tenantEntries lists the tenant a remote is enrolled for (ADR-0021: one
-// remote per install and tenant). Two remotes may be enrollments of the
-// same install for different tenants — the personal login and a Shared
-// Tenant switch — and that install's Auth App lists every tenant the user
-// can access, so listing "accessible tenants" showed every machine twice.
-// The same tenant name on two installs stays two entries, under its two
-// remotes. The Auth App is still asked, for the role and personal columns;
-// when it does not answer the entry is the name alone, never an error, so
-// a down install does not hide its path.
-func tenantEntries(ctx context.Context, config commandConfig, remote string) ([]pathEntry, error) {
-	served := tenantOfRemote(config, remote)
-	bound, restore, err := configForPosition(config, remote, "")
+	remote, err := ix.positionRemote(config, segments[0], segments[1])
 	if err != nil {
 		return nil, err
 	}
-	defer restore()
+	if len(segments) == levelTenant {
+		return projectEntries(ctx, config, remote, segments[1])
+	}
+	entries, err := machineEntries(ctx, config, segments[0]+"/"+segments[1], remote, segments[1], segments[2])
+	for i := range entries {
+		entries[i].RemotePath = formatPath([]string{remote, segments[1], segments[2], entries[i].Name})
+	}
+	return entries, err
+}
+
+func installEntries(ix installIndex) []pathEntry {
 	entries := []pathEntry{}
-	if client, err := tenantClient(bound); err == nil {
-		if tenants, err := client.ListTenants(ctx); err == nil {
-			for _, row := range tenantListRows(tenants, strings.TrimSpace(bound.adminConfig.Tenant)) {
-				if served == "" || row.Tenant == served {
-					entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal)}})
-				}
-			}
-		} else if served == "" {
+	for _, record := range ix.installs {
+		entries = append(entries, pathEntry{Name: record.Name, Kind: "install", Fields: []string{record.Name, displayValue(record.AuthHost), displayValue(strings.Join(record.sortedRemotes(), ","))}})
+	}
+	return entries
+}
+
+// installTenants asks an install's Auth App for the tenants the user can
+// access, with the login of one of its remotes (the anchor), or the token
+// recorded for its Auth Hostname when no remote is enrolled.
+func installTenants(ctx context.Context, config commandConfig, ix installIndex, install string) ([]authapp.TenantAccessSummary, error) {
+	if config.authTenants != nil {
+		return config.authTenants.ListTenants(ctx)
+	}
+	if remote := ix.anchorRemote(config, install); remote != "" {
+		bound, restore, err := configForPosition(config, remote, "")
+		if err != nil {
 			return nil, err
 		}
-	} else if served == "" {
-		return nil, err
+		defer restore()
+		client, err := tenantClient(bound)
+		if err != nil {
+			return nil, err
+		}
+		return client.ListTenants(ctx)
 	}
-	if len(entries) == 0 && served != "" {
-		entries = append(entries, pathEntry{Name: served, Kind: "tenant", Fields: []string{served, "-", "-"}})
+	record, ok := ix.install(install)
+	if !ok || record.AuthHost == "" {
+		return nil, fmt.Errorf("no install %q", install)
+	}
+	cfg, _ := scconfig.LoadSandcastleConfig(scconfig.DefaultConfigPath())
+	token := cfg.AuthTokenForAuthHostname(record.AuthHost)
+	if token == "" {
+		return nil, fmt.Errorf("no CLI Auth Token for %s; run sc login %s", record.AuthHost, record.AuthHost)
+	}
+	return authapp.DeviceClient{BaseURL: record.AuthHost, AuthToken: token}.ListTenants(ctx)
+}
+
+// tenantEntries lists every tenant the install's Auth App says the user can
+// access (ADR-0032 decision 2), with the remote enrolled for it here, if any.
+// When the Auth App does not answer, the tenants enrolled on this client
+// stand in, and a note on stderr says the list may be incomplete: a down
+// install must not hide its paths.
+func tenantEntries(ctx context.Context, config commandConfig, ix installIndex, install string) ([]pathEntry, error) {
+	record, known := ix.install(install)
+	if !known {
+		if _, err := ix.positionRemote(config, install, ""); err != nil {
+			return nil, err
+		}
+	}
+	entries := []pathEntry{}
+	tenants, err := installTenants(ctx, config, ix, install)
+	if err == nil {
+		for _, row := range tenantListRows(tenants, strings.TrimSpace(config.adminConfig.Tenant)) {
+			entries = append(entries, pathEntry{Name: row.Tenant, Kind: "tenant", Fields: []string{row.Tenant, row.Role, yesNo(row.Personal), displayValue(record.Remotes[row.Tenant])}})
+		}
+	} else {
+		recorded := record.sortedTenants()
+		if len(recorded) == 0 {
+			return nil, err
+		}
+		if config.stderr != nil {
+			fmt.Fprintf(config.stderr, "note: %s: %v; listing the tenants enrolled on this client, which may be incomplete\n", formatPath([]string{install}), err)
+		}
+		for _, tenantName := range recorded {
+			entries = append(entries, pathEntry{Name: tenantName, Kind: "tenant", Fields: []string{tenantName, "-", "-", record.Remotes[tenantName]}})
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil
@@ -192,9 +229,10 @@ func projectEntries(ctx context.Context, config commandConfig, remote string, te
 	return entries, nil
 }
 
-func machineEntries(ctx context.Context, config commandConfig, remote string, tenantName string, project string) ([]pathEntry, error) {
+// machineEntries lists a project's machines. key is the tenant's path
+// (install/tenant), the key markBatch records.
+func machineEntries(ctx context.Context, config commandConfig, key string, remote string, tenantName string, project string) ([]pathEntry, error) {
 	cache := treeCacheFrom(ctx)
-	key := remote + "/" + tenantName
 	if cache != nil {
 		if byProject, ok := cache.machines[key]; ok {
 			return machineEntriesOf(byProject[project]), nil
@@ -247,7 +285,7 @@ func machineEntriesOf(machines []meta.Machine) []pathEntry {
 }
 
 // treeCache is one path listing's memory: machines already fetched per
-// tenant (remote/tenant → project → machines), and the tenants a glob is
+// tenant (install/tenant → project → machines), and the tenants a glob is
 // about to sweep, whose first project visit fetches the whole tenant. It
 // rides the context so childrenOf keeps its signature for completion.
 type treeCache struct {
@@ -564,8 +602,8 @@ func entryDepth(listing pathListing) int {
 	switch listing.Level {
 	case "root":
 		return levelRoot
-	case "remote":
-		return levelRemote
+	case "install":
+		return levelInstall
 	case "tenant":
 		return levelTenant
 	}
