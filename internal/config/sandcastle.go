@@ -55,6 +55,9 @@ type SandcastleConfig struct {
 	// not installed / outdated" hint (`sc config set skill-reminder off`).
 	// "" or "on" keeps the hint; "off" silences it.
 	SkillReminder string `yaml:"skill_reminder,omitempty"`
+	// IncusNativeMirror turns the Native Incus Mirror off when false. Unset
+	// means on. SANDCASTLE_INCUS_NATIVE_MIRROR overrides it.
+	IncusNativeMirror *bool `yaml:"incus_native_mirror,omitempty"`
 }
 
 // SkillReminderEnabled reports whether the interactive agent-skill hint may be
