@@ -306,3 +306,70 @@ func TestAbsoluteDNSNameStopsSearchDomainExpansion(t *testing.T) {
 		}
 	}
 }
+
+type fakeDNS struct {
+	ns     map[string][]string
+	served map[string][]string
+	local  map[string][]string
+	calls  []string
+}
+
+func (f *fakeDNS) prober() netTailnetProber {
+	return netTailnetProber{
+		lookupNS: func(_ context.Context, zone string) ([]string, error) {
+			if ns, ok := f.ns[zone]; ok {
+				return ns, nil
+			}
+			return nil, errors.New("no such host")
+		},
+		lookupAt: func(_ context.Context, server, host string) ([]string, error) {
+			f.calls = append(f.calls, "auth "+server)
+			if addrs, ok := f.served[host]; ok {
+				return addrs, nil
+			}
+			return nil, errors.New("no such host")
+		},
+		lookupLocal: func(_ context.Context, host string) ([]string, error) {
+			f.calls = append(f.calls, "local")
+			if addrs, ok := f.local[host]; ok {
+				return addrs, nil
+			}
+			return nil, errors.New("no such host")
+		},
+	}
+}
+
+func TestTailnetLookupNeverAsksTheLocalResolverBeforeTheRecordIsServed(t *testing.T) {
+	dns := &fakeDNS{ns: map[string][]string{"moyn.dev.": {"ns1.example."}}}
+	if _, err := dns.prober().LookupHost(context.Background(), "thieso2.subdomain.moyn.dev"); err == nil {
+		t.Fatal("unserved name resolved")
+	}
+	for _, call := range dns.calls {
+		if call == "local" {
+			t.Fatalf("local resolver asked before the record was served (it would cache NXDOMAIN): %v", dns.calls)
+		}
+	}
+}
+
+func TestTailnetLookupPrefersServedAnswerOverStaleLocalCache(t *testing.T) {
+	dns := &fakeDNS{
+		ns:     map[string][]string{"moyn.dev.": {"ns1.example."}},
+		served: map[string][]string{"thieso2.subdomain.moyn.dev.": {"10.125.0.17"}},
+		local:  map[string][]string{"thieso2.subdomain.moyn.dev.": {"10.1.32.1"}},
+	}
+	got, err := dns.prober().LookupHost(context.Background(), "thieso2.subdomain.moyn.dev")
+	if err != nil || len(got) != 1 || got[0] != "10.125.0.17" {
+		t.Fatalf("LookupHost = %v, %v; want the served 10.125.0.17", got, err)
+	}
+	dns.local["thieso2.subdomain.moyn.dev."] = []string{"10.125.0.17"}
+	if got, err := dns.prober().LookupHost(context.Background(), "thieso2.subdomain.moyn.dev"); err != nil || got[0] != "10.125.0.17" {
+		t.Fatalf("LookupHost with caught-up local = %v, %v", got, err)
+	}
+}
+
+func TestDNSZoneCandidates(t *testing.T) {
+	got := strings.Join(dnsZoneCandidates("thieso2.subdomain.moyn.dev."), " ")
+	if want := "moyn.dev. subdomain.moyn.dev."; got != want {
+		t.Fatalf("dnsZoneCandidates = %q, want %q", got, want)
+	}
+}
