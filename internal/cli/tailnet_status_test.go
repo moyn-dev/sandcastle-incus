@@ -293,3 +293,16 @@ func TestTailnetPublishWaitRequiresConsecutiveReadyPolls(t *testing.T) {
 		t.Fatalf("a 200 from the app must not print a host hint:\n%s", stderr)
 	}
 }
+
+func TestAbsoluteDNSNameStopsSearchDomainExpansion(t *testing.T) {
+	for in, want := range map[string]string{
+		"internal.tc42.uk":  "internal.tc42.uk.",
+		"internal.tc42.uk.": "internal.tc42.uk.",
+		"10.125.0.17":       "10.125.0.17",
+		"":                  "",
+	} {
+		if got := absoluteDNSName(in); got != want {
+			t.Errorf("absoluteDNSName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
