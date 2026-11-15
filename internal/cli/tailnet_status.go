@@ -54,25 +54,121 @@ type tailnetTLSProbe struct {
 	Error    string    `json:"error,omitempty"`
 }
 
-type netTailnetProber struct{}
+// netTailnetProber asks the zone's authoritative name servers before any
+// caching resolver. A lookup through the local resolver before the record is
+// served caches NXDOMAIN there for the zone's negative TTL (30 minutes on
+// moyn.dev), so the name stays broken on this host long after it exists.
+type netTailnetProber struct {
+	lookupNS    func(ctx context.Context, zone string) ([]string, error)
+	lookupAt    func(ctx context.Context, server string, host string) ([]string, error)
+	lookupLocal func(ctx context.Context, host string) ([]string, error)
+}
 
-// LookupHost asks the local resolver first and a public resolver second: a
-// negative answer cached locally from before the claim outlives the fresh
-// record by the zone's negative TTL, which would stall --wait for minutes.
-func (netTailnetProber) LookupHost(ctx context.Context, host string) ([]string, error) {
+var errTailnetNameNotServed = errors.New("not served by the zone's name servers yet")
+
+func newNetTailnetProber() netTailnetProber {
+	public := resolverAt(tailnetPublicResolver)
+	return netTailnetProber{
+		lookupNS: func(ctx context.Context, zone string) ([]string, error) {
+			records, err := public.LookupNS(ctx, zone)
+			hosts := make([]string, 0, len(records))
+			for _, record := range records {
+				hosts = append(hosts, record.Host)
+			}
+			return hosts, err
+		},
+		lookupAt: func(ctx context.Context, server string, host string) ([]string, error) {
+			return resolverAt(net.JoinHostPort(strings.TrimSuffix(server, "."), "53")).LookupHost(ctx, host)
+		},
+		lookupLocal: net.DefaultResolver.LookupHost,
+	}
+}
+
+func resolverAt(address string) *net.Resolver {
+	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, address)
+	}}
+}
+
+// LookupHost answers from the authoritative servers while the local resolver
+// has not caught up, and never asks the local resolver before the record is
+// served. Without known name servers it falls back to the local resolver and
+// then a public one.
+func (p netTailnetProber) LookupHost(ctx context.Context, host string) ([]string, error) {
 	host = absoluteDNSName(host)
-	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if servers := p.authoritativeServers(ctx, host); len(servers) > 0 {
+		var served []string
+		for _, server := range servers {
+			if addrs, err := p.lookupAt(ctx, server, host); err == nil && len(addrs) > 0 {
+				served = addrs
+				break
+			}
+		}
+		if len(served) == 0 {
+			return nil, errTailnetNameNotServed
+		}
+		if local, err := p.lookupLocal(ctx, host); err == nil && sameAddressSet(local, served) {
+			return local, nil
+		}
+		return served, nil
+	}
+	addrs, err := p.lookupLocal(ctx, host)
 	if err == nil && len(addrs) > 0 {
 		return addrs, nil
 	}
-	public := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		var dialer net.Dialer
-		return dialer.DialContext(ctx, network, tailnetPublicResolver)
-	}}
-	if fresh, publicErr := public.LookupHost(ctx, host); publicErr == nil && len(fresh) > 0 {
-		return fresh, nil
+	if p.lookupAt != nil {
+		if fresh, publicErr := p.lookupAt(ctx, strings.TrimSuffix(tailnetPublicResolver, ":53"), host); publicErr == nil && len(fresh) > 0 {
+			return fresh, nil
+		}
 	}
 	return addrs, err
+}
+
+// authoritativeServers returns the name servers of the deepest zone that
+// publishes NS records above host, walking down from the registrable part.
+func (p netTailnetProber) authoritativeServers(ctx context.Context, host string) []string {
+	if p.lookupNS == nil || p.lookupAt == nil {
+		return nil
+	}
+	var servers []string
+	for _, zone := range dnsZoneCandidates(host) {
+		ns, err := p.lookupNS(ctx, zone)
+		if err != nil || len(ns) == 0 {
+			break
+		}
+		servers = ns
+	}
+	return servers
+}
+
+// dnsZoneCandidates lists the parents of an absolute name from two labels
+// down to its immediate parent: "a.b.moyn.dev." gives "moyn.dev." and
+// "b.moyn.dev.".
+func dnsZoneCandidates(host string) []string {
+	labels := strings.Split(strings.TrimSuffix(host, "."), ".")
+	var zones []string
+	for n := 2; n < len(labels); n++ {
+		zones = append(zones, strings.Join(labels[len(labels)-n:], ".")+".")
+	}
+	return zones
+}
+
+func sameAddressSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, addr := range a {
+		seen[addr]++
+	}
+	for _, addr := range b {
+		if seen[addr] == 0 {
+			return false
+		}
+		seen[addr]--
+	}
+	return true
 }
 
 // absoluteDNSName adds the root dot so the resolver never appends a search
@@ -87,7 +183,7 @@ func absoluteDNSName(host string) string {
 	return host + "."
 }
 
-func (netTailnetProber) ProbeTLS(ctx context.Context, host string) tailnetTLSProbe {
+func (p netTailnetProber) ProbeTLS(ctx context.Context, host string) tailnetTLSProbe {
 	ctx, cancel := context.WithTimeout(ctx, tailnetProbeTimeout)
 	defer cancel()
 	var dialer net.Dialer
@@ -122,7 +218,7 @@ func tailnetProberFor(config commandConfig) tailnetProber {
 	if config.tailnetProber != nil {
 		return config.tailnetProber
 	}
-	return netTailnetProber{}
+	return newNetTailnetProber()
 }
 
 // tailnetPublicationStatus is one published name as seen from this host.
