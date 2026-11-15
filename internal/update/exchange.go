@@ -178,5 +178,13 @@ func SkewWarning(cliVersion, applianceVersion string) (string, bool) {
 	if cli == "" || appliance == "" || IsDevBuild(cli) || cli == appliance {
 		return "", false
 	}
+	switch {
+	case IsNewer(appliance, cli):
+		return fmt.Sprintf("note: CLI %s is older than deployment %s — run `sc update`", cli, appliance), true
+	case IsNewer(cli, appliance):
+		// `sc update` cannot raise the deployment, so pointing at it here
+		// sends the user to a command that reports everything current.
+		return fmt.Sprintf("note: deployment %s is older than CLI %s — an admin updates it with `sc-adm update`", appliance, cli), true
+	}
 	return fmt.Sprintf("note: CLI %s and deployment %s differ — `sc update` shows what is outdated", cli, appliance), true
 }

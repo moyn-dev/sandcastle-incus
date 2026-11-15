@@ -3,6 +3,7 @@ package update
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -57,20 +58,21 @@ func TestSkewWarning(t *testing.T) {
 		name      string
 		cli, appl string
 		wantWarn  bool
+		wantFix   string
 	}{
-		{"match", "v0.2.0", "v0.2.0", false},
-		{"cli behind", "v0.1.0", "v0.2.0", true},
-		{"cli ahead", "v0.3.0", "v0.2.0", true},
-		{"dev cli exempt", "0.0.0-dev", "v0.2.0", false},
-		{"no appliance observed", "v0.1.0", "", false},
+		{"match", "v0.2.0", "v0.2.0", false, ""},
+		{"cli behind", "v0.1.0", "v0.2.0", true, "run `sc update`"},
+		{"cli ahead", "v0.3.0", "v0.2.0", true, "`sc-adm update`"},
+		{"dev cli exempt", "0.0.0-dev", "v0.2.0", false, ""},
+		{"no appliance observed", "v0.1.0", "", false, ""},
 	}
 	for _, c := range cases {
 		msg, warn := SkewWarning(c.cli, c.appl)
 		if warn != c.wantWarn {
 			t.Errorf("%s: SkewWarning(%q, %q) = %v, want %v", c.name, c.cli, c.appl, warn, c.wantWarn)
 		}
-		if warn && msg == "" {
-			t.Errorf("%s: empty warning message", c.name)
+		if warn && !strings.Contains(msg, c.wantFix) {
+			t.Errorf("%s: warning %q does not name %q", c.name, msg, c.wantFix)
 		}
 	}
 }
