@@ -60,6 +60,7 @@ type netTailnetProber struct{}
 // negative answer cached locally from before the claim outlives the fresh
 // record by the zone's negative TTL, which would stall --wait for minutes.
 func (netTailnetProber) LookupHost(ctx context.Context, host string) ([]string, error) {
+	host = absoluteDNSName(host)
 	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err == nil && len(addrs) > 0 {
 		return addrs, nil
@@ -72,6 +73,18 @@ func (netTailnetProber) LookupHost(ctx context.Context, host string) ([]string, 
 		return fresh, nil
 	}
 	return addrs, err
+}
+
+// absoluteDNSName adds the root dot so the resolver never appends a search
+// domain. A hotel network's wildcard search domain otherwise answered a
+// not-yet-cached name with its own address, which looked like a real answer
+// and skipped the public-resolver fallback.
+func absoluteDNSName(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" || strings.HasSuffix(host, ".") || net.ParseIP(host) != nil {
+		return host
+	}
+	return host + "."
 }
 
 func (netTailnetProber) ProbeTLS(ctx context.Context, host string) tailnetTLSProbe {
