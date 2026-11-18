@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 	"github.com/thieso2/sandcastle-incus/internal/usertrust"
@@ -112,6 +113,16 @@ func (p Provisioner) ensurePersonalTenantV2(ctx context.Context, userKey string,
 			reuse = got
 		}
 	}
+	// The client's $USER only seeds a tenant's first login. A re-login from
+	// another host must not rewrite the stored user every app project's
+	// profile renders; changing it is the admin's `tenant create --unix-user`.
+	if reuse.UnixUser != "" {
+		unixUser = ""
+	}
+	// Likewise the key: the login's key leads, but no stored key is dropped.
+	// PlanCreateV2 replaces the first stored key with the requested one, which
+	// let a login from another host remove the owner's key.
+	sshPublicKey = meta.FormatSSHKeys(append([]string{sshPublicKey}, meta.ParseSSHKeys(reuse.SSHPublicKey)...))
 	plan, err := tenant.PlanCreateV2(p.Admin, tenant.CreateRequest{
 		Reference:              userKey,
 		SSHPublicKey:           strings.TrimSpace(sshPublicKey),

@@ -9,6 +9,7 @@ import (
 	"github.com/thieso2/sandcastle-incus/internal/config"
 	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/thieso2/sandcastle-incus/internal/usertrust"
 )
 
 func TestProfileUnixUser(t *testing.T) {
@@ -66,5 +67,52 @@ func TestMemberTenantProjectsCoverSharedTenants(t *testing.T) {
 	}
 	if got := p.memberTenantProjects(context.Background(), "nobody"); len(got) != 0 {
 		t.Fatalf("non-member got %v", got)
+	}
+}
+
+type recordingTrust struct{}
+
+func (recordingTrust) CreateToken(_ context.Context, plan usertrust.UserPlan) (usertrust.TokenResult, error) {
+	return usertrust.TokenResult{Token: "tok", RemoteName: plan.RemoteName, Projects: plan.Projects}, nil
+}
+
+// A re-login must not rewrite an existing tenant's login user from whatever
+// $USER the client host happens to have (bracki on obelix flipped jan →
+// sebastian that way); only a tenant's first login takes the client's user.
+// Nor may it drop the owner's key: the login's key is added in front.
+func TestEnsurePersonalTenantLoginUser(t *testing.T) {
+	const janKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOjhuzppHPlAkHZVTQuvc12y08BCuwm2UMb/o3EE3vdO"
+	const loginKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAPEmboq7m0gFscNPyrkWsnrxiGDSrOpLWzCyEokBrSZ"
+	for _, tt := range []struct {
+		name     string
+		existing []authTestTenant
+		want     string
+		wantKeys string
+	}{
+		{name: "re-login keeps stored user and key", existing: []authTestTenant{{Tenant: "bracki", UnixUser: "jan", SSHKey: janKey, CIDR: "10.248.4.0/24"}}, want: "jan", wantKeys: loginKey + "\n" + janKey},
+		{name: "first login takes client user", want: "sebastian", wantKeys: loginKey},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var planned tenant.CreatePlanV2
+			p := Provisioner{
+				Admin:   config.AdminDefaults(),
+				Tenants: tenant.MemoryStore{Projects: v2TenantProjectsForAuthTest(tt.existing...)},
+				Trust:   recordingTrust{},
+				V2Create: func(_ context.Context, plan tenant.CreatePlanV2, _ string) (V2CreateResult, error) {
+					planned = plan
+					return V2CreateResult{}, nil
+				},
+			}
+			user := User{UserKey: "bracki", LocalUnixUser: "sebastian", SSHPublicKey: loginKey}
+			if _, err := p.EnsurePersonalTenant(context.Background(), user, ProvisionOptions{}); err != nil {
+				t.Fatalf("EnsurePersonalTenant: %v", err)
+			}
+			if planned.DefaultProfileUser != tt.want {
+				t.Fatalf("DefaultProfileUser = %q, want %q", planned.DefaultProfileUser, tt.want)
+			}
+			if planned.SSHPublicKey != tt.wantKeys {
+				t.Fatalf("SSHPublicKey = %q, want %q", planned.SSHPublicKey, tt.wantKeys)
+			}
+		})
 	}
 }

@@ -990,6 +990,7 @@ func (u *fakeTenantSSHKeyUpdater) SetTenantSSHKey(ctx context.Context, incusProj
 type authTestTenant struct {
 	Tenant   string
 	UnixUser string
+	SSHKey   string
 	CIDR     string
 	Suffix   string
 	Projects []string // extra app-project short names beyond "default"
@@ -1016,6 +1017,9 @@ func v2TenantProjectsForAuthTest(tenants ...authTestTenant) []tenant.IncusProjec
 		}
 		if tt.UnixUser != "" {
 			infraConfig[meta.KeyV2User] = tt.UnixUser
+		}
+		if tt.SSHKey != "" {
+			infraConfig[meta.KeyV2SSHKey] = tt.SSHKey
 		}
 		if len(tt.Members) > 0 {
 			infraConfig[meta.KeyV2Members] = meta.FormatMembers(tt.Members)
