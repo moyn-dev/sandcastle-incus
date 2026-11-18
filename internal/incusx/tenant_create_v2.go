@@ -58,17 +58,16 @@ func (c TenantCreator) CreateTenantV2(ctx context.Context, plan tenant.CreatePla
 		sidecarImage = plan.SidecarImage
 	}
 
-	// The tailnet-egress toggle lives on the infra project (ADR-0026), written
-	// only by `sc tailscale egress`; on a first create the project doesn't exist
-	// yet, which reads as "off". Resolved before the bridge so one converge
-	// applies both the DHCP option and the sidecar NAT consistently.
-	egress := v2TailnetEgressEnabled(server, plan.InfraProject)
-	c.log("ensure shared bridge " + plan.Bridge + " (in default, tailnet egress " + onOff(egress) + ")")
-	if err := ensureV2Bridge(server, plan, egress); err != nil {
+	// The infra project carries the tailnet-egress toggle, so it is ensured
+	// first: one converge then applies the DHCP option, the sidecar NAT and
+	// accept-routes from the same resolved value.
+	c.log("ensure infra project " + plan.InfraProject)
+	egress, err := ensureV2InfraProject(server, plan)
+	if err != nil {
 		return err
 	}
-	c.log("ensure infra project " + plan.InfraProject)
-	if err := ensureV2Project(server, plan.InfraProject, "Sandcastle v2 infra for "+plan.Tenant, "infra", plan.Tenant, false, v2InfraMetadata(plan)); err != nil {
+	c.log("ensure shared bridge " + plan.Bridge + " (in default, tailnet egress " + onOff(egress) + ")")
+	if err := ensureV2Bridge(server, plan, egress); err != nil {
 		return err
 	}
 	c.log("ensure app project " + plan.DefaultProject)
@@ -230,15 +229,28 @@ func ensureV2Bridge(server TenantCreateServer, plan tenant.CreatePlanV2, egress 
 	})
 }
 
-// v2TailnetEgressEnabled reads the tenant's tailnet-egress toggle off the
-// infra project (ADR-0026). The project may not exist yet (first create) or be
-// unreadable — both read as "off": egress must fail closed.
-func v2TailnetEgressEnabled(server TenantCreateServer, infraProject string) bool {
-	project, _, err := server.GetProject(infraProject)
-	if err != nil || project == nil {
-		return false
+// ensureV2InfraProject ensures the tenant's infra project and returns its
+// tailnet-egress toggle. New tenants get egress on (ADR-0033): only the converge
+// that creates the project seeds the key, so an existing tenant whose key is
+// absent — created before ADR-0033, or switched off since — stays off. An
+// unreadable project also reads as off: egress fails closed.
+func ensureV2InfraProject(server TenantCreateServer, plan tenant.CreatePlanV2) (bool, error) {
+	existing, _, err := server.GetProject(plan.InfraProject)
+	fresh := api.StatusErrorCheck(err, http.StatusNotFound)
+	metadata := v2InfraMetadata(plan)
+	if fresh {
+		metadata[meta.KeyV2TailnetEgress] = "true"
 	}
-	return project.Config[meta.KeyV2TailnetEgress] == "true"
+	if err := ensureV2Project(server, plan.InfraProject, "Sandcastle v2 infra for "+plan.Tenant, "infra", plan.Tenant, false, metadata); err != nil {
+		return false, err
+	}
+	if fresh {
+		return true, nil
+	}
+	if err != nil || existing == nil {
+		return false, nil
+	}
+	return existing.Config[meta.KeyV2TailnetEgress] == "true", nil
 }
 
 func onOff(enabled bool) string {

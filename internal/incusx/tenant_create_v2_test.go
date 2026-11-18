@@ -7,6 +7,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
+	"github.com/thieso2/sandcastle-incus/internal/meta"
 	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
@@ -270,5 +271,105 @@ func TestV2TailscaleUpAcceptRoutesFollowsEgress(t *testing.T) {
 				t.Fatalf("script carries %s; script:\n%s", unwanted, script)
 			}
 		})
+	}
+}
+
+// fakeInfraProjectServer implements only the project methods ensureV2Project uses.
+type fakeInfraProjectServer struct {
+	TenantCreateServer // embedded: only the project methods are implemented below
+	project            *api.Project
+	getErr             error
+	created            *api.ProjectsPost
+	updated            *api.ProjectPut
+}
+
+func (s *fakeInfraProjectServer) GetProject(string) (*api.Project, string, error) {
+	if s.getErr != nil {
+		return nil, "", s.getErr
+	}
+	if s.project == nil {
+		return nil, "", api.StatusErrorf(http.StatusNotFound, "not found")
+	}
+	return s.project, "etag", nil
+}
+
+func (s *fakeInfraProjectServer) CreateProject(p api.ProjectsPost) error {
+	s.created = &p
+	return nil
+}
+
+func (s *fakeInfraProjectServer) UpdateProject(_ string, p api.ProjectPut, _ string) error {
+	s.updated = &p
+	return nil
+}
+
+var infraPlan = tenant.CreatePlanV2{Tenant: "acme", InfraProject: "sc2-acme", Bridge: "sc2-acme", PrivateCIDR: "10.249.7.0/24"}
+
+// A tenant created from scratch gets egress on, recorded on the new infra
+// project so every later converge (and `sc tailscale egress`) reads it back.
+func TestEnsureV2InfraProjectFreshTenantDefaultsEgressOn(t *testing.T) {
+	s := &fakeInfraProjectServer{}
+	egress, err := ensureV2InfraProject(s, infraPlan)
+	if err != nil {
+		t.Fatalf("ensureV2InfraProject: %v", err)
+	}
+	if !egress {
+		t.Fatal("fresh tenant: egress = off, want on")
+	}
+	if s.created == nil {
+		t.Fatal("expected the infra project to be created")
+	}
+	if got := s.created.Config[meta.KeyV2TailnetEgress]; got != "true" {
+		t.Fatalf("created %s = %q, want true", meta.KeyV2TailnetEgress, got)
+	}
+}
+
+// An existing tenant without the key (created before default-on, or switched
+// off, which deletes the key) stays off, and the converge must not seed it.
+func TestEnsureV2InfraProjectExistingWithoutKeyStaysOff(t *testing.T) {
+	s := &fakeInfraProjectServer{project: &api.Project{Name: "sc2-acme", ProjectPut: api.ProjectPut{Config: map[string]string{}}}}
+	egress, err := ensureV2InfraProject(s, infraPlan)
+	if err != nil {
+		t.Fatalf("ensureV2InfraProject: %v", err)
+	}
+	if egress {
+		t.Fatal("existing tenant without key: egress = on, want off")
+	}
+	if s.created != nil {
+		t.Fatal("existing infra project must not be re-created")
+	}
+	if s.updated == nil {
+		t.Fatal("expected the infra metadata to be converged onto the existing project")
+	}
+	if got, ok := s.updated.Config[meta.KeyV2TailnetEgress]; ok {
+		t.Fatalf("converge seeded %s=%q on an existing project", meta.KeyV2TailnetEgress, got)
+	}
+}
+
+func TestEnsureV2InfraProjectExistingWithKeyIsOn(t *testing.T) {
+	s := &fakeInfraProjectServer{project: &api.Project{Name: "sc2-acme", ProjectPut: api.ProjectPut{Config: map[string]string{meta.KeyV2TailnetEgress: "true"}}}}
+	egress, err := ensureV2InfraProject(s, infraPlan)
+	if err != nil {
+		t.Fatalf("ensureV2InfraProject: %v", err)
+	}
+	if !egress {
+		t.Fatal("existing tenant with key true: egress = off, want on")
+	}
+}
+
+// A project the converge cannot read is not "fresh": egress fails closed.
+func TestEnsureV2InfraProjectUnreadableFailsClosed(t *testing.T) {
+	s := &fakeInfraProjectServer{getErr: api.StatusErrorf(http.StatusForbidden, "forbidden")}
+	egress, err := ensureV2InfraProject(s, infraPlan)
+	if err != nil {
+		t.Fatalf("ensureV2InfraProject: %v", err)
+	}
+	if egress {
+		t.Fatal("unreadable project: egress = on, want off")
+	}
+	if s.created != nil {
+		if got, ok := s.created.Config[meta.KeyV2TailnetEgress]; ok {
+			t.Fatalf("unreadable project seeded %s=%q", meta.KeyV2TailnetEgress, got)
+		}
 	}
 }

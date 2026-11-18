@@ -65,11 +65,13 @@ const (
 	// Incus project; `sc create` uses it when --image is not given.
 	KeyV2Image = Prefix + "v2.image"
 	// KeyV2TailnetEgress holds the tenant's tailnet-egress toggle on the
-	// kind=infra project (ADR-0026): "true" means machines reach tailnet peers
-	// (100.64.0.0/10) through the sidecar — a DHCP classless static route on the
-	// tenant bridge plus a masquerade on the sidecar's tailscale0. Absent/other
-	// means off. Deliberately NOT part of v2InfraMetadata: the converge reads it,
-	// only `sc tailscale egress` writes it.
+	// kind=infra project (ADR-0026, ADR-0033): "true" means machines reach
+	// tailnet peers and their subnet routes through the sidecar — a DHCP
+	// classless static route on the tenant bridge, a masquerade on the sidecar's
+	// tailscale0 and --accept-routes. Absent/other means off. Deliberately NOT
+	// part of v2InfraMetadata: the converge seeds "true" only when it creates
+	// the infra project (new tenants default on); `sc tailscale egress` writes
+	// it afterwards.
 	KeyV2TailnetEgress = Prefix + "v2.tailnet-egress"
 	// KeyV2Bare marks an INSTANCE created with `sc create --bare`: no login
 	// user, no SSH key, no sshd. `sc connect` reads it to pick an Incus exec
