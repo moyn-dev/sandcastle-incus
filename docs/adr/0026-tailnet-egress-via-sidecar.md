@@ -1,6 +1,6 @@
 # Tailnet egress: machines reach tailnet peers through the sidecar
 
-Status: accepted
+Status: accepted. Amended by ADR-0033 (subnet routes are steered too, the sidecar accepts routes, and new tenants default on).
 
 ## Context
 

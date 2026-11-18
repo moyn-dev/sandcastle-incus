@@ -1,9 +1,6 @@
 package tenant
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 // With egress off the bridge carries only the CoreDNS resolver option — the
 // pre-ADR-0026 value, byte-identical so existing bridges stay converged.
@@ -14,34 +11,48 @@ func TestBridgeDHCPOptionsOff(t *testing.T) {
 	}
 }
 
-// With egress on, option 121 steers the CGNAT range at the sidecar AND must
+// With egress on, option 121 steers the CGNAT range and 10.0.0.0/8 (other
+// installs' subnet routes), in that order, at the sidecar AND must
 // carry the default route: RFC 3442 makes clients that receive option 121
 // ignore the router option, so omitting 0.0.0.0/0 would cut every machine off
 // from its gateway.
 func TestBridgeDHCPOptionsOnCarriesDefaultRoute(t *testing.T) {
 	got := BridgeDHCPOptions("10.249.7.3", "10.249.7.1", true)
-	want := "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,0.0.0.0/0,10.249.7.1"
+	want := "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,10.0.0.0/8,10.249.7.3,0.0.0.0/0,10.249.7.1"
 	if got != want {
 		t.Fatalf("BridgeDHCPOptions(on) = %q, want %q", got, want)
 	}
 }
 
-// The ruleset must be an atomic idempotent replace (declare/delete/declare) and
-// scope the masquerade to tenant-sourced, CGNAT-destined traffic on tailscale0.
+// The ruleset is an atomic idempotent replace (declare/delete/declare) that
+// masquerades every tenant-sourced packet leaving tailscale0, whatever its
+// destination: accepted subnet routes sit outside the CGNAT range.
 func TestSidecarEgressNftRuleset(t *testing.T) {
 	got := SidecarEgressNftRuleset("10.249.7.0/24")
-	if !strings.HasPrefix(got, "table ip sandcastle-egress\ndelete table ip sandcastle-egress\n") {
-		t.Fatalf("ruleset must start with the declare/delete idiom, got:\n%s", got)
+	want := `table ip sandcastle-egress
+delete table ip sandcastle-egress
+table ip sandcastle-egress {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "tailscale0" ip saddr 10.249.7.0/24 masquerade
 	}
-	for _, want := range []string{
-		`oifname "tailscale0"`,
-		"ip saddr 10.249.7.0/24",
-		"ip daddr 100.64.0.0/10",
-		"masquerade",
-		"type nat hook postrouting",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("ruleset missing %q:\n%s", want, got)
-		}
+}
+`
+	if got != want {
+		t.Fatalf("SidecarEgressNftRuleset =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestSidecarEgressScriptPinsOwnSubnetToMain(t *testing.T) {
+	got := SidecarEgressScript("10.249.7.0/24")
+	want := `#!/bin/sh
+set -eu
+sysctl -qw net.ipv4.ip_forward=1
+while ip rule del priority 5200 2>/dev/null; do :; done
+ip rule add to 10.249.7.0/24 lookup main priority 5200
+exec nft -f /etc/sandcastle-egress.nft
+`
+	if got != want {
+		t.Fatalf("SidecarEgressScript() =\n%s\nwant\n%s", got, want)
 	}
 }

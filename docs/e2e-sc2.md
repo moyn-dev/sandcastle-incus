@@ -2515,38 +2515,60 @@ Phases 0–9 are validated green today; the items above are refinements, not blo
 
 ---
 
-## Phase 11 — Tailnet egress (ADR-0026, opt-in) ⚠️ not yet run
+## Phase 11 — Tailnet egress (ADR-0026, ADR-0033; on for new tenants) ⚠️ not yet run
 
-Machines reaching tailnet peers *outbound* through the sidecar. Off by default;
-all of a tenant's machines share the sidecar's `tag:sandcastle` ACL identity —
-on a default-open ACL, enabling egress opens the whole tailnet to every machine.
+Machines reach tailnet peers *outbound* through the sidecar: tailnet nodes
+(`100.64.0.0/10`) and subnets other tailnet routers advertise inside
+`10.0.0.0/8`, such as another install's tenant `/24` behind its sidecar. A
+tenant created fresh has egress on. A tenant created before ADR-0033 has no
+key and stays off until switched on. All of a tenant's machines share the
+sidecar's `tag:sandcastle` ACL identity. On a default-open ACL, egress opens
+the whole tailnet, every advertised subnet included, to every machine.
+
+Needs a second install (or any subnet router) on the same tailnet that
+advertises a `/24` with a reachable `<remote-peer-ip>:<port>`, for example a
+machine on another install.
 
 ```bash
-# 1. Baseline: from a machine, a tailnet peer is UNREACHABLE (default route → host → public uplink drops CGNAT)
-sc c dev -- sh -c 'curl -sS -m5 http://<peer-tailnet-ip>:<port>/ && echo UNEXPECTED || echo unreachable-as-expected'
+# 1. Fresh tenant defaults on (created in this run, so the key was seeded)
+incus project get <prefix>-<tenant> user.sandcastle.v2.tailnet-egress   # true
+sc tailscale egress <tenant>                                             # Tailnet egress: on
 
-# 2. Enable + converge (admin plane; the toggle alone changes nothing)
-sc tailscale egress <tenant> on
-sc-adm tenant create <tenant> ...      # idempotent converge applies bridge option 121 + sidecar NAT unit
+# 2. Bridge carries both options (project default); the order is load-bearing
+incus network get <prefix>-<tenant> raw.dnsmasq
+#   dhcp-option=6,<dns>
+#   dhcp-option=121,100.64.0.0/10,<dns>,10.0.0.0/8,<dns>,0.0.0.0/0,<gw>
 
-# 3. Bridge carries both options now (project default)
-incus network get <prefix>-<tenant> raw.dnsmasq   # dhcp-option=6,<dns> + dhcp-option=121,100.64.0.0/10,<dns>,0.0.0.0/0,<gw>
-
-# 4. Sidecar unit + table live
+# 3. Sidecar: unit + table live, masquerade has no daddr filter, routes accepted
 incus exec sidecar --project <prefix>-<tenant> -- systemctl is-active sandcastle-sidecar-egress.service
-incus exec sidecar --project <prefix>-<tenant> -- nft list table ip sandcastle-egress
+incus exec sidecar --project <prefix>-<tenant> -- nft list table ip sandcastle-egress    # oifname "tailscale0" ip saddr <cidr> masquerade
+incus exec sidecar --project <prefix>-<tenant> -- tailscale debug prefs | grep RouteAll  # "RouteAll": true
+incus exec sidecar --project <prefix>-<tenant> -- ip route show table 52 | grep <remote-/24>
 
-# 5. ACL: grant tag:sandcastle → <peer>:<port> in the tenant's tailnet policy (packets are DROPPED until then)
+# 4. ACL: grant tag:sandcastle → <peer>:<port> and → <remote-peer-ip>:<port> (packets are DROPPED until then)
 
-# 6. Machine picks up the route on DHCP renewal (≤ lease/2) — force it, then verify
-sc c dev -- sh -c 'ip route get <peer-tailnet-ip>'      # next hop must be the sidecar (.3), not .1
-sc c dev -- sh -c 'curl -sS -m8 http://<peer-tailnet-ip>:<port>/'   # PASS: peer answers
+# 5. From a FRESH machine (first lease already carries option 121)
+sc create egress-probe && sc c egress-probe -- sh -c '
+  ip route get <peer-tailnet-ip>; ip route get <remote-peer-ip>   # next hop .3 (sidecar) for both
+  ip route get 1.1.1.1                                            # next hop .1 (internet stays on the host)
+  curl -sS -m8 http://<peer-tailnet-ip>:<port>/
+  curl -sS -m8 http://<remote-peer-ip>:<port>/'                   # PASS: both answer
 
-# 7. Disable converges everything back
-sc tailscale egress <tenant> off && sc-adm tenant create <tenant> ...   # bridge back to resolver-only, unit+table gone
+# 6. Disable converges everything back
+sc tailscale egress <tenant> off && sc-adm tenant create <tenant> ...
+incus network get <prefix>-<tenant> raw.dnsmasq                    # dhcp-option=6,<dns> only
+incus exec sidecar --project <prefix>-<tenant> -- tailscale debug prefs | grep RouteAll   # false
+# after DHCP renewal (or NIC bounce) on egress-probe: both curls fail (fail closed)
+
+# 7. Existing tenant (created before ADR-0033, no key) stays off until opted in
+incus project get <prefix>-<old-tenant> user.sandcastle.v2.tailnet-egress   # empty
+sc tailscale egress <old-tenant> on && sc-adm tenant create <old-tenant> ...  # then steps 2-5 apply
 ```
 
-PASS: step 1 fails closed, step 6 reaches the peer, step 7 restores the baseline.
+PASS: step 1 reads on for the fresh tenant. In step 5 the remote peer behind
+another sidecar's subnet route answers once the ACL allows it, and internet
+traffic still leaves via `.1`. Step 6 fails closed, and step 7 shows an
+existing tenant untouched until it opts in.
 
 ---
 

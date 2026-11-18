@@ -58,17 +58,16 @@ func (c TenantCreator) CreateTenantV2(ctx context.Context, plan tenant.CreatePla
 		sidecarImage = plan.SidecarImage
 	}
 
-	// The tailnet-egress toggle lives on the infra project (ADR-0026), written
-	// only by `sc tailscale egress`; on a first create the project doesn't exist
-	// yet, which reads as "off". Resolved before the bridge so one converge
-	// applies both the DHCP option and the sidecar NAT consistently.
-	egress := v2TailnetEgressEnabled(server, plan.InfraProject)
-	c.log("ensure shared bridge " + plan.Bridge + " (in default, tailnet egress " + onOff(egress) + ")")
-	if err := ensureV2Bridge(server, plan, egress); err != nil {
+	// The infra project carries the tailnet-egress toggle, so it is ensured
+	// first: one converge then applies the DHCP option, the sidecar NAT and
+	// accept-routes from the same resolved value.
+	c.log("ensure infra project " + plan.InfraProject)
+	egress, err := ensureV2InfraProject(server, plan)
+	if err != nil {
 		return err
 	}
-	c.log("ensure infra project " + plan.InfraProject)
-	if err := ensureV2Project(server, plan.InfraProject, "Sandcastle v2 infra for "+plan.Tenant, "infra", plan.Tenant, false, v2InfraMetadata(plan)); err != nil {
+	c.log("ensure shared bridge " + plan.Bridge + " (in default, tailnet egress " + onOff(egress) + ")")
+	if err := ensureV2Bridge(server, plan, egress); err != nil {
 		return err
 	}
 	c.log("ensure app project " + plan.DefaultProject)
@@ -127,7 +126,7 @@ func (c TenantCreator) CreateTenantV2(ctx context.Context, plan tenant.CreatePla
 		tailnetHostname = plan.InfraProject
 	}
 	c.log("tailscale up (advertise " + plan.PrivateCIDR + ", hostname " + tailnetHostname + ")")
-	loginURL, sidecarIP, err := v2TailscaleUp(server.UseProject(plan.InfraProject), plan, tailnetHostname, strings.TrimSpace(opts.TailscaleAuthKey), hostIncusPort(server))
+	loginURL, sidecarIP, err := v2TailscaleUp(server.UseProject(plan.InfraProject), plan, tailnetHostname, strings.TrimSpace(opts.TailscaleAuthKey), hostIncusPort(server), egress)
 	if err != nil {
 		return err
 	}
@@ -175,7 +174,7 @@ func (c TenantCreator) resolveV2Server() (TenantCreateServer, error) {
 func ensureV2Bridge(server TenantCreateServer, plan tenant.CreatePlanV2, egress bool) error {
 	def := server.UseProject(naming.DefaultProjectName)
 	// With egress on, guests additionally get a classless static route steering
-	// the tailnet CGNAT range at the sidecar (ADR-0026). The exact-equality
+	// EgressSteeredPrefixes at the sidecar (ADR-0026, ADR-0033). The exact-equality
 	// converge below applies AND removes it on existing bridges; machines pick
 	// the change up on their next DHCP renewal.
 	wantDNSmasq := tenant.BridgeDHCPOptions(plan.DNSAddress, plan.GatewayAddress, egress)
@@ -230,15 +229,28 @@ func ensureV2Bridge(server TenantCreateServer, plan tenant.CreatePlanV2, egress 
 	})
 }
 
-// v2TailnetEgressEnabled reads the tenant's tailnet-egress toggle off the
-// infra project (ADR-0026). The project may not exist yet (first create) or be
-// unreadable — both read as "off": egress must fail closed.
-func v2TailnetEgressEnabled(server TenantCreateServer, infraProject string) bool {
-	project, _, err := server.GetProject(infraProject)
-	if err != nil || project == nil {
-		return false
+// ensureV2InfraProject ensures the tenant's infra project and returns its
+// tailnet-egress toggle. New tenants get egress on (ADR-0033): only the converge
+// that creates the project seeds the key, so an existing tenant whose key is
+// absent — created before ADR-0033, or switched off since — stays off. An
+// unreadable project also reads as off: egress fails closed.
+func ensureV2InfraProject(server TenantCreateServer, plan tenant.CreatePlanV2) (bool, error) {
+	existing, _, err := server.GetProject(plan.InfraProject)
+	fresh := api.StatusErrorCheck(err, http.StatusNotFound)
+	metadata := v2InfraMetadata(plan)
+	if fresh {
+		metadata[meta.KeyV2TailnetEgress] = "true"
 	}
-	return project.Config[meta.KeyV2TailnetEgress] == "true"
+	if err := ensureV2Project(server, plan.InfraProject, "Sandcastle v2 infra for "+plan.Tenant, "infra", plan.Tenant, false, metadata); err != nil {
+		return false, err
+	}
+	if fresh {
+		return true, nil
+	}
+	if err != nil || existing == nil {
+		return false, nil
+	}
+	return existing.Config[meta.KeyV2TailnetEgress] == "true", nil
 }
 
 func onOff(enabled bool) string {
@@ -268,6 +280,7 @@ func ensureV2SidecarEgress(server TenantResourceServer, plan tenant.CreatePlanV2
 			"systemctl daemon-reload 2>/dev/null || true",
 			// ip_forward stays on — the tailscaled subnet router needs it anyway.
 			"nft delete table ip sandcastle-egress 2>/dev/null || true",
+			tenant.SidecarOwnSubnetRuleCleanup(),
 		}, "\n")
 		if err := execSidecar(server, plan.SidecarInstance, script); err != nil {
 			return fmt.Errorf("remove sidecar tailnet egress: %w", err)
@@ -280,7 +293,7 @@ func ensureV2SidecarEgress(server TenantResourceServer, plan tenant.CreatePlanV2
 		mode    int
 	}{
 		{sidecarEgressRulesPath, tenant.SidecarEgressNftRuleset(plan.PrivateCIDR), 0o644},
-		{sidecarEgressScriptPath, tenant.SidecarEgressScript(), 0o755},
+		{sidecarEgressScriptPath, tenant.SidecarEgressScript(plan.PrivateCIDR), 0o755},
 		{sidecarEgressUnitPath, tenant.SidecarEgressUnit(), 0o644},
 	}
 	for _, f := range files {
@@ -960,8 +973,13 @@ func configureV2TLSSigner(server TenantResourceServer, plan tenant.CreatePlanV2)
 // removing the need for manual admin approval or a Tailscale API key.
 const sidecarTailnetTag = "tag:sandcastle"
 
-func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailnetHostname string, authKey string, incusPort string) (string, string, error) {
-	base := "--advertise-routes=" + plan.PrivateCIDR + " --hostname=" + tailnetHostname + " --accept-dns=false --advertise-tags=" + sidecarTailnetTag
+func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailnetHostname string, authKey string, incusPort string, egress bool) (string, string, error) {
+	// accept-routes rides in every `tailscale up` so a re-run never trips the
+	// "mention all non-default flags" check, and `tailscale set` re-asserts it
+	// once joined: the already-joined path skips `up`, and a waiting interactive
+	// unit may carry a stale value from before an egress toggle.
+	acceptRoutes := tenant.SidecarAcceptRoutesFlag(egress)
+	base := "--advertise-routes=" + plan.PrivateCIDR + " --hostname=" + tailnetHostname + " --accept-dns=false --advertise-tags=" + sidecarTailnetTag + " " + acceptRoutes
 	gateway, err := gatewayIPFromCIDR(plan.PrivateCIDR)
 	if err != nil {
 		return "", "", err
@@ -971,7 +989,8 @@ func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailne
 	// sidecar's tailnet IPv4 for the caller. Shared by both branches so a
 	// BYO-tailnet interactive join completes the Reach on the next
 	// provisioning pass (login re-polls until this reports an IP).
-	finish := incusReachCommand(gateway, incusPort) + "\n" +
+	finish := "tailscale set " + acceptRoutes + "\n" +
+		incusReachCommand(gateway, incusPort) + "\n" +
 		"printf 'TSIP=%s\\n' \"$(tailscale ip -4 | head -1)\""
 	if authKey == "" {
 		const log = "/var/lib/sandcastle-tsup.log"
@@ -1023,6 +1042,7 @@ func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailne
 		"for attempt in 1 2 3; do " + upCmd + " || true; tailscale ip -4 >/dev/null 2>&1 && break; sleep 3; done",
 		// Hard gate: fail the create if the sidecar is not on the tailnet.
 		"tailscale ip -4 >/dev/null 2>&1 || { echo 'tailscale did not connect' >&2; tailscale status >&2; exit 1; }",
+		"tailscale set " + acceptRoutes,
 		// Incus Reach (ADR-0017): proxy the host's Incus API onto the tenant
 		// tailnet — raw TCP, TLS passes through so the host cert is pinned.
 		incusReachCommand(gateway, incusPort),

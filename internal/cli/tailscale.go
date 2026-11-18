@@ -25,8 +25,12 @@ func newTailscaleEgressCommand(config commandConfig, opts *rootOptions) *cobra.C
 	return &cobra.Command{
 		Use:   "egress [tenant] [on|off]",
 		Short: "Show or toggle tailnet egress (machines reach tailnet peers via the sidecar)",
-		Long: "Tailnet egress (ADR-0026) routes machine traffic for the tailnet CGNAT range\n" +
-			"(100.64.0.0/10) through the tenant sidecar, masqueraded onto its tailnet IP.\n" +
+		Long: "Tailnet egress (ADR-0026, ADR-0033) routes machine traffic for tailnet peers\n" +
+			"through the tenant sidecar, masqueraded onto its tailnet IP: node addresses\n" +
+			"(100.64.0.0/10) and subnet routes other tailnet routers advertise inside\n" +
+			"10.0.0.0/8 (e.g. another Sandcastle install's machines; the sidecar accepts\n" +
+			"routes while egress is on). New tenants start with egress on; tenants created\n" +
+			"before that default stay off until switched on.\n" +
 			"Without arguments the current setting is shown. Toggling records the setting;\n" +
 			"the mechanics are applied by the next idempotent tenant converge\n" +
 			"(`sc-adm tenant create` or the tenant's next `sc login`), and machines pick up\n" +
