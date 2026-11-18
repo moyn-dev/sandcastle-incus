@@ -7360,3 +7360,24 @@ replace keys. Trade-off: `sc login --force` no longer removes a rotated-out
 key from the profile; that is now an admin action (the machines'
 `authorized_keys` reconcile was already additive, so old keys stayed there
 anyway).
+
+## 2026-11-18 — ADR-0033: egress subnet routes, default on for new tenants
+
+- `tailscale --accept-routes` is set by the converge in `v2TailscaleUp`, not
+  by the `sandcastle-sidecar-egress` oneshot. The oneshot is ordered only
+  after `sandcastle-sidecar-network`, so at boot tailscaled may not answer
+  yet. Tailscaled persists the setting anyway, and the off path deletes the
+  oneshot, so it could not restore `false`. In `v2TailscaleUp` tailscaled is
+  guaranteed up and joined. The flag goes into every `tailscale up`, because
+  a re-run `up` that omits a non-default setting is refused. A `tailscale
+  set` runs once joined, for the already-joined interactive path that skips
+  `up` and for a waiting interactive unit that may carry a stale value.
+- `ensureV2InfraProject` now runs before `ensureV2Bridge`, so the toggle is
+  resolved from the project the same converge ensured. Only a NotFound
+  project counts as fresh and gets `tailnet-egress=true`. A Forbidden or
+  other read error reads as off (fail closed), even though `ensureV2Project`
+  still creates on Forbidden.
+- Skipped `sc-adm tenant create --no-tailnet-egress`. Tenants are also
+  created by the auth-app on first `sc login`, so a flag on one creator would
+  only cover half of the creations. Opting out is `sc tailscale egress <t>
+  off`, then a converge.

@@ -35,15 +35,17 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
   using the **tenant's own** Tailscale key (supplied at `sc login`, or joined
   interactively via the printed login URL). The sidecar is its subnet-router,
   advertising the tenant's `/24`.
-- **Tailnet egress** — The opt-in reverse direction of the subnet route
-  (ADR-0026): machines reach tailnet peers (the CGNAT range `100.64.0.0/10`)
-  through the sidecar. A DHCP classless static route on the tenant bridge
-  steers the traffic at the sidecar, which masquerades it onto `tailscale0`,
-  so peers see the sidecar's tailnet IP and need no `--accept-routes`. Toggled
-  per tenant with `sc tailscale egress on|off` and applied by the idempotent
-  tenant converge; the tailnet ACL still decides what the sidecar's tag may
-  reach. Off by default — all of a tenant's machines share the sidecar's ACL
-  identity.
+- **Tailnet egress** — The reverse direction of the subnet route (ADR-0026,
+  ADR-0033). Machines reach tailnet peers through the sidecar: node addresses
+  (`100.64.0.0/10`) and subnet routes other tailnet routers advertise inside
+  `10.0.0.0/8`, such as another install's tenant `/24`. A DHCP classless
+  static route on the tenant bridge steers that traffic at the sidecar. The
+  sidecar accepts tailnet routes and masquerades the traffic onto
+  `tailscale0`, so peers see the sidecar's tailnet IP. Toggled per tenant
+  with `sc tailscale egress on|off` and applied by the idempotent tenant
+  converge. The tailnet ACL still decides what the sidecar's tag may reach.
+  On for new tenants; tenants created before ADR-0033 stay off until
+  switched on. All of a tenant's machines share the sidecar's ACL identity.
 - **Incus Reach** — The sidecar's `tailscale serve` proxy that forwards the
   sidecar's tailnet `:8443` to the host's Incus API. The tenant's enrolled remote
   points at the sidecar's tailnet IP, so the host's TLS certificate is pinned
