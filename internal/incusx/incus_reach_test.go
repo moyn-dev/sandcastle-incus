@@ -68,7 +68,7 @@ func TestTailscaleUpWithAuthKeyForwardsToHostListener(t *testing.T) {
 	resource := &fakeBinaryUpdateResource{instance: &api.Instance{}}
 	plan := tenant.CreatePlanV2{PrivateCIDR: "10.125.0.0/24", SidecarInstance: "sidecar"}
 
-	if _, _, err := v2TailscaleUp(resource, plan, "sc-test", "tskey-test", "443"); err != nil {
+	if _, _, err := v2TailscaleUp(resource, plan, "sc-test", "tskey-test", "443", false); err != nil {
 		t.Fatalf("v2TailscaleUp: %v", err)
 	}
 	script := strings.Join(resource.execs, "\n")

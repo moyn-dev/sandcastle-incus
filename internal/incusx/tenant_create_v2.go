@@ -127,7 +127,7 @@ func (c TenantCreator) CreateTenantV2(ctx context.Context, plan tenant.CreatePla
 		tailnetHostname = plan.InfraProject
 	}
 	c.log("tailscale up (advertise " + plan.PrivateCIDR + ", hostname " + tailnetHostname + ")")
-	loginURL, sidecarIP, err := v2TailscaleUp(server.UseProject(plan.InfraProject), plan, tailnetHostname, strings.TrimSpace(opts.TailscaleAuthKey), hostIncusPort(server))
+	loginURL, sidecarIP, err := v2TailscaleUp(server.UseProject(plan.InfraProject), plan, tailnetHostname, strings.TrimSpace(opts.TailscaleAuthKey), hostIncusPort(server), egress)
 	if err != nil {
 		return err
 	}
@@ -960,8 +960,13 @@ func configureV2TLSSigner(server TenantResourceServer, plan tenant.CreatePlanV2)
 // removing the need for manual admin approval or a Tailscale API key.
 const sidecarTailnetTag = "tag:sandcastle"
 
-func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailnetHostname string, authKey string, incusPort string) (string, string, error) {
-	base := "--advertise-routes=" + plan.PrivateCIDR + " --hostname=" + tailnetHostname + " --accept-dns=false --advertise-tags=" + sidecarTailnetTag
+func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailnetHostname string, authKey string, incusPort string, egress bool) (string, string, error) {
+	// accept-routes rides in every `tailscale up` so a re-run never trips the
+	// "mention all non-default flags" check, and `tailscale set` re-asserts it
+	// once joined: the already-joined path skips `up`, and a waiting interactive
+	// unit may carry a stale value from before an egress toggle.
+	acceptRoutes := tenant.SidecarAcceptRoutesFlag(egress)
+	base := "--advertise-routes=" + plan.PrivateCIDR + " --hostname=" + tailnetHostname + " --accept-dns=false --advertise-tags=" + sidecarTailnetTag + " " + acceptRoutes
 	gateway, err := gatewayIPFromCIDR(plan.PrivateCIDR)
 	if err != nil {
 		return "", "", err
@@ -971,7 +976,8 @@ func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailne
 	// sidecar's tailnet IPv4 for the caller. Shared by both branches so a
 	// BYO-tailnet interactive join completes the Reach on the next
 	// provisioning pass (login re-polls until this reports an IP).
-	finish := incusReachCommand(gateway, incusPort) + "\n" +
+	finish := "tailscale set " + acceptRoutes + "\n" +
+		incusReachCommand(gateway, incusPort) + "\n" +
 		"printf 'TSIP=%s\\n' \"$(tailscale ip -4 | head -1)\""
 	if authKey == "" {
 		const log = "/var/lib/sandcastle-tsup.log"
@@ -1023,6 +1029,7 @@ func v2TailscaleUp(server TenantResourceServer, plan tenant.CreatePlanV2, tailne
 		"for attempt in 1 2 3; do " + upCmd + " || true; tailscale ip -4 >/dev/null 2>&1 && break; sleep 3; done",
 		// Hard gate: fail the create if the sidecar is not on the tailnet.
 		"tailscale ip -4 >/dev/null 2>&1 || { echo 'tailscale did not connect' >&2; tailscale status >&2; exit 1; }",
+		"tailscale set " + acceptRoutes,
 		// Incus Reach (ADR-0017): proxy the host's Incus API onto the tenant
 		// tailnet — raw TCP, TLS passes through so the host cert is pinned.
 		incusReachCommand(gateway, incusPort),

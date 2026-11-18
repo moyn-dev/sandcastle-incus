@@ -1,6 +1,9 @@
 package tenant
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Tailnet egress (ADR-0026, ADR-0033): machines are not tailnet nodes, so
 // without help a packet from a machine to a tailnet address follows the default
@@ -37,6 +40,13 @@ func BridgeDHCPOptions(dnsAddress, gatewayAddress string, egress bool) string {
 	}
 	routes = append(routes, "0.0.0.0/0", gatewayAddress)
 	return options + "\ndhcp-option=121," + strings.Join(routes, ",")
+}
+
+// SidecarAcceptRoutesFlag is the sidecar's tailscale accept-routes setting:
+// the sidecar installs other routers' subnet routes only while egress is on,
+// and an explicit false restores the default when egress is switched off.
+func SidecarAcceptRoutesFlag(egress bool) string {
+	return "--accept-routes=" + strconv.FormatBool(egress)
 }
 
 // SidecarEgressNftRuleset renders /etc/sandcastle-egress.nft. The

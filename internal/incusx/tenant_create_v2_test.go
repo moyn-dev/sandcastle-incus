@@ -233,3 +233,42 @@ func TestExecExitErrorSurfacesNonzeroCommandExit(t *testing.T) {
 		}
 	}
 }
+
+// The sidecar accepts other routers' subnet routes exactly while egress is on,
+// and an off converge actively restores --accept-routes=false: in every
+// `tailscale up` (auth-key join and the interactive unit) and in the
+// `tailscale set` run once joined (the already-joined path skips `up`).
+func TestV2TailscaleUpAcceptRoutesFollowsEgress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		authKey string
+		egress  bool
+	}{
+		{"auth-key on", "tskey-test", true},
+		{"auth-key off", "tskey-test", false},
+		{"interactive on", "", true},
+		{"interactive off", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource := &fakeBinaryUpdateResource{instance: &api.Instance{}}
+			plan := tenant.CreatePlanV2{PrivateCIDR: "10.125.0.0/24", SidecarInstance: "sidecar"}
+			if _, _, err := v2TailscaleUp(resource, plan, "sc-test", tc.authKey, "443", tc.egress); err != nil {
+				t.Fatalf("v2TailscaleUp: %v", err)
+			}
+			script := strings.Join(resource.execs, "\n")
+			want, unwanted := "--accept-routes=false", "--accept-routes=true"
+			if tc.egress {
+				want, unwanted = unwanted, want
+			}
+			if !strings.Contains(script, "tailscale set "+want+"\n") {
+				t.Fatalf("missing `tailscale set %s`; script:\n%s", want, script)
+			}
+			if !strings.Contains(script, "--advertise-tags=tag:sandcastle "+want) {
+				t.Fatalf("`tailscale up` does not carry %s; script:\n%s", want, script)
+			}
+			if strings.Contains(script, unwanted) {
+				t.Fatalf("script carries %s; script:\n%s", unwanted, script)
+			}
+		})
+	}
+}
