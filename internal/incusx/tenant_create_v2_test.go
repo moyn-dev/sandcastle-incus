@@ -110,8 +110,8 @@ func TestEnsureV2BridgeNoopWhenConverged(t *testing.T) {
 
 // Toggling egress on must converge an existing (otherwise fully converged)
 // bridge onto the two-option dnsmasq value — CoreDNS resolver plus the
-// classless static route steering the CGNAT range at the sidecar, default
-// route included (RFC 3442).
+// classless static route steering the CGNAT range and 10.0.0.0/8 at the
+// sidecar, default route included (RFC 3442).
 func TestEnsureV2BridgeEgressOnAddsClasslessRoute(t *testing.T) {
 	res := &fakeBridgeResources{network: &api.Network{
 		Name: "sc2-acme",
@@ -128,7 +128,7 @@ func TestEnsureV2BridgeEgressOnAddsClasslessRoute(t *testing.T) {
 	if res.updated == nil {
 		t.Fatal("expected the existing bridge to be updated")
 	}
-	want := "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,0.0.0.0/0,10.249.7.1"
+	want := "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,10.0.0.0/8,10.249.7.3,0.0.0.0/0,10.249.7.1"
 	if got := res.updated.Config["raw.dnsmasq"]; got != want {
 		t.Fatalf("raw.dnsmasq = %q, want %q", got, want)
 	}
@@ -140,7 +140,7 @@ func TestEnsureV2BridgeEgressOffRemovesClasslessRoute(t *testing.T) {
 	res := &fakeBridgeResources{network: &api.Network{
 		Name: "sc2-acme",
 		NetworkPut: api.NetworkPut{Config: map[string]string{
-			"raw.dnsmasq": "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,0.0.0.0/0,10.249.7.1",
+			"raw.dnsmasq": "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,10.0.0.0/8,10.249.7.3,0.0.0.0/0,10.249.7.1",
 			"dns.mode":    "none",
 		}},
 	}}
@@ -157,12 +157,36 @@ func TestEnsureV2BridgeEgressOffRemovesClasslessRoute(t *testing.T) {
 	}
 }
 
+// A bridge converged by ADR-0026 (CGNAT-only option 121) must be re-converged
+// onto the subnet-route steer, so tenants with egress already on gain it.
+func TestEnsureV2BridgeEgressOnUpgradesCGNATOnlyRoute(t *testing.T) {
+	res := &fakeBridgeResources{network: &api.Network{
+		Name: "sc2-acme",
+		NetworkPut: api.NetworkPut{Config: map[string]string{
+			"raw.dnsmasq": "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,0.0.0.0/0,10.249.7.1",
+			"dns.mode":    "none",
+		}},
+	}}
+	s := &fakeBridgeServer{res: res}
+	plan := tenant.CreatePlanV2{Tenant: "acme", Bridge: "sc2-acme", DNSAddress: "10.249.7.3", GatewayAddress: "10.249.7.1"}
+	if err := ensureV2Bridge(s, plan, true); err != nil {
+		t.Fatalf("ensureV2Bridge: %v", err)
+	}
+	if res.updated == nil {
+		t.Fatal("expected the CGNAT-only bridge to be updated")
+	}
+	want := "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,10.0.0.0/8,10.249.7.3,0.0.0.0/0,10.249.7.1"
+	if got := res.updated.Config["raw.dnsmasq"]; got != want {
+		t.Fatalf("raw.dnsmasq = %q, want %q", got, want)
+	}
+}
+
 // A bridge already carrying the egress options is fully converged — no update.
 func TestEnsureV2BridgeEgressNoopWhenConverged(t *testing.T) {
 	res := &fakeBridgeResources{network: &api.Network{
 		Name: "sc2-acme",
 		NetworkPut: api.NetworkPut{Config: map[string]string{
-			"raw.dnsmasq": "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,0.0.0.0/0,10.249.7.1",
+			"raw.dnsmasq": "dhcp-option=6,10.249.7.3\ndhcp-option=121,100.64.0.0/10,10.249.7.3,10.0.0.0/8,10.249.7.3,0.0.0.0/0,10.249.7.1",
 			"dns.mode":    "none",
 		}},
 	}}

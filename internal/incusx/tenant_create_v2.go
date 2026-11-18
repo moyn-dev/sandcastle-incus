@@ -175,7 +175,7 @@ func (c TenantCreator) resolveV2Server() (TenantCreateServer, error) {
 func ensureV2Bridge(server TenantCreateServer, plan tenant.CreatePlanV2, egress bool) error {
 	def := server.UseProject(naming.DefaultProjectName)
 	// With egress on, guests additionally get a classless static route steering
-	// the tailnet CGNAT range at the sidecar (ADR-0026). The exact-equality
+	// EgressSteeredPrefixes at the sidecar (ADR-0026, ADR-0033). The exact-equality
 	// converge below applies AND removes it on existing bridges; machines pick
 	// the change up on their next DHCP renewal.
 	wantDNSmasq := tenant.BridgeDHCPOptions(plan.DNSAddress, plan.GatewayAddress, egress)
