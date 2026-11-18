@@ -1121,10 +1121,21 @@ created with `--home-share`.
 > it uses `~/.ssh/id_ed25519.pub` when present, otherwise generates
 > `~/.ssh/sandcastle_ed25519` — and uploads it during the device poll; the
 > auth-app stores it on the user and bakes it into this profile on every
-> (re-)login, so rotating the key is just `sc login --force`. The profile's
+> (re-)login. A re-login is **additive**: its key goes first and every key the
+> tenant already stores stays (a login from another host must not lock the
+> owner out), so `sc login --force` adds a rotated key but does not remove the
+> old one; removing a key is `sc-adm tenant create <t> --ssh-key …` with the
+> full list. The profile's
 > login **username** is the client's Unix user from device login (`$USER`),
 > falling back to the deployment's `--default-unix-user`, then `dev`
-> (`root` and invalid names are skipped, not errors). Broker-created tenants
+> (`root` and invalid names are skipped, not errors). That choice is made on
+> the tenant's **first** login only: a re-login (from any host, whatever its
+> `$USER`) keeps the stored `user.sandcastle.v2.user`, and only
+> `sc-adm tenant create <t> --unix-user <u>` changes it. **PASS:** `sc login`
+> again as an existing tenant from a host with a different `$USER` leaves
+> `incus project get <prefix>-<t> user.sandcastle.v2.user` unchanged, and
+> `user.sandcastle.v2.sshkey` gains that host's key above the old ones.
+> Broker-created tenants
 > (`tenant create`) take `--ssh-key` explicitly and default to `dev`.
 >
 > **`sc fix <m> --only ssh-key` is additive and lists what is enrolled.** It

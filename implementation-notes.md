@@ -7333,3 +7333,30 @@ brief left open:
   existing resolution's view of "native" and is left for a separate change.
 - No `sc config set` key for the opt-out; the config field and env var
   cover it.
+
+## 2026-11-18 — Re-login keeps the tenant's stored login user and keys
+
+`sc login` sends the client's `$USER` as `local_unix_user`, and
+`PlanCreateV2` let a requested user beat `ExistingUnixUser`, so every
+re-login rewrote the tenant's login user to the client host's `$USER`
+(obelix: tenant `bracki` flipped `jan` → `sebastian` after a login from
+another person's box; new machines then came up with the wrong user).
+
+Decision: `ensurePersonalTenantV2` drops the login's user when the tenant
+already stores one. Only the first login seeds it; `sc-adm tenant create
+--unix-user` remains the way to change it.
+
+Alternatives: make `ExistingUnixUser` win inside `PlanCreateV2` — rejected,
+that would also silence the admin's explicit `--unix-user`, which is the
+repair path. Dropping `local_unix_user` entirely (tenant name always) —
+rejected for now as a behaviour change for first logins (thieso2 → thies).
+
+Same for the SSH key: `MergeTenantSSHKeys` puts the requested key in place
+of the first stored key, so the same login also removed the owner's key.
+`ensurePersonalTenantV2` now requests the login's key followed by every
+stored key, so a re-login only adds. `MergeTenantSSHKeys` itself is
+unchanged because the admin's `tenant create --ssh-key` list relies on it to
+replace keys. Trade-off: `sc login --force` no longer removes a rotated-out
+key from the profile; that is now an admin action (the machines'
+`authorized_keys` reconcile was already additive, so old keys stayed there
+anyway).

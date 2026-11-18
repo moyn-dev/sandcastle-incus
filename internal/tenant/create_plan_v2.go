@@ -1151,7 +1151,8 @@ func PlanCreateV2(admin config.Admin, request CreateRequest) (CreatePlanV2, erro
 		// The tenant's login user defaults to the TENANT's name (a shared
 		// tenant `moyn-dev` logs in as moyn-dev, a personal one as its
 		// owner), falling back to "dev" only when the name is not a valid
-		// Unix username. Explicit (--unix-user / login's local user) still wins.
+		// Unix username. Explicit --unix-user (or a first login's local user)
+		// still wins; a re-login never passes one (authapp/provision.go).
 		unixUser = DefaultUnixUserForTenant(ref.Tenant)
 	}
 	if err := naming.ValidateUnixUsername(unixUser); err != nil {
