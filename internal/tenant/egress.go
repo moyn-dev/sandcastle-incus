@@ -66,12 +66,26 @@ table ip sandcastle-egress {
 `
 }
 
+// SidecarOwnSubnetRulePriority sits ahead of tailscaled's policy rules
+// (5210-5270): with --accept-routes, table 52 is consulted before main, so a
+// tailnet router advertising a prefix that covers the tenant's own /24 (two
+// installs on the same default pool) would otherwise capture the sidecar's own
+// bridge traffic.
+const SidecarOwnSubnetRulePriority = 5200
+
+// SidecarOwnSubnetRuleCleanup removes the own-subnet rule; idempotent.
+func SidecarOwnSubnetRuleCleanup() string {
+	return "while ip rule del priority " + strconv.Itoa(SidecarOwnSubnetRulePriority) + " 2>/dev/null; do :; done"
+}
+
 // SidecarEgressScript renders /usr/local/sbin/sandcastle-sidecar-egress, run by
 // the oneshot unit at boot and on converge.
-func SidecarEgressScript() string {
+func SidecarEgressScript(privateCIDR string) string {
 	return `#!/bin/sh
 set -eu
 sysctl -qw net.ipv4.ip_forward=1
+` + SidecarOwnSubnetRuleCleanup() + `
+ip rule add to ` + privateCIDR + ` lookup main priority ` + strconv.Itoa(SidecarOwnSubnetRulePriority) + `
 exec nft -f /etc/sandcastle-egress.nft
 `
 }

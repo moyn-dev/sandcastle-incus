@@ -67,9 +67,12 @@ on DHCP renewal, whatever their image.
   covers a tenant `/24`, for example two installs that both use the default
   pool, or a router advertising `10.0.0.0/8`, the sidecar installs that route
   in tailscale's table 52. Table 52 is consulted before the main table, so
-  the sidecar's replies to its own tenant can go to the tailnet. Choose
-  distinct tenant pools per install, and switch egress off for a tenant
-  whose tailnet carries such a route.
+  without a guard the sidecar's replies to its own tenant would go to the
+  tailnet. The egress oneshot therefore adds `ip rule to <tenant-cidr> lookup
+  main priority 5200`, ahead of tailscaled's rules (5210-5270), so the tenant's
+  own `/24` always stays on the bridge; the off path removes it. Machines
+  still cannot reach the *other* holder of an overlapping prefix, so choose
+  distinct tenant pools per install.
 - Machines pick up the new option 121 on their next DHCP renewal (or a NIC
   bounce). Tenants that already have egress on get the subnet-route steer on
   their next converge. Static-IP machines still don't consume option 121.

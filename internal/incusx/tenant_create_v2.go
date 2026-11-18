@@ -280,6 +280,7 @@ func ensureV2SidecarEgress(server TenantResourceServer, plan tenant.CreatePlanV2
 			"systemctl daemon-reload 2>/dev/null || true",
 			// ip_forward stays on — the tailscaled subnet router needs it anyway.
 			"nft delete table ip sandcastle-egress 2>/dev/null || true",
+			tenant.SidecarOwnSubnetRuleCleanup(),
 		}, "\n")
 		if err := execSidecar(server, plan.SidecarInstance, script); err != nil {
 			return fmt.Errorf("remove sidecar tailnet egress: %w", err)
@@ -292,7 +293,7 @@ func ensureV2SidecarEgress(server TenantResourceServer, plan tenant.CreatePlanV2
 		mode    int
 	}{
 		{sidecarEgressRulesPath, tenant.SidecarEgressNftRuleset(plan.PrivateCIDR), 0o644},
-		{sidecarEgressScriptPath, tenant.SidecarEgressScript(), 0o755},
+		{sidecarEgressScriptPath, tenant.SidecarEgressScript(plan.PrivateCIDR), 0o755},
 		{sidecarEgressUnitPath, tenant.SidecarEgressUnit(), 0o644},
 	}
 	for _, f := range files {

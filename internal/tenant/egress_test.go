@@ -42,3 +42,17 @@ table ip sandcastle-egress {
 		t.Fatalf("SidecarEgressNftRuleset =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestSidecarEgressScriptPinsOwnSubnetToMain(t *testing.T) {
+	got := SidecarEgressScript("10.249.7.0/24")
+	want := `#!/bin/sh
+set -eu
+sysctl -qw net.ipv4.ip_forward=1
+while ip rule del priority 5200 2>/dev/null; do :; done
+ip rule add to 10.249.7.0/24 lookup main priority 5200
+exec nft -f /etc/sandcastle-egress.nft
+`
+	if got != want {
+		t.Fatalf("SidecarEgressScript() =\n%s\nwant\n%s", got, want)
+	}
+}
