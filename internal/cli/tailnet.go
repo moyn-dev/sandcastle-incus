@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 type tailnetLegacyClient interface {

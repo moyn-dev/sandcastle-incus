@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	machinepkg "github.com/thieso2/sandcastle-incus/internal/machine"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	machinepkg "github.com/moyn-dev/sandcastle-incus/internal/machine"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 type CloudIdentityConfig struct {

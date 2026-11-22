@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 // TenantHeader carries the CLI's Current Tenant on every tenant-plane request

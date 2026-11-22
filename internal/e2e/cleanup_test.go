@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/images"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 const infrastructureKind = "infrastructure"

@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/images"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
 )
 
 func TestImageSyncBaseAliasE2E(t *testing.T) {

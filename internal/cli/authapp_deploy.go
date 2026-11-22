@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
 )
 
 // newAdminAuthAppDeployCommand implements `sc admin auth-app deploy`: it stands

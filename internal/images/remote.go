@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // Image Builder appliance defaults. The Image Builder runs a neutral upstream

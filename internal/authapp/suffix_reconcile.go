@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // suffixClaimReconcileInterval is deliberately slow — DNS-suffix claims only

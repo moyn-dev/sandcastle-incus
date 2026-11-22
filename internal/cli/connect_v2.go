@@ -13,9 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 // newConnectV2Command implements `sc connect-v2 <tenant>` (ADR-0016): it

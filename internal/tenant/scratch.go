@@ -8,7 +8,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/units"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // A Machine Scratch Volume is a per-machine custom volume mounted at /scratch

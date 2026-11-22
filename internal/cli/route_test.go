@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	authapp "github.com/thieso2/sandcastle-incus/internal/authapp"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // fakeRouteClient captures the request the CLI builds and returns scripted views.

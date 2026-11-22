@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strings"
 
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
 	"github.com/spf13/cobra"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
 )
 
 func newTrustCommand(config commandConfig, opts *rootOptions) *cobra.Command {

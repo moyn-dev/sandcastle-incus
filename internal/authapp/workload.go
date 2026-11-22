@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 const workloadTokenTTL = 15 * time.Minute

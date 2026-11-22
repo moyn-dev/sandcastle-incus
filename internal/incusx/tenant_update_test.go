@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	incus "github.com/lxc/incus/v6/client"
-	"github.com/thieso2/sandcastle-incus/internal/share"
+	"github.com/moyn-dev/sandcastle-incus/internal/share"
 )
 
 func TestSourceDirectoryStatusAcceptsSafeTreeWithDotfiles(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 func TestReleaseCacheCardOutdated(t *testing.T) {
@@ -16,7 +16,7 @@ func TestReleaseCacheCardOutdated(t *testing.T) {
 		checkedAt: time.Now(),
 		latest: update.Release{
 			TagName: "v0.2.0",
-			HTMLURL: "https://github.com/thieso2/sandcastle-incus/releases/tag/v0.2.0",
+			HTMLURL: "https://github.com/moyn-dev/sandcastle-incus/releases/tag/v0.2.0",
 		},
 	}
 	card := c.card("0.1.0")

@@ -8,15 +8,15 @@ import (
 	"strings"
 
 	incus "github.com/lxc/incus/v6/client"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/images"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
 )
 
 // ExecuteAdmin runs the Sandcastle admin CLI and returns a process exit code.

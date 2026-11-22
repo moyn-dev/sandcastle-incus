@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/hostkeys"
+	"github.com/moyn-dev/sandcastle-incus/internal/hostkeys"
 )
 
 func TestHostKeyDisagreement(t *testing.T) {

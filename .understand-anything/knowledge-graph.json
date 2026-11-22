@@ -11433,7 +11433,7 @@
       "type": "config",
       "name": "go.mod",
       "filePath": "go.mod",
-      "summary": "Go module definition for github.com/thieso2/sandcastle-incus declaring the Go 1.25 toolchain and project dependencies.",
+      "summary": "Go module definition for github.com/moyn-dev/sandcastle-incus declaring the Go 1.25 toolchain and project dependencies.",
       "tags": [
         "configuration",
         "go",
@@ -12052,7 +12052,7 @@
       "type": "document",
       "name": "issue-tracker.md",
       "filePath": "docs/agents/issue-tracker.md",
-      "summary": "Defines that issues and PRDs live as GitHub issues in thieso2/sandcastle-incus and documents the gh CLI conventions for creating, reading, labeling, commenting, and closing issues.",
+      "summary": "Defines that issues and PRDs live as GitHub issues in moyn-dev/sandcastle-incus and documents the gh CLI conventions for creating, reading, labeling, commenting, and closing issues.",
       "tags": [
         "documentation",
         "agents",

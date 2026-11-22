@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/localdns"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"gopkg.in/yaml.v2"
 )
 

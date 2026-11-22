@@ -5,7 +5,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // fakeProfileDetachResource implements only the profile methods the shared

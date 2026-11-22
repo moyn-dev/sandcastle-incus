@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
 )
 
 // RunEgress reads or toggles the tenant's tailnet-egress setting on the infra

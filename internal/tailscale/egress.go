@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 type EgressRequest struct {

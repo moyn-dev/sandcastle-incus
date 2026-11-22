@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // installV2Prefix maps the install prefix to the v2 Incus project prefix, the

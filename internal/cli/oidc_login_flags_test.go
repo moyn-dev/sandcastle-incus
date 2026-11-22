@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
 )
 
 type recordingAuthAppRunner struct {

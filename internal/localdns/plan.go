@@ -10,10 +10,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/cidr"
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/cidr"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 type Request struct {

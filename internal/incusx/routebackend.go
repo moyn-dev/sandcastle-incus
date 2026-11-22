@@ -9,9 +9,9 @@ import (
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
-	authapp "github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // RouteBackend implements authapp.RouteBackend against a live Incus daemon (the

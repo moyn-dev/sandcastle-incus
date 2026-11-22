@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // THE CONTRACT. A `--bare` machine re-states its own identity in instance-level

@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // cachedTenantStore is the user CLI's tenant store: it answers ListProjects

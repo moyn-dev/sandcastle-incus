@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	machine "github.com/thieso2/sandcastle-incus/internal/machine"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	machine "github.com/moyn-dev/sandcastle-incus/internal/machine"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // fakeSelectorStore serves a fixed machine set and records whether the CLI

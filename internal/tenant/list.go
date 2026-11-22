@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/cidr"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/cidr"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 type IncusProject struct {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // pathCompletionTimeout bounds one completion request: a keystroke waits for

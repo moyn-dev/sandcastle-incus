@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	scimages "github.com/thieso2/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	scimages "github.com/moyn-dev/sandcastle-incus/internal/images"
 )
 
 // customImageAdminForTest sets the custom Sandcastle image aliases the image

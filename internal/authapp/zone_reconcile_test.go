@@ -14,8 +14,8 @@ import (
 
 	"github.com/libdns/libdns"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // No unit test may reach Cloudflare: the release hooks (DELETE …/domain,

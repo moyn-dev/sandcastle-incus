@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/share"
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/share"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // defaultDeviceClientTimeout bounds each device poll. The poll that observes

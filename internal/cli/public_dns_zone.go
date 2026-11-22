@@ -9,8 +9,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
 )
 
 // `public-dns-zone add|list|remove|set-token` — the Public DNS Zone registry

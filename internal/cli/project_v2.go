@@ -19,10 +19,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
 )
 
 // newProjectCreateV2Command is the tenant-facing `sc project create-v2` client

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
 )
 
 // oidcLoginFlags are the opt-in OIDC login settings shared by `auth-app

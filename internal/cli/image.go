@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 // newImageCommand builds `sc image` — save a running machine as a reusable base

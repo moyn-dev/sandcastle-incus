@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
+	machine "github.com/moyn-dev/sandcastle-incus/internal/machine"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 	"github.com/spf13/cobra"
-	machine "github.com/thieso2/sandcastle-incus/internal/machine"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
 // machineActionResult is one machine's outcome in a lifecycle run. Remote is

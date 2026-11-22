@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/localdns"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
 )
 
 // newDNSProxyCommand is the hidden daemon behind the per-suffix

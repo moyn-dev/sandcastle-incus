@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
 )
 
 type ImageServer interface {

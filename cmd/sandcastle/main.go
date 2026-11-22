@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/thieso2/sandcastle-incus/internal/cli"
+	"github.com/moyn-dev/sandcastle-incus/internal/cli"
 )
 
 // One fat binary serves every role. Which command tree runs is chosen by how

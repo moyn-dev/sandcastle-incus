@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 type WorkloadEnableRequest struct {

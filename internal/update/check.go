@@ -12,7 +12,7 @@ import (
 )
 
 // Repo is the GitHub repository releases are cut from.
-const Repo = "thieso2/sandcastle-incus"
+const Repo = "moyn-dev/sandcastle-incus"
 
 const defaultAPIBaseURL = "https://api.github.com"
 

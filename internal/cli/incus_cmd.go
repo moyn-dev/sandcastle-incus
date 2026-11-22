@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 type incusRunner func(context.Context, []string, []string, io.Reader, io.Writer, io.Writer) error

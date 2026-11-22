@@ -11,11 +11,11 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/dns"
+	"github.com/moyn-dev/sandcastle-incus/internal/localdns"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/dns"
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 func newDNSCommand(config commandConfig, opts *rootOptions) *cobra.Command {

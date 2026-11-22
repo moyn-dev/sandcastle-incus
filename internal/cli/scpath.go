@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // Sandcastle Path: the slash form of a reference, /install/tenant/project/machine

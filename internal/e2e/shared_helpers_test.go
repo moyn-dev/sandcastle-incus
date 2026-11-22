@@ -34,7 +34,7 @@ func assertInstanceExists(t *testing.T, server incus.InstanceServer, name string
 func buildSandcastleForE2E(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sandcastle")
-	command := exec.Command("go", "build", "-o", path, "github.com/thieso2/sandcastle-incus/cmd/sandcastle")
+	command := exec.Command("go", "build", "-o", path, "github.com/moyn-dev/sandcastle-incus/cmd/sandcastle")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build sandcastle e2e binary: %v\n%s", err, strings.TrimSpace(string(output)))
 	}
@@ -45,7 +45,7 @@ func buildSandcastleForRemote(t *testing.T, remote string) string {
 	t.Helper()
 	goarch := remoteGOARCH(t, remote)
 	path := filepath.Join(t.TempDir(), "sandcastle-linux-"+goarch)
-	command := exec.Command("go", "build", "-o", path, "github.com/thieso2/sandcastle-incus/cmd/sandcastle")
+	command := exec.Command("go", "build", "-o", path, "github.com/moyn-dev/sandcastle-incus/cmd/sandcastle")
 	command.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build sandcastle e2e binary (linux/%s): %v\n%s", goarch, err, strings.TrimSpace(string(output)))
@@ -56,7 +56,7 @@ func buildSandcastleForRemote(t *testing.T, remote string) string {
 func buildSandcastleAdminForE2E(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sandcastle-admin")
-	command := exec.Command("go", "build", "-o", path, "github.com/thieso2/sandcastle-incus/cmd/sandcastle-admin")
+	command := exec.Command("go", "build", "-o", path, "github.com/moyn-dev/sandcastle-incus/cmd/sandcastle-admin")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build sandcastle-admin e2e binary: %v\n%s", err, strings.TrimSpace(string(output)))
 	}
@@ -67,7 +67,7 @@ func buildSandcastleAdminForRemote(t *testing.T, remote string) string {
 	t.Helper()
 	goarch := remoteGOARCH(t, remote)
 	path := filepath.Join(t.TempDir(), "sandcastle-admin-linux-"+goarch)
-	command := exec.Command("go", "build", "-o", path, "github.com/thieso2/sandcastle-incus/cmd/sandcastle-admin")
+	command := exec.Command("go", "build", "-o", path, "github.com/moyn-dev/sandcastle-incus/cmd/sandcastle-admin")
 	command.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build sandcastle-admin e2e binary (linux/%s): %v\n%s", goarch, err, strings.TrimSpace(string(output)))

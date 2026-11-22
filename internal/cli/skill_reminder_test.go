@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/agentskill"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/agentskill"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 var reminderNow = time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)

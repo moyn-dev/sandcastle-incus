@@ -9,9 +9,9 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // fakeDomainServer implements the slice of TenantCreateServer the Project

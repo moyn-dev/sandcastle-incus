@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestPlanInstallFindsManagedTenant(t *testing.T) {

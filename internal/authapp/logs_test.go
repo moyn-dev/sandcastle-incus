@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 func TestLogScopingAdminSeesAllUserSeesOwn(t *testing.T) {

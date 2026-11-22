@@ -8,9 +8,9 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Shared Tenants (spec docs/spec/shared-tenants.md): a tenant's Tenant Members

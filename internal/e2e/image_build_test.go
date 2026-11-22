@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
 )
 
 func TestImageBuildBaseE2E(t *testing.T) {

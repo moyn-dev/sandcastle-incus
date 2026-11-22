@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 // resolveConnectTarget decides whether a parsed machine reference targets a

@@ -11,8 +11,8 @@ import (
 
 	"golang.org/x/term"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // updateStatePath is the daily release-check cache in the sandcastle config

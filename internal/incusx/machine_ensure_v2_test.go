@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 type ensureFakeServer struct {

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // machinesWeb renders a minimal, mobile-first page listing the signed-in user's

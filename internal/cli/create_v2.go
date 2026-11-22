@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/hostkeys"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/hostkeys"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"slices"
 )
 

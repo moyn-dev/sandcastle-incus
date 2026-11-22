@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 	"gopkg.in/yaml.v2"
 )
 

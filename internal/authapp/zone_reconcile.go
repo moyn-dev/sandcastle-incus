@@ -14,9 +14,9 @@ import (
 	"github.com/libdns/cloudflare"
 	"github.com/libdns/libdns"
 
-	"github.com/thieso2/sandcastle-incus/internal/domain"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // ---------------------------------------------------------------------------

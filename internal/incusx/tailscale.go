@@ -11,7 +11,7 @@ import (
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
 )
 
 type TailscaleServer interface {

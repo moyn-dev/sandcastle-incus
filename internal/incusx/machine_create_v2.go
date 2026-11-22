@@ -3,7 +3,7 @@ package incusx
 import (
 	"context"
 	"fmt"
-	"github.com/thieso2/sandcastle-incus/internal/buildinfo"
+	"github.com/moyn-dev/sandcastle-incus/internal/buildinfo"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/domain"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // CreateMachineV2Request describes a v2 machine launch: a stock cloud image

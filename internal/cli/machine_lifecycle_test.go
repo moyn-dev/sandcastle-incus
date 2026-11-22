@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	machine "github.com/thieso2/sandcastle-incus/internal/machine"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	machine "github.com/moyn-dev/sandcastle-incus/internal/machine"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // A wildcard resolves to every matching machine, in project-then-name order.

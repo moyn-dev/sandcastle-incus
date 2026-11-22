@@ -1,4 +1,4 @@
-module github.com/thieso2/sandcastle-incus
+module github.com/moyn-dev/sandcastle-incus
 
 go 1.25.6
 

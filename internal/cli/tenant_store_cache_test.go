@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestCachedTenantStoreServesProjectsFromTheCacheAndFallsBackLive(t *testing.T) {

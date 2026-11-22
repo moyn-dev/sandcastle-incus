@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 func newStatusCommand(config commandConfig, opts *rootOptions) *cobra.Command {

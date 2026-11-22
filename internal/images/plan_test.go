@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // customImageAdmin returns admin config whose base/AI images are the custom

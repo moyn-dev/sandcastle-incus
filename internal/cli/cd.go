@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // positionOutput is what `sc cd` and `sc pwd` report: the Current Position

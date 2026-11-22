@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 	"gopkg.in/yaml.v2"
 )
 

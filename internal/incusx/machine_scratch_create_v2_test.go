@@ -10,8 +10,8 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func scratchCreateFixture(t *testing.T) (*fakeScratchResource, TenantCreator, context.Context) {

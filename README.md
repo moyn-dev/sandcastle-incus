@@ -23,7 +23,7 @@ configuration and certificates remain on each Machine.
 ### Install script (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/moyn-dev/sandcastle-incus/main/install.sh | bash
 ```
 
 Detects your OS/arch, downloads the matching release tarball, verifies it
@@ -62,7 +62,7 @@ release tarballs below.)
 ### Release tarballs (Linux / macOS)
 
 Prebuilt archives for `linux`/`darwin` × `amd64`/`arm64` are attached to each
-[GitHub release](https://github.com/thieso2/sandcastle-incus/releases). Download
+[GitHub release](https://github.com/moyn-dev/sandcastle-incus/releases). Download
 `sandcastle-<os>-<arch>.tar.gz`, verify against `checksums.txt`, extract, and put
 `sandcastle` on your `PATH` (optionally symlinking `sc` to it).
 

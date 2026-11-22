@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 func claimHostname(t *testing.T, db *sql.DB, hostname, tenant, project, machine string) MachineHostname {

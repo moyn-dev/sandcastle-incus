@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/thieso2/sandcastle-incus/internal/buildinfo"
+	"github.com/moyn-dev/sandcastle-incus/internal/buildinfo"
 	"io"
 	"net"
 	"net/url"
@@ -13,28 +13,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/agentskill"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/images"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/localdns"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
+	machine "github.com/moyn-dev/sandcastle-incus/internal/machine"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/share"
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/agentskill"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/images"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
-	machine "github.com/thieso2/sandcastle-incus/internal/machine"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/share"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
-	"github.com/thieso2/sandcastle-incus/internal/update"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
 )
 
 // version is the CLI version string. It is a var (not a const) so release
 // builds can stamp it via ldflags:
 //
-//	-X github.com/thieso2/sandcastle-incus/internal/cli.version={{.Version}}
+//	-X github.com/moyn-dev/sandcastle-incus/internal/cli.version={{.Version}}
 //
 // Defaults to a dev sentinel for `go build`/`go test` and un-stamped installs.
 var version = "0.0.0-dev"

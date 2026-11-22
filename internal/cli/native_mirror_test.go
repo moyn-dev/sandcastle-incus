@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 func writeMirrorTestFile(t *testing.T, path string, content string) {

@@ -136,7 +136,7 @@ triage vocabulary. Only the domain docs are local.
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues (`thieso2/sandcastle-incus`) — the same
+Issues and PRDs are tracked in GitHub Issues (`moyn-dev/sandcastle-incus`) — the same
 tracker as the parent project; there is no separate `sc-edge` tracker. External pull
 requests are also a triage surface. See [`../docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md).
 

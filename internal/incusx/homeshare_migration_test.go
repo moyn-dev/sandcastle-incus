@@ -6,7 +6,7 @@ import (
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // fakeHomeShareResource implements only the handful of TenantResourceServer

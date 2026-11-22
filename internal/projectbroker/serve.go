@@ -20,9 +20,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // Principal identifies the caller by their restricted Incus certificate.

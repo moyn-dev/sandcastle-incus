@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestTenantListingSmoke(t *testing.T) {

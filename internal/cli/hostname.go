@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Explicit Machine Public Hostnames (ADR-0028, spec machine-hostnames §3):

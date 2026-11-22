@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
 )
 
 type gcloudRunner func(context.Context, []string, io.Writer) (string, error)

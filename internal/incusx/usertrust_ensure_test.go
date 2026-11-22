@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 // selfSignedClientCert returns a fresh client certificate as PEM plus the

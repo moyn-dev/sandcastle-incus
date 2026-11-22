@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Project Domain endpoints on the tenant plane (ADR-0027, spec §3.2):

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/domain"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Project certificates share encrypted storage and ARI/backoff with machine

@@ -3,8 +3,8 @@ package cli
 import (
 	"strings"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
 )
 
 func newAdminMachineListCommand(config commandConfig, opts *rootOptions) *cobra.Command {

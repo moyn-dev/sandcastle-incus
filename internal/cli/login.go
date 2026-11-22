@@ -20,16 +20,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/cidr"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/localdns"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/cidr"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/localdns"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
-	"github.com/thieso2/sandcastle-incus/internal/update"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
 )
 
 type loginRemoteInstallRequest struct {

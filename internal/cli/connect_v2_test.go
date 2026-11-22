@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // shortProjectName must not assume the default install prefix. `sc-adm install

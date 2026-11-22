@@ -1,7 +1,7 @@
 # Spec: Machine addressing & incus-remote naming
 
 Status: **Proposed** — implementation-ready design produced by wayfinder map
-[#82](https://github.com/thieso2/sandcastle-incus/issues/82). Every claim below is a
+[#82](https://github.com/moyn-dev/sandcastle-incus/issues/82). Every claim below is a
 resolved decision; each section links the ticket that holds its full reasoning.
 
 > **Everything is v2.** This spec adds no version gates and no v1 paths.
@@ -32,14 +32,14 @@ Domain terms are canonical in `CONTEXT.md`.
   **chosen at first login**, immutable afterward. It is the stem of every incus remote
   name and the DNS suffix under which the tenant's machine hostnames resolve
   (`dev.<suffix>`), served **internally over Tailscale split-DNS + `/etc/resolver/`** —
-  never public DNS. ([#84](https://github.com/thieso2/sandcastle-incus/issues/84))
+  never public DNS. ([#84](https://github.com/moyn-dev/sandcastle-incus/issues/84))
 - **Project** — a namespace within a tenant on an install. The reserved magic project
   `default` is **removed**; the user names their initial project at first login.
-  ([#85](https://github.com/thieso2/sandcastle-incus/issues/85))
+  ([#85](https://github.com/moyn-dev/sandcastle-incus/issues/85))
 - **Remote** — an incus remote binding one (install, project) pair; named
   `dns-suffix-projectname`.
 
-## 3. Remote naming scheme ([#85](https://github.com/thieso2/sandcastle-incus/issues/85))
+## 3. Remote naming scheme ([#85](https://github.com/moyn-dev/sandcastle-incus/issues/85))
 
 A remote is **always** named `dns-suffix-projectname` — the project segment is never
 omitted, there is no `sc-` prefix, and there is no reserved `default`. One remote per
@@ -63,7 +63,7 @@ arises in code. Project names may keep dashes (`ValidateProjectName` stays
 backstopped by the client-side guard (§5) — incus's own "remote already exists" is the
 trigger.
 
-## 4. The DNS suffix: identity, uniqueness, enforcement ([#84](https://github.com/thieso2/sandcastle-incus/issues/84))
+## 4. The DNS suffix: identity, uniqueness, enforcement ([#84](https://github.com/moyn-dev/sandcastle-incus/issues/84))
 
 - **Chosen once, at tenant creation (first login).** On every later login to an existing
   tenant the server **returns the stored suffix**; the user cannot re-choose. Effectively
@@ -71,7 +71,7 @@ trigger.
 - **Claim-and-reserve, no ownership proof.** Since the suffix resolves internally
   (Tailscale split-DNS + `/etc/resolver/`), publicly owning it buys nothing. (Note: the
   old `internal/route/dnsproof.go` is **deleted** and only ever proved "points-at-our-IP",
-  not ownership — it is not reused. [#83](https://github.com/thieso2/sandcastle-incus/issues/83))
+  not ownership — it is not reused. [#83](https://github.com/moyn-dev/sandcastle-incus/issues/83))
 - **Uniqueness = two guards, no central authority** (installs stay autonomous):
   1. **Per-install, server-side (FCFS):** the auth app rejects a suffix already claimed by
      another tenant on that install.
@@ -82,7 +82,7 @@ trigger.
   fundamentally ambiguous — so the guard **refuses**; it never renames a local remote
   (renaming would break the deterministic grammar composition).
 
-## 5. Login flow ([#87](https://github.com/thieso2/sandcastle-incus/issues/87))
+## 5. Login flow ([#87](https://github.com/moyn-dev/sandcastle-incus/issues/87))
 
 `sc login <host>` is browser-assisted device auth. The server detects new-vs-existing
 tenant:
@@ -104,7 +104,7 @@ tenant:
 - Suffix as a **`UNIQUE`** column → atomic first-come-first-served (`INSERT … ON CONFLICT`),
   referencing the tenant/`user_key`. Fits the existing DDL pattern in
   `internal/authapp/app.go` `Migrate` and CRUD style in `store.go`
-  ([#83](https://github.com/thieso2/sandcastle-incus/issues/83)).
+  ([#83](https://github.com/moyn-dev/sandcastle-incus/issues/83)).
 - Read on every login to return the stored suffix.
 - **Lifecycle:** freed on tenant delete (`sc-adm project delete` / tenant-delete path); a
   reconcile prunes claims whose tenant no longer exists in live Incus. Incus stays the
@@ -113,7 +113,7 @@ tenant:
 
 The chosen initial project seeds the config's **current project** (`~/.config/sandcastle/config.yml`).
 
-## 6. Reference grammar ([#86](https://github.com/thieso2/sandcastle-incus/issues/86), [#91](https://github.com/thieso2/sandcastle-incus/issues/91))
+## 6. Reference grammar ([#86](https://github.com/moyn-dev/sandcastle-incus/issues/86), [#91](https://github.com/moyn-dev/sandcastle-incus/issues/91))
 
 Grammar: **`[[dns-suffix:]project:]machine`**. Colon count selects scope:
 
@@ -140,12 +140,12 @@ Resolution stays in `resolveV2MachineReference`, extended to compose the remote 
 switch install context when a suffix is supplied.
 
 **Reach — uniform across every reference-taking command** via that shared parser
-([#91](https://github.com/thieso2/sandcastle-incus/issues/91)):
+([#91](https://github.com/moyn-dev/sandcastle-incus/issues/91)):
 `connect` (`connect.go`), `create` (`create_v2.go`), the machine-lifecycle verbs
 (`machine_lifecycle.go`), and `image save` (`image.go`). `share`
 (`project:/dir --to tenant`) uses a different reference shape and is untouched.
 
-## 7. Missing remote on connect ([#90](https://github.com/thieso2/sandcastle-incus/issues/90))
+## 7. Missing remote on connect ([#90](https://github.com/moyn-dev/sandcastle-incus/issues/90))
 
 Connect (and every reference-taking command) **never silently creates a remote.** It
 errors with guidance:
@@ -160,7 +160,7 @@ errors with guidance:
 Consistent with the no-magic theme (§6) and with migration (§8): neither path mutates the
 user's incus config as a side effect of naming a machine.
 
-## 8. Migration ([#88](https://github.com/thieso2/sandcastle-incus/issues/88))
+## 8. Migration ([#88](https://github.com/moyn-dev/sandcastle-incus/issues/88))
 
 **Lazy, at next login, non-breaking.** Old-scheme remotes keep working until reconcile;
 there is **no standalone migrate command**.
@@ -184,7 +184,7 @@ there is **no standalone migrate command**.
 - Server side: just the normal claim-table insert; Incus projects (`sc2-<tenant>-<project>`)
   are untouched. Migration is almost entirely client-side remote renaming.
 
-## 9. Affected code (survey [#83](https://github.com/thieso2/sandcastle-incus/issues/83))
+## 9. Affected code (survey [#83](https://github.com/moyn-dev/sandcastle-incus/issues/83))
 
 - `internal/cli/create_v2.go` — extend `parseV2MachineReference` / `resolveV2MachineReference`
   (add `dns-suffix:` component; drop `tenant/`; bare-machine → current project).

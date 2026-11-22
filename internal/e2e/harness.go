@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
 )
 
 const enabledEnv = "SANDCASTLE_E2E"

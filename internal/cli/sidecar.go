@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
-	"github.com/thieso2/sandcastle-incus/internal/tlssign"
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/tlssign"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // newSidecarCommand groups commands that run ON a tenant sidecar (invoked there

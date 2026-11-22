@@ -12,7 +12,7 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 This repo uses the canonical strings unchanged — each role's label is its own name.
 
-All five labels already exist on `thieso2/sandcastle-incus`. Apply them with `gh issue edit`; don't create them.
+All five labels already exist on `moyn-dev/sandcastle-incus`. Apply them with `gh issue edit`; don't create them.
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 

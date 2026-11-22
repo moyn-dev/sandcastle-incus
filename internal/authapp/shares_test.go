@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Regression for #55: a v2 personal tenant has no v1 tenant-user metadata for

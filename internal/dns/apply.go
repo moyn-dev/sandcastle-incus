@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/thieso2/sandcastle-incus/internal/cidr"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/cidr"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 type Applier interface {

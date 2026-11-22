@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 func TestLoadConfigDefaultsToDisabledAndSandcastleTag(t *testing.T) {

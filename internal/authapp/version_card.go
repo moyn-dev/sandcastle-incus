@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // versionCard is the always-visible version card on the auth-app pages

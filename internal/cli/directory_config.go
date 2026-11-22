@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // directorySelection preserves local history while capturing the effective pair

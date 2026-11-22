@@ -3,7 +3,7 @@ package incusx
 import (
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // The payload-sync target set is metadata-scoped (ADR-0022): v2 app projects

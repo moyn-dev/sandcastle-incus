@@ -8,7 +8,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // SetProjectCloudIdentity and SetProjectDockerAutostart persist a v2 project's

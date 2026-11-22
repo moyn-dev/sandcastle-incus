@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestEnableMachineWorkloadIdentityRotatesSecretAndStoresVerifierOnly(t *testing.T) {

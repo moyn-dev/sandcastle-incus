@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/tailscale"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/tailscale"
 )
 
 func newTailscaleCommand(config commandConfig, opts *rootOptions) *cobra.Command {

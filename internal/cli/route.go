@@ -8,8 +8,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
 	"github.com/spf13/cobra"
-	authapp "github.com/thieso2/sandcastle-incus/internal/authapp"
 )
 
 // newRouteCommand assembles `sc route`: publish a Machine's local port to the

@@ -174,7 +174,7 @@
   <div class="step">
     <h3>Install the user CLI</h3>
     <p><strong>From a release (Linux and macOS).</strong> The install script picks the right <code>sandcastle-&lt;os&gt;-&lt;arch&gt;.tar.gz</code> for your machine, verifies its SHA-256 against the release's <code>checksums.txt</code>, and installs the binary as <code>sandcastle</code> in <code>~/.local/bin</code> with an <code>sc</code> symlink beside it:</p>
-    <pre><code><span class="cmd">curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh | bash</span>
+    <pre><code><span class="cmd">curl -fsSL https://raw.githubusercontent.com/moyn-dev/sandcastle-incus/main/install.sh | bash</span>
 <span class="cmd">sc version</span></code></pre>
     <p>Flags go after <code>-s --</code> when piping (<code>| bash -s -- --version v0.8.0</code>): <code>--version &lt;tag&gt;</code> installs (or rolls back to) a specific release, <code>--dir &lt;path&gt;</code> installs elsewhere, and <code>--admin</code> also links <code>sc-adm</code> / <code>sandcastle-admin</code> for operators. Each has an env-var form (<code>SANDCASTLE_VERSION</code>, <code>SANDCASTLE_INSTALL_DIR</code>, <code>SANDCASTLE_ADMIN=1</code>). The script only writes inside the install directory — it never edits your shell profile; when the directory is not on <code>PATH</code> it prints the line to add. Because the binary then lives in a directory you own, <code>sc update</code> can self-replace it, which a Homebrew install deliberately cannot. Re-running the script is the other way to upgrade.</p>
     <p><strong>Homebrew (macOS).</strong> <code>brew install thieso2/tap/sandcastle</code>, upgraded with <code>brew upgrade sandcastle</code>. Casks are macOS-only.</p>
@@ -621,7 +621,7 @@ target-dir = "/scratch/cache/&lt;user&gt;/cargo-target"</code></pre>
 
   <div class="step">
     <h3>Offer a Tenant Storage Share <span class="badge badge-user">user</span></h3>
-    <div class="note"><strong>Not yet supported on v2.</strong> Every <code>sc share</code> command currently exits with <em>"Tenant Storage Shares are not yet supported on v2 (tracked in <a href="https://github.com/thieso2/sandcastle-incus/issues/70">#70</a>)"</em>, and the Auth App's share endpoints return 501. The command surface and its plumbing are complete and tested, but the feature is gated off until the share registry moves off the user-writable <code>/workspace</code> volume (a tenant can otherwise forge it). The commands below describe the intended flow for when it is ungated.</div>
+    <div class="note"><strong>Not yet supported on v2.</strong> Every <code>sc share</code> command currently exits with <em>"Tenant Storage Shares are not yet supported on v2 (tracked in <a href="https://github.com/moyn-dev/sandcastle-incus/issues/70">#70</a>)"</em>, and the Auth App's share endpoints return 501. The command surface and its plumbing are complete and tested, but the feature is gated off until the share registry moves off the user-writable <code>/workspace</code> volume (a tenant can otherwise forge it). The commands below describe the intended flow for when it is ungated.</div>
     <p>Creates a pending outbound offer for a workspace subdirectory. Source users keep read/write access through <code>/workspace</code>; accepted recipient shares are reconciled read-only into recipient machines under <code>/shared/&lt;source-tenant&gt;/&lt;source-project&gt;/&lt;share-name&gt;</code>.</p>
     <pre><code><span class="comment"># Admin setup for local two-tenant testing with one GitHub user</span>
 <span class="cmd">sandcastle-admin tenant create</span> <span class="arg">skorfman</span>
@@ -1432,7 +1432,7 @@ sc create tod0s:web --hostname web12.tc42.uk --fqdn shop.tc42.uk</code></pre>
         <tr><td>sandcastle project list/create/status/delete</td><td>Manage lightweight projects in the current tenant</td></tr>
         <tr><td>sandcastle project set-docker-autostart &lt;project&gt; on|off</td><td>Control Docker daemon autostart for new machines in a project</td></tr>
         <tr><td>sandcastle project set-image / unset-image &lt;project&gt; [image]</td><td>Default image for new machines in a project (images: ref or saved alias)</td></tr>
-        <tr><td>sandcastle share create/list/status/offers/accept/decline/revoke/delete/reconcile</td><td>Create, accept, revoke, delete, and reconcile Tenant Storage Shares &mdash; <strong>not yet supported on v2</strong> (gated off pending <a href="https://github.com/thieso2/sandcastle-incus/issues/70">#70</a>)</td></tr>
+        <tr><td>sandcastle share create/list/status/offers/accept/decline/revoke/delete/reconcile</td><td>Create, accept, revoke, delete, and reconcile Tenant Storage Shares &mdash; <strong>not yet supported on v2</strong> (gated off pending <a href="https://github.com/moyn-dev/sandcastle-incus/issues/70">#70</a>)</td></tr>
         <tr><td>sandcastle ssh-key purge [--all] [--yes] [--dry-run]</td><td>Reconcile ~/.ssh/known_hosts against live machines; drop stale Sandcastle entries and recycled private-IP entries</td></tr>
         <tr><td>sandcastle cloud-identity gcp setup</td><td>Configure tenant-scoped GCP Workload Identity Federation</td></tr>
         <tr><td>sandcastle trust install [tenant]</td><td>Trust tenant CA locally</td></tr>

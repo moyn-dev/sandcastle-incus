@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenantpkg "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenantpkg "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestPlanCreateCreatesPendingOutboundOffer(t *testing.T) {

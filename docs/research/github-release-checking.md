@@ -3,7 +3,7 @@
 **Date:** 2026-07-17
 **Question:** What is the factually correct way for the `sandcastle` CLI to do a ~daily unauthenticated "is there a newer release?" check against GitHub, verify downloads, and (optionally) self-update — grounded in GitHub API docs, GoReleaser docs, this repo's real release artifacts, and prior art (minio/selfupdate, creativeprojects/go-selfupdate, gh, flyctl)?
 
-All claims cite a URL or file path. Live-API observations were made 2026-07-17 against the real `thieso2/sandcastle-incus` v0.1.0 release.
+All claims cite a URL or file path. Live-API observations were made 2026-07-17 against the real `moyn-dev/sandcastle-incus` v0.1.0 release.
 
 ---
 
@@ -26,7 +26,7 @@ All claims cite a URL or file path. Live-API observations were made 2026-07-17 a
 
 - Docs ([Best practices — use conditional requests if appropriate](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)): *"Making a conditional request does not count against your primary rate limit if a `304` response is returned **and the request was made while correctly authorized with an `Authorization` header**."* (emphasis added)
 - **So the "304 is free" exemption is documented for authenticated requests only.** Verified empirically, unauthenticated, against this repo on 2026-07-17:
-  1. `GET /repos/thieso2/sandcastle-incus/releases/latest` → `200`, `etag: W/"ca0d7a92…"`, `x-ratelimit-used: 2`
+  1. `GET /repos/moyn-dev/sandcastle-incus/releases/latest` → `200`, `etag: W/"ca0d7a92…"`, `x-ratelimit-used: 2`
   2. Same request with `If-None-Match: W/"ca0d7a92…"` → **`HTTP/2 304`**, but `x-ratelimit-used: 3` — **the unauthenticated 304 still consumed a request.**
 - Conclusion: for an unauthenticated daily check, the ETag saves **bandwidth** (empty body on 304) but not **quota**. That's fine — 1 request/day against 60/hour/IP is negligible. Still send `If-None-Match` (store the last ETag next to the cached result): a 304 is a cheap, definitive "nothing changed" signal and skips JSON parsing.
 - Caveat observed live: the ETag varies with the request's `Accept` header (different representation → different ETag), so always send the **same** headers when replaying it.
@@ -42,7 +42,7 @@ All claims cite a URL or file path. Live-API observations were made 2026-07-17 a
 
 ## 2. What this repo actually publishes
 
-Source: [`.goreleaser.yaml`](../../.goreleaser.yaml) and live `gh release view --repo thieso2/sandcastle-incus --json tagName,assets` (latest = `v0.1.0`, 2026-07-15).
+Source: [`.goreleaser.yaml`](../../.goreleaser.yaml) and live `gh release view --repo moyn-dev/sandcastle-incus --json tagName,assets` (latest = `v0.1.0`, 2026-07-15).
 
 ### Name template → concrete names
 
@@ -80,9 +80,9 @@ c7747b587d52e3b2e966d2f2d449e4557e07b3a4492a1aaa4afb1f55705886f1  sandcastle-lin
 
 ### Resolving "latest" vs a pinned tag
 
-- **Latest:** `GET https://api.github.com/repos/thieso2/sandcastle-incus/releases/latest` → read `tag_name` → pick `assets[]` entry whose `name == "sandcastle-"+GOOS+"-"+GOARCH+".tar.gz"` → download its `browser_download_url`.
-- **Pinned:** `GET /repos/thieso2/sandcastle-incus/releases/tags/{tag}` ([doc](https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28#get-a-release-by-tag-name)), same asset-matching step.
-- **No-API construction:** download URLs are stable and predictable — `https://github.com/OWNER/REPO/releases/download/TAG/ASSET`. Confirmed live: every asset's `url` in the `gh release view` output is exactly `https://github.com/thieso2/sandcastle-incus/releases/download/v0.1.0/<asset>`. Once `tag_name` is known (one API call), all downloads (tarball + `checksums.txt`) can bypass the API entirely — release-asset downloads from `github.com/...` are not REST API calls and don't touch the 60/hr core limit.
+- **Latest:** `GET https://api.github.com/repos/moyn-dev/sandcastle-incus/releases/latest` → read `tag_name` → pick `assets[]` entry whose `name == "sandcastle-"+GOOS+"-"+GOARCH+".tar.gz"` → download its `browser_download_url`.
+- **Pinned:** `GET /repos/moyn-dev/sandcastle-incus/releases/tags/{tag}` ([doc](https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28#get-a-release-by-tag-name)), same asset-matching step.
+- **No-API construction:** download URLs are stable and predictable — `https://github.com/OWNER/REPO/releases/download/TAG/ASSET`. Confirmed live: every asset's `url` in the `gh release view` output is exactly `https://github.com/moyn-dev/sandcastle-incus/releases/download/v0.1.0/<asset>`. Once `tag_name` is known (one API call), all downloads (tarball + `checksums.txt`) can bypass the API entirely — release-asset downloads from `github.com/...` are not REST API calls and don't touch the 60/hr core limit.
 - Version comparison: the tag is `v`-prefixed semver (`git tag -a vX.Y.Z`, [CLAUDE.md "Cutting a Homebrew release"](../../CLAUDE.md)); the running binary's version is stamped into `internal/cli.version` via ldflags (`.goreleaser.yaml` line 38), so compare `strings.TrimPrefix(tag_name, "v")` semver-wise against that var. Snapshot/dev builds (`goreleaser --snapshot`, or `make build` without ldflags) won't carry a release version and should skip the check or never report "newer".
 
 ---
@@ -108,7 +108,7 @@ c7747b587d52e3b2e966d2f2d449e4557e07b3a4492a1aaa4afb1f55705886f1  sandcastle-lin
 
 ### What checksums.txt does and does not give you
 
-- `checksums.txt` (SHA-256, `.goreleaser.yaml` lines 44–46) fetched over HTTPS from `github.com/thieso2/sandcastle-incus/releases/download/...` protects against **corruption, truncation, and CDN/mirror tampering** of the tarball, because the hash list and the tarball are compared against each other.
+- `checksums.txt` (SHA-256, `.goreleaser.yaml` lines 44–46) fetched over HTTPS from `github.com/moyn-dev/sandcastle-incus/releases/download/...` protects against **corruption, truncation, and CDN/mirror tampering** of the tarball, because the hash list and the tarball are compared against each other.
 - It does **not** protect against a compromised GitHub account, tap, or CI pipeline: whoever can publish the release assets publishes the matching `checksums.txt` in the same GoReleaser run (both come out of `.github/workflows/release.yml`). A detached signature only defends against that threat if the signing key lives **outside** the CI that an attacker would compromise — a minisign/GPG key stored as a GitHub Actions secret in the same repo collapses to the same trust domain as the checksums file. Cosign keyless shifts trust to "this artifact was built by *this repo's* Actions workflow", which does defend against a stolen PAT but not a compromised workflow.
 
 ### Pragmatic recommendation for a small CLI
@@ -164,9 +164,9 @@ Source: [internal/update/update.go](https://raw.githubusercontent.com/superfly/f
 
 Concrete, minimal design (phase 1 = notify only, phase 2 = optional `sc upgrade`):
 
-1. **Daily cached check against `releases/latest`.** Once per 24 h (gh's threshold), and only for interactive TTY runs, GET `https://api.github.com/repos/thieso2/sandcastle-incus/releases/latest` with `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, and `If-None-Match: <stored etag>`. Persist `{checked_at, etag, latest_tag}` in a small state file under `~/.config/sandcastle/` (gh precedent: `state.yml`). Run it in a goroutine so it never blocks the command (flyctl precedent). A 304 means "no change" — note it still costs 1 of the 60/hr unauthenticated requests (verified empirically; the docs' 304 exemption requires an `Authorization` header), which is irrelevant at 1/day.
+1. **Daily cached check against `releases/latest`.** Once per 24 h (gh's threshold), and only for interactive TTY runs, GET `https://api.github.com/repos/moyn-dev/sandcastle-incus/releases/latest` with `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, and `If-None-Match: <stored etag>`. Persist `{checked_at, etag, latest_tag}` in a small state file under `~/.config/sandcastle/` (gh precedent: `state.yml`). Run it in a goroutine so it never blocks the command (flyctl precedent). A 304 means "no change" — note it still costs 1 of the 60/hr unauthenticated requests (verified empirically; the docs' 304 exemption requires an `Authorization` header), which is irrelevant at 1/day.
 2. **Version compare.** `strings.TrimPrefix(tag_name, "v")` vs the ldflags-stamped `internal/cli.version`; skip entirely when the binary carries no release version (dev/snapshot builds) — mirrors gh's `updaterEnabled` build-time gate.
 3. **Notify by default; never auto-replace under Homebrew.** Detect brew with the gh/flyctl check (executable path under `brew --prefix`/bin) and print `To upgrade, run: brew upgrade sandcastle` on macOS; otherwise print the release URL or offer `sc upgrade`.
-4. **If/when `sc upgrade` is built:** resolve the asset as `sandcastle-{GOOS}-{GOARCH}.tar.gz` from `https://github.com/thieso2/sandcastle-incus/releases/download/{tag}/…` (stable URL pattern — no further API calls), download it plus `checksums.txt`, verify SHA-256, extract the `sandcastle` binary, and apply with `minio/selfupdate.Apply` (pass the checksum in `Options`; surface `RollbackError`). Note the symlink layout (`sc`, `sc-adm`, `sandcastle-admin` → one binary, per [CLAUDE.md](../../CLAUDE.md)): replace the symlink **target**, which minio/selfupdate handles since all names resolve to the same file.
+4. **If/when `sc upgrade` is built:** resolve the asset as `sandcastle-{GOOS}-{GOARCH}.tar.gz` from `https://github.com/moyn-dev/sandcastle-incus/releases/download/{tag}/…` (stable URL pattern — no further API calls), download it plus `checksums.txt`, verify SHA-256, extract the `sandcastle` binary, and apply with `minio/selfupdate.Apply` (pass the checksum in `Options`; surface `RollbackError`). Note the symlink layout (`sc`, `sc-adm`, `sandcastle-admin` → one binary, per [CLAUDE.md](../../CLAUDE.md)): replace the symlink **target**, which minio/selfupdate handles since all names resolve to the same file.
 5. **Opt-out env var.** Honor something like `SANDCASTLE_NO_UPDATE_NOTIFIER` (gh: `GH_NO_UPDATE_NOTIFIER`; flyctl: `FLY_NO_UPDATE_CHECK`), and also suppress in CI/non-TTY.
 6. **Integrity: checksums now, minisign maybe later.** `checksums.txt` SHA-256 over HTTPS covers corruption/CDN tampering; it does not cover a compromised repo/CI (the attacker regenerates it). If that threat ever matters, add a `signs` entry running minisign over `checksums.txt` with an offline key and verify with `jedisct1/go-minisign` + embedded pubkey — skip the sigstore dependency tree. Today `.goreleaser.yaml` has **no** `signs` config, so any client-side signature verification would be aspirational.

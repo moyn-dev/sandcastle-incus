@@ -15,8 +15,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 	"github.com/spf13/cobra"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 	"gopkg.in/yaml.v2"
 )
 

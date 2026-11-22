@@ -2366,7 +2366,7 @@ earlier assumption; I did not re-add a duplicate command.
 
 **Change:** `internal/cli/root.go` `const version` → `var version` (a `const`
 cannot be overwritten by `-X`). GoReleaser (#97) will stamp it via
-`-ldflags "-X github.com/thieso2/sandcastle-incus/internal/cli.version={{.Version}}"`.
+`-ldflags "-X github.com/moyn-dev/sandcastle-incus/internal/cli.version={{.Version}}"`.
 Both the user tree (`version.go`) and the admin tree (`admin.go`) already read this
 one symbol, so a single ldflag stamps both. Proven end-to-end: a build with
 `-X …cli.version=v9.9.9-stamptest` prints that value from `sandcastle version`
@@ -3366,7 +3366,7 @@ client" during the coexistence e2e. Four linked fixes:
   cleaner long-term fix.
 - **Also corrected:** `CLAUDE.md` named the issue repo `thieso2/incus-sandcastle`
   while the git remote and `docs/agents/issue-tracker.md` both say
-  `thieso2/sandcastle-incus` — the repo's own instructions disagreed with
+  `moyn-dev/sandcastle-incus` — the repo's own instructions disagreed with
   themselves. (Fixed concurrently by another writer mid-session; left that
   wording in place.)
 - **Enabled external PRs as a triage surface** (`/triage` reads this flag from

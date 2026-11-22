@@ -3,7 +3,7 @@ package tenant
 import (
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // The sidecar's address is host .3 of the tenant's private /24. Every path that

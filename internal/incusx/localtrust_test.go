@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	incus "github.com/lxc/incus/v6/client"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
 )
 
 type fakeLocalTrustServer struct {

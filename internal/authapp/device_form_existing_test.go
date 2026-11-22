@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func getDeviceFormForTest(t *testing.T, handler http.Handler, cookie *http.Cookie, userCode string) string {

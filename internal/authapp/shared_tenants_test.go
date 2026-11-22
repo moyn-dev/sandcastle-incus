@@ -3,15 +3,15 @@ package authapp
 import (
 	"context"
 	"encoding/json"
-	"github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 type fakeTenantMembershipManager struct {

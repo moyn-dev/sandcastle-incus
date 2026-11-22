@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/thieso2/sandcastle-incus/internal/agentskill"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/agentskill"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // SkillReminderEnv silences the agent-skill hint for one shell when set to

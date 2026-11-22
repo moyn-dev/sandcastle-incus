@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // sc-adm tenant delete on a v2 tenant used to build a v1-shaped plan (sc-<t>

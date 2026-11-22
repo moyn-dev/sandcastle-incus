@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/agentskill"
+	"github.com/moyn-dev/sandcastle-incus/internal/agentskill"
 )
 
 // skillTestConfig fakes the home directory so no test can reach the real

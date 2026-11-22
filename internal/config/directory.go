@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 	"gopkg.in/yaml.v2"
 )
 

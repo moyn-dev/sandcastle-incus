@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 // ProjectDomainResolver answers "which Project Domain, under which Public DNS

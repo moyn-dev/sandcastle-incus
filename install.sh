@@ -2,7 +2,7 @@
 #
 # Sandcastle CLI installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/moyn-dev/sandcastle-incus/main/install.sh | bash
 #
 # Installs the release binary as `sandcastle` in ~/.local/bin with an `sc`
 # symlink beside it (the busybox layout the fat binary dispatches on — see
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-REPO="${SANDCASTLE_REPO:-thieso2/sandcastle-incus}"
+REPO="${SANDCASTLE_REPO:-moyn-dev/sandcastle-incus}"
 VERSION="${SANDCASTLE_VERSION:-}"
 INSTALL_DIR="${SANDCASTLE_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_ADMIN="${SANDCASTLE_ADMIN:-}"
@@ -42,7 +42,7 @@ usage() {
   cat >&2 <<'USAGE'
 Sandcastle CLI installer — installs `sandcastle` + an `sc` symlink into ~/.local/bin.
 
-  curl -fsSL https://raw.githubusercontent.com/thieso2/sandcastle-incus/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/moyn-dev/sandcastle-incus/main/install.sh | bash
 
 Options (env-var form in brackets; flags win):
   --version <tag>   [SANDCASTLE_VERSION]       release to install (default: latest)

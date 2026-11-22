@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func newCreateCommand(config commandConfig, opts *rootOptions) *cobra.Command {

@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
 )
 
 func fleet() []incusx.ComponentVersion {

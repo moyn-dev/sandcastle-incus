@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 func TestDiscoverInstallPrefixes(t *testing.T) {

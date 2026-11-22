@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/libdns/libdns"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 func TestProjectCertificateEmptyProjectAndCopy(t *testing.T) {

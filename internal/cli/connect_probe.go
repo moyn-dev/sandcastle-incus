@@ -6,8 +6,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/hostkeys"
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
+	"github.com/moyn-dev/sandcastle-incus/internal/hostkeys"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
 )
 
 const pinnedAddressProbeBudget = 3 * time.Second

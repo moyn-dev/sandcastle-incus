@@ -6,7 +6,7 @@ import (
 
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // SetTenantSSHKeyV2 replaces the SSH public key list baked into a v2 tenant's

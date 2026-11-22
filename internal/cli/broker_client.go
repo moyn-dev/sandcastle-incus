@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/update"
+	"github.com/moyn-dev/sandcastle-incus/internal/update"
 )
 
 // brokerPost performs an mTLS POST to the Sandcastle Broker. The caller's

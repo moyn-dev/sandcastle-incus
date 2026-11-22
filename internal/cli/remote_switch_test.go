@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // TestApplyRemoteSwitch verifies that switching the active remote re-points the

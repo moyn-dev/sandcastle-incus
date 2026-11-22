@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
 )
 
 // The v1 machine planner is gone; these helpers survive because the v2 sidecar

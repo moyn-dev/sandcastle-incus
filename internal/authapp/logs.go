@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 // LogEntry is a persisted log row read back for the /logs browse page.

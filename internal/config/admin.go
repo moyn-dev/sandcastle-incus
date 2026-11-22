@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	domainrules "github.com/thieso2/sandcastle-incus/internal/domain"
-	"github.com/thieso2/sandcastle-incus/internal/naming"
+	domainrules "github.com/moyn-dev/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
 )
 
 const (

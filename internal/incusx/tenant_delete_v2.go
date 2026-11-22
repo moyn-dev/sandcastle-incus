@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/lxc/incus/v6/shared/api"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // DeleteTenantV2 tears down a v2 tenant completely: every app project

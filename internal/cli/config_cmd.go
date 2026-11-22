@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 	"github.com/spf13/cobra"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
 )
 
 func newConfigCommand(config commandConfig, _ *rootOptions) *cobra.Command {

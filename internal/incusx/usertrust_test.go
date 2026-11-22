@@ -9,7 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 type fakeTrustServer struct {

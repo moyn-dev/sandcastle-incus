@@ -9,8 +9,8 @@ import (
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/incusx"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 var (

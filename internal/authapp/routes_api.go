@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	svclog "github.com/thieso2/sandcastle-incus/internal/svclog"
+	svclog "github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 // Route API (Spec #111). The Auth App is the sole owner of Public Routes:

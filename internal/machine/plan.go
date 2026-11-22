@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 const DefaultAppPort = 3000

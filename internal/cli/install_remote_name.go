@@ -3,8 +3,8 @@ package cli
 import (
 	"strings"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/usertrust"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/usertrust"
 )
 
 // installRemoteName keeps each Incus remote name bound to one install. Tenant

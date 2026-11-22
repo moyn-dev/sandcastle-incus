@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
 )
 
 // Handler serves the signer endpoints:

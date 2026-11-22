@@ -10,8 +10,8 @@ import (
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 // Broker appliance layout (mirrors v1's route-broker appliance).

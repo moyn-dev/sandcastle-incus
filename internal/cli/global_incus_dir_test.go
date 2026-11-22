@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
 
 // The hardcoded ~/.config/incus this replaced is the wrong path on macOS,

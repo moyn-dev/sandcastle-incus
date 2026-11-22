@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
-	"github.com/thieso2/sandcastle-incus/internal/share"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/share"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 type ShareCreateRequest struct {

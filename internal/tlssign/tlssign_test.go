@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/certs"
+	"github.com/moyn-dev/sandcastle-incus/internal/certs"
 )
 
 func testCA(t *testing.T) certs.KeyPair {

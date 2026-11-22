@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thieso2/sandcastle-incus/internal/meta"
+	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 )
 
 func TestReconcileMachineSudoRunsAsRootOverIncusAndReportsState(t *testing.T) {

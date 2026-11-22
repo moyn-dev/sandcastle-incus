@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/domain"
 )
 
 // The project_domain_claims table is the install-wide reservation registry

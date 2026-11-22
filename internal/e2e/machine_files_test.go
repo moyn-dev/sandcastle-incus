@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	incus "github.com/lxc/incus/v6/client"
-	machine "github.com/thieso2/sandcastle-incus/internal/machine"
+	machine "github.com/moyn-dev/sandcastle-incus/internal/machine"
 )
 
 func assertMachineIngressFiles(t *testing.T, server incus.InstanceServer, instanceName string, hostname string, appPort int) {

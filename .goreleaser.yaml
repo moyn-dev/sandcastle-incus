@@ -35,7 +35,7 @@ builds:
     # `version` is a package-level `var` in internal/cli (see #96) so `-X` can
     # stamp the tag. `-s -w` strips debug info to shrink the binary.
     ldflags:
-      - -s -w -X github.com/thieso2/sandcastle-incus/internal/cli.version={{ .Version }}
+      - -s -w -X github.com/moyn-dev/sandcastle-incus/internal/cli.version={{ .Version }}
 
 archives:
   - formats: [tar.gz]
@@ -81,12 +81,12 @@ homebrew_casks:
       # thieso2/homebrew-tap. The GitHub Actions secret is HOMEBREW_TAP_TOKEN
       # (#99); the release workflow (#98) maps it into this env var.
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/thieso2/sandcastle-incus"
+    homepage: "https://github.com/moyn-dev/sandcastle-incus"
     description: "CLI for Sandcastle — multi-tenant developer sandboxes on Incus"
     # Silences Homebrew's "unverified URL" audit — the download host/path is
     # this repo's own releases.
     url:
-      verified: "github.com/thieso2/sandcastle-incus/"
+      verified: "github.com/moyn-dev/sandcastle-incus/"
     # GoReleaser auto-generates `binary "sandcastle"`. Add the short `sc` alias
     # as a second cask binary stanza pointing at the same staged binary.
     custom_block: |

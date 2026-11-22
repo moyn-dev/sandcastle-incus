@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	incus "github.com/lxc/incus/v6/client"
-	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
-	"github.com/thieso2/sandcastle-incus/internal/localtrust"
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/localtrust"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 type LocalTrustServer interface {

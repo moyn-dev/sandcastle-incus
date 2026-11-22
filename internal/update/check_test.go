@@ -10,11 +10,11 @@ import (
 
 const releaseJSON = `{
 	"tag_name": "v0.2.0",
-	"html_url": "https://github.com/thieso2/sandcastle-incus/releases/tag/v0.2.0",
+	"html_url": "https://github.com/moyn-dev/sandcastle-incus/releases/tag/v0.2.0",
 	"published_at": "2026-07-10T09:00:00Z",
 	"assets": [
-		{"name": "sandcastle-linux-amd64.tar.gz", "browser_download_url": "https://github.com/thieso2/sandcastle-incus/releases/download/v0.2.0/sandcastle-linux-amd64.tar.gz"},
-		{"name": "checksums.txt", "browser_download_url": "https://github.com/thieso2/sandcastle-incus/releases/download/v0.2.0/checksums.txt"}
+		{"name": "sandcastle-linux-amd64.tar.gz", "browser_download_url": "https://github.com/moyn-dev/sandcastle-incus/releases/download/v0.2.0/sandcastle-linux-amd64.tar.gz"},
+		{"name": "checksums.txt", "browser_download_url": "https://github.com/moyn-dev/sandcastle-incus/releases/download/v0.2.0/checksums.txt"}
 	]
 }`
 
@@ -50,7 +50,7 @@ func TestCheckFetchesAndCachesLatestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if gotPath != "/repos/thieso2/sandcastle-incus/releases/latest" {
+	if gotPath != "/repos/moyn-dev/sandcastle-incus/releases/latest" {
 		t.Fatalf("unexpected path %q", gotPath)
 	}
 	if st.LatestTag != "v0.2.0" || st.ETag != `W/"etag-1"` {
@@ -109,7 +109,7 @@ func TestCheckServerErrorKeepsPriorState(t *testing.T) {
 
 func TestResolveReleaseByTag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/thieso2/sandcastle-incus/releases/tags/v0.2.0" {
+		if r.URL.Path != "/repos/moyn-dev/sandcastle-incus/releases/tags/v0.2.0" {
 			http.NotFound(w, r)
 			return
 		}
@@ -126,7 +126,7 @@ func TestResolveReleaseByTag(t *testing.T) {
 		t.Fatalf("unexpected release %+v", rel)
 	}
 	url, ok := rel.AssetURL("sandcastle-linux-amd64.tar.gz")
-	if !ok || url != "https://github.com/thieso2/sandcastle-incus/releases/download/v0.2.0/sandcastle-linux-amd64.tar.gz" {
+	if !ok || url != "https://github.com/moyn-dev/sandcastle-incus/releases/download/v0.2.0/sandcastle-linux-amd64.tar.gz" {
 		t.Fatalf("AssetURL = %q, %v", url, ok)
 	}
 	if _, ok := rel.AssetURL("sandcastle-plan9-386.tar.gz"); ok {
@@ -144,10 +144,10 @@ func TestResolveReleaseUsesTheReleasePageBeforeTheAPI(t *testing.T) {
 	defer api.Close()
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodHead && r.URL.Path == "/thieso2/sandcastle-incus/releases/latest":
-			w.Header().Set("Location", "https://github.com/thieso2/sandcastle-incus/releases/tag/v0.18.2")
+		case r.Method == http.MethodHead && r.URL.Path == "/moyn-dev/sandcastle-incus/releases/latest":
+			w.Header().Set("Location", "https://github.com/moyn-dev/sandcastle-incus/releases/tag/v0.18.2")
 			w.WriteHeader(http.StatusFound)
-		case r.Method == http.MethodHead && (r.URL.Path == "/thieso2/sandcastle-incus/releases/tag/v0.18.2" || r.URL.Path == "/thieso2/sandcastle-incus/releases/tag/v0.17.3"):
+		case r.Method == http.MethodHead && (r.URL.Path == "/moyn-dev/sandcastle-incus/releases/tag/v0.18.2" || r.URL.Path == "/moyn-dev/sandcastle-incus/releases/tag/v0.17.3"):
 			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, r)
@@ -164,7 +164,7 @@ func TestResolveReleaseUsesTheReleasePageBeforeTheAPI(t *testing.T) {
 		t.Fatalf("tag = %q", rel.TagName)
 	}
 	url, ok := rel.AssetURL("sandcastle-linux-amd64.tar.gz")
-	if !ok || url != web.URL+"/thieso2/sandcastle-incus/releases/download/v0.18.2/sandcastle-linux-amd64.tar.gz" {
+	if !ok || url != web.URL+"/moyn-dev/sandcastle-incus/releases/download/v0.18.2/sandcastle-linux-amd64.tar.gz" {
 		t.Fatalf("AssetURL = %q, %v", url, ok)
 	}
 	if _, ok := rel.AssetURL("checksums.txt"); !ok {

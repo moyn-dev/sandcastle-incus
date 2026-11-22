@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/domain"
+	"github.com/moyn-dev/sandcastle-incus/internal/domain"
 )
 
 // The public_dns_zones table is the install's registry of Public DNS Zones

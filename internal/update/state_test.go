@@ -22,7 +22,7 @@ func TestStateRoundTrip(t *testing.T) {
 		CheckedAt:   time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC),
 		ETag:        `W/"abc123"`,
 		LatestTag:   "v0.2.0",
-		LatestURL:   "https://github.com/thieso2/sandcastle-incus/releases/tag/v0.2.0",
+		LatestURL:   "https://github.com/moyn-dev/sandcastle-incus/releases/tag/v0.2.0",
 		PublishedAt: time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC),
 		NoticedAt:   time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC),
 	}

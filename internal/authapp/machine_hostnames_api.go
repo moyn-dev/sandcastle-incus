@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/thieso2/sandcastle-incus/internal/naming"
-	"github.com/thieso2/sandcastle-incus/internal/projectbroker"
-	"github.com/thieso2/sandcastle-incus/internal/svclog"
+	"github.com/moyn-dev/sandcastle-incus/internal/naming"
+	"github.com/moyn-dev/sandcastle-incus/internal/projectbroker"
+	"github.com/moyn-dev/sandcastle-incus/internal/svclog"
 )
 
 // Machine Public Hostname endpoints on the tenant plane (ADR-0028, spec

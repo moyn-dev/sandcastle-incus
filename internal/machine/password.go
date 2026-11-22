@@ -3,7 +3,7 @@ package machine
 import (
 	"context"
 
-	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
+	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // PasswordReconciler sets the Unix login password and the Samba password for

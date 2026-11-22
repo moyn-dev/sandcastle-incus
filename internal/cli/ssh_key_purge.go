@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/moyn-dev/sandcastle-incus/internal/hostkeys"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 	"github.com/spf13/cobra"
-	"github.com/thieso2/sandcastle-incus/internal/hostkeys"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
 )
 
 type sshKeyPurgePayload struct {

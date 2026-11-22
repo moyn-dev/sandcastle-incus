@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thieso2/sandcastle-incus/internal/authapp"
-	"github.com/thieso2/sandcastle-incus/internal/tenant"
+	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 // Public DNS Zones (ADR-0027, spec §2.3 / §3.4): after a zone-mode machine

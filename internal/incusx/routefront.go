@@ -7,7 +7,7 @@ import (
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
-	authapp "github.com/thieso2/sandcastle-incus/internal/authapp"
+	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
 )
 
 // Publishing the Public Route SNI list to a shared front (Spec #111).

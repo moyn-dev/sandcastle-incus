@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thieso2/sandcastle-incus/internal/agentskill"
+	"github.com/moyn-dev/sandcastle-incus/internal/agentskill"
 )
 
 // skillTarget is one place `sc skill` acts on: an agent/scope pair, or the
