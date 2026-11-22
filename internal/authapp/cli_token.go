@@ -3,6 +3,7 @@ package authapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ WHERE cli_tokens.token_verifier = ? AND cli_tokens.expires_at > ?
 `, runtimeSecretVerifier(token), now.UTC().Format(time.RFC3339))
 	user, err := scanUser(row)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, errUserNotFound) {
 			return User{}, fmt.Errorf("invalid or expired CLI token")
 		}
 		return User{}, err

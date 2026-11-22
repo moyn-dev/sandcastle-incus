@@ -13,6 +13,7 @@ import (
 
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
 	scconfig "github.com/thieso2/sandcastle-incus/internal/config"
+	"github.com/thieso2/sandcastle-incus/internal/hostkeys"
 	"github.com/thieso2/sandcastle-incus/internal/incusx"
 	"github.com/thieso2/sandcastle-incus/internal/naming"
 	tenant "github.com/thieso2/sandcastle-incus/internal/tenant"
@@ -673,6 +674,14 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	if confirm := launch.ConfirmCreate; confirm != nil {
 		request.ConfirmCreate = func() error { return confirm(project, machineName) }
 	}
+	var recorded []hostkeys.Key
+	privateName := ""
+	if names := v2MachineNames(summary, project, machineName, nil); len(names) > 0 {
+		privateName = names[0]
+		recorded = hostKeysConfig(config, summary, "").Recorded(privateName)
+	}
+	probe := startPinnedAddressProbe(ctx, recorded, privateName)
+	defer probe.stop()
 	ensured, err := config.tenantCreator.EnsureMachineV2(ctx, request)
 	if err != nil {
 		return dialedV2Machine{}, err
@@ -687,16 +696,23 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	// the cloud-init wait, the port probe, the host-key pinning — could only
 	// ever end in a timeout. Report it instead and let the caller decide:
 	// `sc connect` execs a shell over the Incus API, `sc fix` gives up.
-	// Checked AFTER the ensure so a stopped bare machine is started first, and
-	// only for machines that already existed: a just-created one is never bare
-	// (this path always creates from the default profile).
-	if !ensured.Created {
-		bare, err := config.tenantCreator.MachineIsBareV2(ctx, summary.V2IncusProjectName(project), machineName)
-		if err != nil {
-			return dialedV2Machine{}, err
-		}
-		if bare {
-			return dialedV2Machine{bare: true, project: project, machine: machineName}, nil
+	if ensured.Bare {
+		return dialedV2Machine{bare: true, project: project, machine: machineName}, nil
+	}
+	if ensured.FoundUp() {
+		if ip, pinned := pinnedAddressOfRunningMachine(ctx, config, probe, recorded, &ensured); pinned {
+			sshKey, err := prepareLoginSSHKey(loginSSHKeyRequest{})
+			if err != nil {
+				return dialedV2Machine{}, err
+			}
+			verboseCLI(config, "host key: %s presents the pinned key at %s; skipping the cloud-init wait and the authoritative read", privateName, ip)
+			return dialedV2Machine{
+				sshArgs:   pinnedSSHArgs(sshKey.PublicKeyPath, privateName, ensured.LoginUser, ip),
+				loginUser: ensured.LoginUser,
+				privateIP: ip,
+				project:   project,
+				machine:   machineName,
+			}, nil
 		}
 	}
 	if ensured.PrivateIP == "" {
@@ -749,7 +765,6 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 			return dialedV2Machine{}, fmt.Errorf("reconcile current SSH key for new machine %s: %w", machineName, err)
 		}
 	}
-	privateKeyPath := strings.TrimSuffix(sshKey.PublicKeyPath, ".pub")
 	// Record the machine's authoritative host key under the names it answers
 	// at, then dial its IP but check the key against the name (HostKeyAlias).
 	// Names are stable; private IPs are recycled leases. With the true key
@@ -761,17 +776,14 @@ func dialV2Machine(ctx context.Context, config commandConfig, summary tenant.Sum
 	// finalizes SSH naming) and the dial still goes to the tenant-bridge IP.
 	publicHostnames := ensured.PublicHostnames
 	names := v2MachineNames(summary, project, machineName, publicHostnames)
-	sshArgs := []string{"-o", "IdentitiesOnly=yes", "-i", privateKeyPath}
-	if len(names) > 0 && ensureV2HostKey(ctx, config, summary, project, machineName, publicHostnames, ensured.PrivateIP, ensured.PrivateCIDR) {
-		sshArgs = append(sshArgs,
-			"-o", "HostKeyAlias="+names[0],
-			"-o", "StrictHostKeyChecking=yes",
-			"-o", "CheckHostIP=no",
-		)
-	} else {
-		sshArgs = append(sshArgs, "-o", "StrictHostKeyChecking=accept-new")
+	sshArgs := []string{
+		"-o", "IdentitiesOnly=yes", "-i", strings.TrimSuffix(sshKey.PublicKeyPath, ".pub"),
+		"-o", "StrictHostKeyChecking=accept-new",
+		ensured.LoginUser + "@" + ensured.PrivateIP,
 	}
-	sshArgs = append(sshArgs, ensured.LoginUser+"@"+ensured.PrivateIP)
+	if len(names) > 0 && ensureV2HostKey(ctx, config, summary, project, machineName, publicHostnames, ensured.PrivateIP, ensured.PrivateCIDR) {
+		sshArgs = pinnedSSHArgs(sshKey.PublicKeyPath, names[0], ensured.LoginUser, ensured.PrivateIP)
+	}
 	return dialedV2Machine{
 		sshArgs:   sshArgs,
 		loginUser: ensured.LoginUser,

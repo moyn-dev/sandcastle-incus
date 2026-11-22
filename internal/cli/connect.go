@@ -90,8 +90,13 @@ func newConnectCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 			// address and known_hosts already pins the identity its sshd
 			// presents — one auth-app request + one keyscan, no live Incus
 			// round trips. Any doubt falls through to the live path below.
-			if dialed, ok := dialV2MachineViaCache(cmd.Context(), config, args[0]); ok {
+			dialed, miss, ok := dialV2MachineViaCache(cmd.Context(), config, args[0])
+			if ok {
 				return runSSHSession(cmd.Context(), config, dialed, args[1:])
+			}
+			warnSlowConnect(config, miss)
+			if miss.authAppUnusable() {
+				config.tenantStore = liveTenantStore(config.tenantStore)
 			}
 			return withResolvedV2Machine(cmd, config, args[0], func(ctx context.Context, config commandConfig, summary tenant.Summary, reference string) error {
 				return runConnectV2(ctx, config, summary, reference, args[1:], launchV2Options{

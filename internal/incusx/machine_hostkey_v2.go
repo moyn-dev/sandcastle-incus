@@ -101,7 +101,7 @@ func (c TenantCreator) MachineSubnetV2(ctx context.Context, incusProject string,
 	if err != nil {
 		return "", err
 	}
-	_, cidr := waitForV2InstanceIPv4(ctx, server.UseProject(incusProject), name, 0)
+	_, cidr := waitForV2InstanceIPv4(ctx, server.UseProject(incusProject), name, 0, nil)
 	return cidr, nil
 }
 

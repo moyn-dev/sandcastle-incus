@@ -266,7 +266,7 @@ func (c TenantCreator) CreateMachineV2(ctx context.Context, request CreateMachin
 	if err := op.Wait(); err != nil && !isAlreadyRunning(err) {
 		return CreateMachineV2Result{}, rollbackNewScratch(fmt.Errorf("wait for machine %s: %w", request.Name, err))
 	}
-	result.PrivateIP, result.PrivateCIDR = waitForV2InstanceIPv4(ctx, project, request.Name, v2MachineIPTimeout(request.VM))
+	result.PrivateIP, result.PrivateCIDR = waitForV2InstanceIPv4(ctx, project, request.Name, v2MachineIPTimeout(request.VM), nil)
 	return result, nil
 }
 
@@ -280,6 +280,7 @@ type EnsureMachineV2Result struct {
 	PrivateIP   string `json:"privateIP,omitempty"`
 	PrivateCIDR string `json:"privateCIDR,omitempty"`
 	LoginUser   string `json:"loginUser"`
+	Bare        bool   `json:"bare,omitempty"`
 	// PublicHostnames is the machine's set of Machine Public Hostnames
 	// (ADR-0028), read off the instance's own config for an existing machine
 	// and taken from the request for one this call created; empty means no
@@ -287,6 +288,12 @@ type EnsureMachineV2Result struct {
 	// PublicHostname is the first of them, kept one release.
 	PublicHostname  string   `json:"publicHostname,omitempty"`
 	PublicHostnames []string `json:"publicHostnames,omitempty"`
+
+	found *api.Instance
+}
+
+func (r EnsureMachineV2Result) FoundUp() bool {
+	return !r.Created && !r.Started
 }
 
 // EnsureMachineV2 makes the named v2 machine exist and run: creates it from the
@@ -300,14 +307,18 @@ func (c TenantCreator) EnsureMachineV2(ctx context.Context, request CreateMachin
 	}
 	project := server.UseProject(request.IncusProject)
 	result := EnsureMachineV2Result{
-		Name:      request.Name,
-		Project:   request.IncusProject,
-		LoginUser: v2ProfileLoginUser(project),
+		Name:    request.Name,
+		Project: request.IncusProject,
 	}
+	loginUser := make(chan string, 1)
+	go func() { loginUser <- v2ProfileLoginUser(project) }()
 	instance, _, err := project.GetInstance(request.Name)
+	result.LoginUser = <-loginUser
 	if err == nil {
 		result.PublicHostnames = meta.PublicHostnamesFromConfig(instance.Config)
 		result.PublicHostname = firstPublicHostname(result.PublicHostnames)
+		result.Bare = instanceIsBareV2(instance.Config)
+		result.found = instance
 	}
 	switch {
 	case err == nil && instance.StatusCode == api.Stopped:
@@ -319,9 +330,8 @@ func (c TenantCreator) EnsureMachineV2(ctx context.Context, request CreateMachin
 			return EnsureMachineV2Result{}, fmt.Errorf("wait for machine %s start: %w", request.Name, err)
 		}
 		result.Started = true
-		result.PrivateIP, result.PrivateCIDR = waitForV2InstanceIPv4(ctx, project, request.Name, v2MachineIPTimeout(request.VM))
+		result.PrivateIP, result.PrivateCIDR = waitForV2InstanceIPv4(ctx, project, request.Name, v2MachineIPTimeout(request.VM), nil)
 	case err == nil:
-		result.PrivateIP, result.PrivateCIDR = waitForV2InstanceIPv4(ctx, project, request.Name, 20*time.Second)
 	case api.StatusErrorCheck(err, http.StatusNotFound):
 		if request.ConfirmCreate != nil {
 			if err := request.ConfirmCreate(); err != nil {
@@ -340,6 +350,14 @@ func (c TenantCreator) EnsureMachineV2(ctx context.Context, request CreateMachin
 		return EnsureMachineV2Result{}, fmt.Errorf("get machine %s: %w", request.Name, err)
 	}
 	return result, nil
+}
+
+func (c TenantCreator) MachineAddressV2(ctx context.Context, ensured EnsureMachineV2Result) (string, string) {
+	server, err := c.resolveV2Server()
+	if err != nil {
+		return "", ""
+	}
+	return waitForV2InstanceIPv4(ctx, server.UseProject(ensured.Project), ensured.Name, 20*time.Second, ensured.found)
 }
 
 // v2ProfileLoginUser extracts the login username from the project default
@@ -460,7 +478,7 @@ func v2DevInstanceConfig(project TenantResourceServer, incusProject string) (api
 	}, nil
 }
 
-// MachineIsBareV2 reports whether a machine was created with `--bare`.
+// instanceIsBareV2 reports whether a machine was created with `--bare`.
 //
 // The marker is read from the INSTANCE config, never the expanded config: a
 // profile could carry the key for every machine in the project, which is the
@@ -468,23 +486,6 @@ func v2DevInstanceConfig(project TenantResourceServer, incusProject string) (api
 // back to their own cloud-init — an instance-level document that creates no
 // users is bare whether or not Sandcastle made it, and `incus exec` is the
 // right way into it either way.
-func (c TenantCreator) MachineIsBareV2(ctx context.Context, incusProject string, name string) (bool, error) {
-	server, err := c.resolveV2Server()
-	if err != nil {
-		return false, err
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	instance, _, err := server.UseProject(incusProject).GetInstance(name)
-	if err != nil {
-		return false, fmt.Errorf("get machine %s: %w", name, err)
-	}
-	return instanceIsBareV2(instance.Config), nil
-}
-
-// instanceIsBareV2 is the pure half of MachineIsBareV2, over an instance's own
-// config map.
 func instanceIsBareV2(config map[string]string) bool {
 	if strings.TrimSpace(config[meta.KeyV2Bare]) == "true" {
 		return true
@@ -594,12 +595,16 @@ func v2MachineIPTimeout(vm bool) time.Duration {
 // waitForV2InstanceIPv4 returns the machine's global IPv4 address and the
 // subnet it sits on, in CIDR form. Either may be empty: no lease yet, or an
 // interface that did not report a usable netmask.
-func waitForV2InstanceIPv4(ctx context.Context, project TenantResourceServer, name string, timeout time.Duration) (string, string) {
+func waitForV2InstanceIPv4(ctx context.Context, project TenantResourceServer, name string, timeout time.Duration, known *api.Instance) (string, string) {
 	deadline := time.Now().Add(timeout)
 	for {
 		// Devices are re-read each pass: the instance may not exist yet on the
 		// first iteration, and a NIC can be hot-plugged while we wait.
-		instance, _, instanceErr := project.GetInstance(name)
+		instance, instanceErr := known, error(nil)
+		known = nil
+		if instance == nil {
+			instance, _, instanceErr = project.GetInstance(name)
+		}
 		if state, _, err := project.GetInstanceState(name); err == nil && instanceErr == nil && instance != nil {
 			if nic := instanceNICIPv4(instance.ExpandedConfig, instance.ExpandedDevices, state.Network); nic.Address != "" {
 				return nic.Address, subnetCIDR(nic.Address, nic.Netmask)

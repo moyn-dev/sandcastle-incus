@@ -3,6 +3,7 @@ package authapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -356,13 +357,15 @@ type userScanner interface {
 	Scan(dest ...any) error
 }
 
+var errUserNotFound = errors.New("user not found")
+
 func scanUser(scanner userScanner) (User, error) {
 	var user User
 	var allowlisted int
 	var admin int
 	if err := scanner.Scan(&user.UserKey, &user.GitHubUsername, &user.GitHubUsernameNormalized, &user.GitHubAccountID, &user.GitHubEmail, &allowlisted, &admin); err != nil {
-		if err == sql.ErrNoRows {
-			return User{}, fmt.Errorf("user not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return User{}, errUserNotFound
 		}
 		return User{}, err
 	}

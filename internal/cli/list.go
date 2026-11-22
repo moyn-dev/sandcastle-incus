@@ -41,13 +41,23 @@ const defaultResourceCacheRequestTimeout = 5 * time.Second
 const resourceCacheTimeoutEnv = "SANDCASTLE_LS_CACHE_TIMEOUT"
 
 func resourceCacheRequestTimeout() time.Duration {
+	return resourceCacheTimeoutOr(defaultResourceCacheRequestTimeout)
+}
+
+const defaultConnectCacheRequestTimeout = 2 * time.Second
+
+func connectCacheRequestTimeout() time.Duration {
+	return resourceCacheTimeoutOr(defaultConnectCacheRequestTimeout)
+}
+
+func resourceCacheTimeoutOr(fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(resourceCacheTimeoutEnv))
 	if raw == "" {
-		return defaultResourceCacheRequestTimeout
+		return fallback
 	}
 	value, err := time.ParseDuration(raw)
 	if err != nil || value <= 0 {
-		return defaultResourceCacheRequestTimeout
+		return fallback
 	}
 	return value
 }

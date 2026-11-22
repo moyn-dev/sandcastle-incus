@@ -58,3 +58,20 @@ func TestHostKeyDisagreement(t *testing.T) {
 		})
 	}
 }
+
+func TestServedHostKeysRecordsOnlyWhatSSHDOffers(t *testing.T) {
+	ed := hostkeys.Key{Type: "ssh-ed25519", Key: "AAAA_ed"}
+	ecdsa := hostkeys.Key{Type: "ecdsa-sha2-nistp256", Key: "AAAA_ecdsa"}
+	rsa := hostkeys.Key{Type: "ssh-rsa", Key: "AAAA_rsa"}
+	onDisk := []hostkeys.Key{ed, ecdsa, rsa}
+
+	if got := servedHostKeys(onDisk, []hostkeys.Key{ed}); len(got) != 1 || got[0] != ed {
+		t.Fatalf("sshd serves only ed25519, recorded %v", got)
+	}
+	if got := servedHostKeys(onDisk, []hostkeys.Key{rsa, ed, ecdsa}); len(got) != 3 || got[0] != ed || got[2] != rsa {
+		t.Fatalf("all served keys are kept in authoritative order, got %v", got)
+	}
+	if got := servedHostKeys(onDisk, nil); len(got) != 3 {
+		t.Fatalf("a scan that confirms nothing must not empty the record, got %v", got)
+	}
+}
