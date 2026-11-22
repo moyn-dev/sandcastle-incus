@@ -606,6 +606,15 @@ type ResourceListRequest struct {
 	Include []string
 }
 
+type ResourceListError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *ResourceListError) Error() string {
+	return "auth app resource list: " + e.Message
+}
+
 // ListResources calls the t2 cache-backed GET /api/resources endpoint. `sc
 // ls` (t3, internal/cli/list.go) treats ANY error return — network failure,
 // timeout, or non-200 status (including the 503 the endpoint answers when the
@@ -653,7 +662,7 @@ func (c DeviceClient) ListResources(ctx context.Context, request ResourceListReq
 		if msg == "" {
 			msg = response.Status
 		}
-		return ResourceListResult{}, fmt.Errorf("auth app resource list: %s", msg)
+		return ResourceListResult{}, &ResourceListError{StatusCode: response.StatusCode, Message: msg}
 	}
 	var payload ResourceListResult
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {

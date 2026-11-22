@@ -7381,3 +7381,69 @@ anyway).
   created by the auth-app on first `sc login`, so a flag on one creator would
   only cover half of the creations. Opting out is `sc tailscale egress <t>
   off`, then a converge.
+
+## 2026-11-22 — `sc connect`: announced cache misses and a short live path
+
+Measured from a laptop against one machine, Incus API over a Tailscale DERP
+relay (about 150 ms per call). The stored CLI token was expired, so every
+connect took the live path: median 4.7 s over 5 runs, 10 Incus GETs.
+
+- **The live path asks the machine before it asks Incus for the address.**
+  The brief was to skip the cloud-init wait and the host-key file reads when
+  `known_hosts` already pins the key sshd presents. That still left
+  `GET /instances/<m>/state`, which is only needed for the IPv4 address and
+  is the slowest and least predictable call: 0.2 s, 0.95 s and 1.9 to 4.0 s
+  in three sessions the same day. `dialV2Machine` now starts
+  `pinnedAddressProbe` beside the ensure. The probe resolves the Machine
+  Private Hostname through the local resolver and key-scans that address.
+  If sshd there presents the pinned key, the state read is skipped too. When
+  the name does not resolve, the address comes from Incus and the same check
+  runs against it. Alternatives: a client-side file of last-seen addresses
+  (new state to keep correct), or taking the address from the Auth App cache
+  (not available in exactly the case that reaches the live path). The
+  resolver is not trusted for identity. Only a private IPv4 answer is
+  scanned, the address counts once the pinned key was presented, and ssh
+  checks the key again under `StrictHostKeyChecking=yes`. The probe has a 3 s
+  budget so a stale record cannot stall a connect for long.
+- **`GetInstanceFull` was measured and rejected.** In one session of 4
+  rounds, `GetInstanceFull` took 2.3 to 8.5 s where `GetInstanceState` took
+  1.9 to 4.0 s and `GetInstance` 0.2 to 0.9 s. The full read also gathers
+  snapshots and backups. The instance is fetched once by other means:
+  `EnsureMachineV2` keeps the instance it read, reports `Bare` from it, and
+  `MachineAddressV2` reuses it for the first pass of the address wait.
+  `MachineIsBareV2` had no caller left and is deleted.
+- **`EnsureMachineV2` no longer returns the address of a machine it found
+  up.** It still returns it for a machine it created or started, because it
+  waits for the lease there anyway. The caller asks `MachineAddressV2` when
+  the probe did not settle the address. `EnsureMachineV2` has one caller.
+- **Profile and instance reads overlap.** Sequential they cost 316 ms
+  (median of 6 runs, sum of the two traced calls), overlapped each still
+  takes about 160 ms, so the pair costs about 165 ms. A second connection to
+  the Incus host did not make either call slower.
+- **A miss caused by the Auth App drops the tenant-store cache for the rest
+  of the command** (`liveTenantStore`). Without it the tenant summary sent a
+  second request to the same Auth App and got the same 401, or waited out
+  the same timeout a second time.
+- **Every miss warns, including the ones the user cannot act on** (a bare
+  machine, a globbed reference). The brief asked for a line whenever the
+  live path runs, and the line explains a slow connect either way. Only
+  `SANDCASTLE_CONNECT_CACHE=0` is silent.
+- **One override for both budgets.** `SANDCASTLE_LS_CACHE_TIMEOUT` sets the
+  resource-cache budget for `sc ls` (default 5 s) and for `sc connect`
+  (default 2 s). A second variable for connect was not added: nobody has
+  asked to tune them apart.
+- **The pinned shortcut does no `known_hosts` upkeep**, like the cache path:
+  no public-hostname aliases added, no recycled-address purge. Those still
+  happen on the full path and in `sc hostkeys`.
+- **`servedHostKeys` keeps the whole authoritative set when the scan confirms
+  none of it.** That case cannot follow an agreeing scan today, and an empty
+  record would turn strict checking into a lockout.
+- **`scanUser` returns a sentinel (`errUserNotFound`) with the old text.**
+  `FindUser`, `UserForSession` and the OIDC login store still report "user
+  not found". Only `UserForCLIToken` maps it to "invalid or expired CLI
+  token".
+- **Not changed:** the reachability probe and `GET /1.0` of every remote
+  connect (about 0.2 s) and the live project listing behind the tenant
+  summary (about 0.35 s). Both are shared by every command. The tracked
+  project copy of the skill under `.agents/skills/sandcastle` already
+  differs from the source in every file and was left alone.

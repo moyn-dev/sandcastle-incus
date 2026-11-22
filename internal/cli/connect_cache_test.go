@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
 	"github.com/thieso2/sandcastle-incus/internal/authapp"
@@ -91,7 +96,7 @@ func TestDialV2MachineViaCacheHit(t *testing.T) {
 	}}
 	config := commandConfig{adminConfig: scconfig.Admin{Tenant: "thieso2"}, authResources: fake}
 
-	dialed, ok := dialV2MachineViaCache(context.Background(), config, "wordpress:dev")
+	dialed, _, ok := dialV2MachineViaCache(context.Background(), config, "wordpress:dev")
 	if !ok {
 		t.Fatal("expected a cache hit")
 	}
@@ -110,41 +115,57 @@ func TestDialV2MachineViaCacheHit(t *testing.T) {
 	}
 }
 
-// Every uncertainty falls back: stopped/bare/missing machine, key mismatch,
-// keyscan failure, cache error.
 func TestDialV2MachineViaCacheFallsBack(t *testing.T) {
 	home := useLoginHomeForTest(t)
 	key := hostkeys.Key{Type: "ssh-ed25519", Key: "AAAAC3TestKey"}
 	writeKnownHostsForTest(t, home, "dev.wordpress.obelix", key)
 	summary := tenant.Summary{Tenant: "thieso2", DNSSuffix: "obelix", UnixUser: "thies"}
 	running := meta.Machine{Name: "dev", Project: "wordpress", Running: true, PrivateIP: "10.123.0.176"}
+	unpinned := meta.Machine{Name: "fresh", Project: "wordpress", Running: true, PrivateIP: "10.123.0.177"}
 
 	cases := []struct {
 		name    string
+		ref     string
 		result  authapp.ResourceListResult
 		err     error
 		scan    []hostkeys.Key
 		scanErr error
+		want    connectCacheMissReason
 	}{
-		{name: "cache error", err: errors.New("boom"), scan: []hostkeys.Key{key}},
-		{name: "machine missing", result: authapp.ResourceListResult{Tenant: summary}, scan: []hostkeys.Key{key}},
+		{name: "glob", ref: "wordpress:d*", want: missReferenceNeedsLive},
+		{name: "token rejected", err: &authapp.ResourceListError{StatusCode: http.StatusUnauthorized, Message: "user not found"}, want: missTokenRejected},
+		{name: "token forbidden", err: &authapp.ResourceListError{StatusCode: http.StatusForbidden, Message: "no"}, want: missTokenRejected},
+		{name: "auth app timeout", err: fmt.Errorf("Get \"https://auth\": %w", context.DeadlineExceeded), want: missAuthAppTimeout},
+		{name: "cache not ready", err: &authapp.ResourceListError{StatusCode: http.StatusServiceUnavailable, Message: "resource cache not ready"}, want: missCacheUnavailable},
+		{name: "network error", err: errors.New("connection refused"), want: missCacheUnavailable},
+		{name: "machine missing", result: authapp.ResourceListResult{Tenant: summary}, want: missMachineNotCached},
 		{name: "machine stopped", result: authapp.ResourceListResult{Tenant: summary,
-			Machines: []meta.Machine{{Name: "dev", Project: "wordpress", Running: false}}}, scan: []hostkeys.Key{key}},
+			Machines: []meta.Machine{{Name: "dev", Project: "wordpress", Running: false}}}, want: missMachineNotRunning},
 		{name: "machine bare", result: authapp.ResourceListResult{Tenant: summary,
-			Machines: []meta.Machine{{Name: "dev", Project: "wordpress", Running: true, PrivateIP: "10.123.0.176", Bare: true}}}, scan: []hostkeys.Key{key}},
+			Machines: []meta.Machine{{Name: "dev", Project: "wordpress", Running: true, PrivateIP: "10.123.0.176", Bare: true}}}, want: missMachineBare},
 		{name: "no suffix", result: authapp.ResourceListResult{Tenant: tenant.Summary{Tenant: "thieso2"},
-			Machines: []meta.Machine{running}}, scan: []hostkeys.Key{key}},
+			Machines: []meta.Machine{running}}, want: missNoDNSSuffix},
+		{name: "no recorded host key", ref: "wordpress:fresh", result: authapp.ResourceListResult{Tenant: summary,
+			Machines: []meta.Machine{unpinned}}, scan: []hostkeys.Key{key}, want: missNoRecordedHostKey},
 		{name: "keyscan fails", result: authapp.ResourceListResult{Tenant: summary,
-			Machines: []meta.Machine{running}}, scanErr: errors.New("connection refused")},
+			Machines: []meta.Machine{running}}, scanErr: errors.New("connection refused"), want: missSSHUnreachable},
 		{name: "key mismatch (rebuilt)", result: authapp.ResourceListResult{Tenant: summary,
-			Machines: []meta.Machine{running}}, scan: []hostkeys.Key{{Type: "ssh-ed25519", Key: "AAAAC3Rebuilt"}}},
+			Machines: []meta.Machine{running}}, scan: []hostkeys.Key{{Type: "ssh-ed25519", Key: "AAAAC3Rebuilt"}}, want: missHostKeyChanged},
 	}
 	for _, c := range cases {
 		stubConnectCacheKeyscan(t, c.scan, c.scanErr)
 		fake := &fakeResourceClient{result: c.result, err: c.err}
 		config := commandConfig{adminConfig: scconfig.Admin{Tenant: "thieso2"}, authResources: fake}
-		if _, ok := dialV2MachineViaCache(context.Background(), config, "wordpress:dev"); ok {
+		ref := c.ref
+		if ref == "" {
+			ref = "wordpress:dev"
+		}
+		_, miss, ok := dialV2MachineViaCache(context.Background(), config, ref)
+		if ok {
 			t.Fatalf("%s: expected fallback to the live path", c.name)
+		}
+		if miss.reason != c.want {
+			t.Fatalf("%s: reason = %d (%s), want %d", c.name, miss.reason, miss.detail(), c.want)
 		}
 	}
 }
@@ -152,12 +173,126 @@ func TestDialV2MachineViaCacheFallsBack(t *testing.T) {
 func TestConnectCacheEnvDisables(t *testing.T) {
 	t.Setenv(connectCacheEnv, "0")
 	fake := &fakeResourceClient{}
-	config := commandConfig{adminConfig: scconfig.Admin{Tenant: "thieso2"}, authResources: fake}
-	if _, ok := dialV2MachineViaCache(context.Background(), config, "wordpress:dev"); ok {
+	var stderr bytes.Buffer
+	config := commandConfig{adminConfig: scconfig.Admin{Tenant: "thieso2"}, authResources: fake, stderr: &stderr}
+	_, miss, ok := dialV2MachineViaCache(context.Background(), config, "wordpress:dev")
+	if ok {
 		t.Fatal("disabled cache must fall back")
 	}
 	if fake.calls != 0 {
 		t.Fatalf("disabled cache must not call the auth-app (calls=%d)", fake.calls)
+	}
+	warnSlowConnect(config, miss)
+	if stderr.Len() != 0 {
+		t.Fatalf("a cache the user disabled must not warn, got %q", stderr.String())
+	}
+}
+
+func TestSlowConnectWarningForARejectedTokenNamesTheLogin(t *testing.T) {
+	t.Setenv("SANDCASTLE_AUTH_HOSTNAME", "https://obelix.example.dev")
+	t.Setenv("VERBOSE", "")
+	fake := &fakeResourceClient{err: &authapp.ResourceListError{StatusCode: http.StatusUnauthorized, Message: "invalid or expired CLI token"}}
+	var stderr bytes.Buffer
+	config := commandConfig{adminConfig: scconfig.Admin{Tenant: "thieso2"}, authResources: fake, stderr: &stderr}
+
+	_, miss, _ := dialV2MachineViaCache(context.Background(), config, "wordpress:dev")
+	warnSlowConnect(config, miss)
+
+	want := "sc: slow connect (obelix.example.dev rejected the stored login token); run: sc login obelix.example.dev\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q\nwant     %q", stderr.String(), want)
+	}
+	if !miss.authAppUnusable() {
+		t.Fatal("a rejected token makes the Auth App unusable for the rest of the command")
+	}
+}
+
+func TestSlowConnectWarningIsOneLineForEveryReason(t *testing.T) {
+	for reason := missReferenceNeedsLive; reason <= missNoLoginKey; reason++ {
+		var stderr bytes.Buffer
+		warnSlowConnect(commandConfig{stderr: &stderr}, connectCacheMiss{reason: reason, subject: "subject", cause: errors.New("multi\nline cause")})
+		got := stderr.String()
+		if !strings.HasPrefix(got, "sc: slow connect (") || strings.Count(got, "\n") != 1 {
+			t.Fatalf("reason %d warned %q, want exactly one \"sc: slow connect (...)\" line", reason, got)
+		}
+		if strings.Contains(got, "(); ") || strings.HasSuffix(got, "; \n") {
+			t.Fatalf("reason %d has no explanation or no hint: %q", reason, got)
+		}
+	}
+}
+
+func TestSlowConnectWarningsPromiseWhatTheLivePathDoes(t *testing.T) {
+	cases := map[connectCacheMissReason]string{
+		missAuthAppTimeout:    "did not answer within 2s",
+		missNoRecordedHostKey: "this connect pins it, the next one is fast",
+		missMachineNotRunning: "it is started first",
+		missMachineNotCached:  "created if it does not exist",
+	}
+	for reason, want := range cases {
+		why, hint := connectCacheMiss{reason: reason, subject: "subject"}.explain()
+		if text := why + "; " + hint; !strings.Contains(text, want) {
+			t.Fatalf("reason %d explains %q, want it to contain %q", reason, text, want)
+		}
+	}
+}
+
+func TestConnectCacheTimeoutIsShorterThanTheListingsAndSharesItsOverride(t *testing.T) {
+	t.Setenv(resourceCacheTimeoutEnv, "")
+	if got := connectCacheRequestTimeout(); got != 2*time.Second {
+		t.Fatalf("connect default = %s, want 2s", got)
+	}
+	if got := resourceCacheRequestTimeout(); got != 5*time.Second {
+		t.Fatalf("sc ls default = %s, want 5s (unchanged)", got)
+	}
+	t.Setenv(resourceCacheTimeoutEnv, "750ms")
+	if connectCacheRequestTimeout() != 750*time.Millisecond || resourceCacheRequestTimeout() != 750*time.Millisecond {
+		t.Fatalf("override not honoured: connect %s, ls %s", connectCacheRequestTimeout(), resourceCacheRequestTimeout())
+	}
+}
+
+func TestLiveTenantStoreDropsOnlyTheCacheLayer(t *testing.T) {
+	live := tenant.MemoryStore{}
+	wrapped := cachedTenantStore{live: live, client: &fakeResourceClient{}}
+	if _, ok := liveTenantStore(wrapped).(tenant.MemoryStore); !ok {
+		t.Fatal("the cache layer must be unwrapped to the live store")
+	}
+	if _, ok := liveTenantStore(live).(tenant.MemoryStore); !ok {
+		t.Fatal("a store without a cache layer is returned as it is")
+	}
+}
+
+func TestPinnedAddressProbe(t *testing.T) {
+	key := hostkeys.Key{Type: "ssh-ed25519", Key: "AAAAC3TestKey"}
+	rebuilt := hostkeys.Key{Type: "ssh-ed25519", Key: "AAAAC3Rebuilt"}
+	private := []netip.Addr{netip.MustParseAddr("10.123.0.176")}
+
+	cases := []struct {
+		name       string
+		recorded   []hostkeys.Key
+		addrs      []netip.Addr
+		lookupErr  error
+		scan       []hostkeys.Key
+		scanErr    error
+		wantIP     string
+		wantPinned bool
+	}{
+		{name: "pinned key served", recorded: []hostkeys.Key{key}, addrs: private, scan: []hostkeys.Key{key}, wantIP: "10.123.0.176", wantPinned: true},
+		{name: "nothing recorded", addrs: private, scan: []hostkeys.Key{key}},
+		{name: "rebuilt machine", recorded: []hostkeys.Key{key}, addrs: private, scan: []hostkeys.Key{rebuilt}, wantIP: "10.123.0.176"},
+		{name: "sshd down", recorded: []hostkeys.Key{key}, addrs: private, scanErr: errors.New("connection refused"), wantIP: "10.123.0.176"},
+		{name: "name does not resolve", recorded: []hostkeys.Key{key}, lookupErr: errors.New("no such host"), scan: []hostkeys.Key{key}},
+		{name: "name resolves to a public address", recorded: []hostkeys.Key{key}, addrs: []netip.Addr{netip.MustParseAddr("203.0.113.9")}, scan: []hostkeys.Key{key}},
+	}
+	for _, c := range cases {
+		stubConnectCacheKeyscan(t, c.scan, c.scanErr)
+		original := connectLookupIPv4
+		connectLookupIPv4 = func(context.Context, string) ([]netip.Addr, error) { return c.addrs, c.lookupErr }
+		probe := startPinnedAddressProbe(context.Background(), c.recorded, "dev.wordpress.obelix")
+		ip, pinned := probe.result()
+		connectLookupIPv4 = original
+		if ip != c.wantIP || pinned != c.wantPinned {
+			t.Fatalf("%s: probe = (%q, %v), want (%q, %v)", c.name, ip, pinned, c.wantIP, c.wantPinned)
+		}
 	}
 }
 

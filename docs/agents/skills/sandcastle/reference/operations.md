@@ -55,10 +55,26 @@ restart.
 
 `sc connect` resolves cache-first: when the machine is cached as running with an
 address and `known_hosts` already pins its host key, it is one auth-app request
-plus one keyscan. Anything short of certainty falls back to the full live dial —
-first connect, stopped or absent machine, bare machine, globbed reference, or a
-host key that disagrees with `known_hosts`. `SANDCASTLE_CONNECT_CACHE=0` forces
-the live path.
+plus one keyscan. Anything short of certainty falls back to the live dial —
+first connect, stopped or absent machine, bare machine, globbed reference, a
+rejected login token, or a host key that disagrees with `known_hosts`.
+
+A fallback prints one stderr line, with or without `VERBOSE=1`:
+
+```
+sc: slow connect (<auth-host> rejected the stored login token); run: sc login <auth-host>
+```
+
+The text in parentheses is the reason and the rest is what to do or expect.
+"rejected the stored login token" means the CLI token expired, so run
+`sc login <auth-host>`. "did not answer within 2s" means the Auth App is slow.
+"no recorded host key" is a first connect, and the next one is fast.
+
+The live dial is short for a running machine whose host key `known_hosts`
+already pins: one instance read and one profile read, then ssh. It skips the
+instance-state read, the cloud-init wait and the host-key file reads. A first
+connect, a rebuilt machine and a machine connect had to start take the full
+dial. `SANDCASTLE_CONNECT_CACHE=0` forces the live path and prints no warning.
 
 `sc fix` applies idempotent maintenance fixups over SSH to a running machine —
 changes that shipped in cloud-init after the machine was built and so never
@@ -349,9 +365,11 @@ keep a `.bak`; a root-owned install directory needs the update run as root.
 `sc` commands read the tenant's projects, machines and payload versions from
 the Auth App's event-fed resource cache (one request) and fall back to live
 Incus on any non-answer. `VERBOSE=1` prints `tenant store: cache unavailable
-…` / `connect cache: falling back …` when that happens; a persistent
-fallback means the appliance is older than the CLI or its cache is off
-(`SANDCASTLE_RESOURCE_CACHE`). `SANDCASTLE_CONNECT_CACHE=0` forces live.
+…` / `connect cache: falling back …` when that happens, and `sc connect`
+prints its `sc: slow connect (…)` line without it. A persistent fallback means
+the stored login token expired (run `sc login <auth-host>`), the appliance is
+older than the CLI, or its cache is off (`SANDCASTLE_RESOURCE_CACHE`).
+`SANDCASTLE_CONNECT_CACHE=0` forces live.
 
 ## Login and enrollment
 

@@ -55,6 +55,10 @@ ping -c1 <machine-ip>
 - **Suspect the connect cache** — `SANDCASTLE_CONNECT_CACHE=0 sc c <m>` forces
   the live path. A rebuilt machine always takes the live path anyway, because its
   host key no longer matches what `known_hosts` pins.
+- **`sc: slow connect (…)` on every connect** — the line names the reason.
+  "rejected the stored login token" is an expired CLI token (they last 90
+  days), fixed by `sc login <auth-host>`. "did not answer within 2s" is a slow
+  Auth App. The connect itself still works over the Incus API.
 
 ## `REMOTE HOST IDENTIFICATION HAS CHANGED`
 

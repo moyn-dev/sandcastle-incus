@@ -116,7 +116,7 @@ func settledHostKeys(ctx context.Context, config commandConfig, incusProject str
 		}
 		disagreement := hostKeyDisagreement(keys, scanned)
 		if disagreement == "" {
-			return keys, false, nil
+			return servedHostKeys(keys, scanned), false, nil
 		}
 		if !time.Now().Before(deadline) {
 			if config.stderr != nil {
@@ -159,6 +159,28 @@ func hostKeyDisagreement(authoritative []hostkeys.Key, scanned []hostkeys.Key) s
 		}
 	}
 	return ""
+}
+
+// servedHostKeys narrows the authoritative keys to the ones sshd offers. An
+// image ships a key file per type, but sshd may be configured to serve only
+// some of them. Recording a key sshd never presents is churn: OpenSSH's
+// UpdateHostKeys deletes it again after the next login, and the following
+// connect would add it back.
+func servedHostKeys(authoritative []hostkeys.Key, scanned []hostkeys.Key) []hostkeys.Key {
+	offered := make(map[hostkeys.Key]bool, len(scanned))
+	for _, key := range scanned {
+		offered[key] = true
+	}
+	var served []hostkeys.Key
+	for _, key := range authoritative {
+		if offered[key] {
+			served = append(served, key)
+		}
+	}
+	if len(served) == 0 {
+		return authoritative
+	}
+	return served
 }
 
 // waitForCloudInitV2 blocks until cloud-init has finished its run for this boot,

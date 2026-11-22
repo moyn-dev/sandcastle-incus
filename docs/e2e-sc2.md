@@ -556,16 +556,48 @@ VERBOSE=1 sc c <project>:<machine> -- true 2>&1 | grep 'connect cache'
 #       lines, ssh opens with StrictHostKeyChecking=yes, and the session is
 #       noticeably faster than the live path.
 # PASS (miss): a "[verbose] connect cache: falling back to live resolution
-#       (<reason>)" line and the familiar live trace — behavior identical to
-#       pre-cache connect. Misses are anything short of certainty: first
-#       connect to a machine (no pinned host key yet), machine stopped or
-#       absent (connect must create/start it), bare machines, globbed/dotted/
-#       remote-prefixed references, cache unreachable, or the host key on
-#       port 22 disagreeing with known_hosts (a REBUILT machine must take the
-#       live path so its key gets re-read authoritatively and repaired —
-#       the cache path must never pin around a changed identity).
+#       (<reason>)" line and the live trace. Misses are anything short of
+#       certainty: first connect to a machine (no pinned host key yet),
+#       machine stopped or absent (connect must create/start it), bare
+#       machines, globbed/dotted/remote-prefixed references, cache
+#       unreachable, login token rejected, or the host key on port 22
+#       disagreeing with known_hosts (a REBUILT machine must take the live
+#       path so its key gets re-read authoritatively and repaired — the cache
+#       path must never pin around a changed identity).
 # Client-side kill switch: SANDCASTLE_CONNECT_CACHE=0 forces the live path.
 # `sc fix` always resolves live — it exists to repair, not to be fast.
+
+# 2d-iii. a miss is announced, and the live path is short for a pinned machine
+# Every miss prints ONE stderr line without VERBOSE=1.
+SANDCASTLE_AUTH_TOKEN=not-a-token sc c <project>:<machine> -- true
+# PASS: stderr has exactly one line
+#       "sc: slow connect (<auth-host> rejected the stored login token); run: sc login <auth-host>"
+#       and the session still opens.
+SANDCASTLE_CONNECT_CACHE=0 sc c <project>:<machine> -- true
+# PASS: no "sc: slow connect" line (the user turned the cache off).
+# Other reasons name what to expect: "did not answer within 2s" (the connect
+# budget; SANDCASTLE_LS_CACHE_TIMEOUT overrides it), "no recorded host key
+# for <name>; this connect pins it, the next one is fast", "machine <m> is
+# not running; it is started first".
+#
+# With the machine running and its host key already in known_hosts:
+SANDCASTLE_CONNECT_CACHE=0 VERBOSE=1 sc c <project>:<machine> -- true
+# PASS: a "[verbose] host key: <name> presents the pinned key at <ip>;
+#       skipping the cloud-init wait and the authoritative read" line. The
+#       trace shows ONE "GET /1.0/instances/<machine>" and one
+#       "GET /1.0/profiles/default", NO ".../state" request while the Machine
+#       Private Hostname resolves locally, NO ".../files" requests, and NO
+#       "known_hosts:" line. ssh opens with StrictHostKeyChecking=yes.
+# After removing the machine's line from ~/.ssh/known_hosts (or on a rebuilt
+# or just-started machine), the same command takes the full path:
+# PASS: one ".../state" request, the cloud-init and host-key ".../files"
+#       reads, and "known_hosts: add" lines ONLY for key types
+#       `ssh-keyscan <ip>` reports. Running it again prints no
+#       "known_hosts: add" line.
+# An unknown or expired CLI token is answered 401 with the body
+# "invalid or expired CLI token":
+curl -s -o /dev/stderr -w '%{http_code}\n' -H 'Authorization: Bearer nope' "https://<auth-host>/api/resources?tenant=<tenant>"
+# PASS: prints "invalid or expired CLI token" and 401.
 
 # The request must ask only for what it will print — a plain `sc ls` that
 # ships four unrendered resource types is what pushed a real install's

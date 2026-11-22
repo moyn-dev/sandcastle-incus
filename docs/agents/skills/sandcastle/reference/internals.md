@@ -97,7 +97,7 @@ anywhere.
 | `SANDCASTLE_ADMIN_REMOTE` | Incus remote for admin commands |
 | `VERBOSE=1` | print `[verbose]` diagnostics on stderr, including which resolution path was used and the exact `ssh` command line (`[verbose] ssh command: …`) `sc connect`/`sc fix` run |
 | `SANDCASTLE_CONNECT_CACHE=0` | force `sc connect` onto the live path |
-| `SANDCASTLE_LS_CACHE_TIMEOUT` | budget for the `sc ls` cache request (default 5s) |
+| `SANDCASTLE_LS_CACHE_TIMEOUT` | budget for the resource-cache request (default 5s for `sc ls`, 2s for `sc connect`) |
 | `SANDCASTLE_NO_UPDATE_NOTIFIER=1` | silence release and skew notices |
 | `INCUS_CONF` | the Incus config dir; `sc` points it at the install's restricted certs, `sc-adm` leaves it at the admin dir |
 

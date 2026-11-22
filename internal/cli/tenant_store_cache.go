@@ -43,6 +43,13 @@ func newCachedTenantStore(config commandConfig, live tenant.IncusTenantStore) te
 	return cachedTenantStore{live: live, client: client, tenant: tenantName, log: func(format string, args ...any) { verboseCLI(config, format, args...) }}
 }
 
+func liveTenantStore(store tenant.IncusTenantStore) tenant.IncusTenantStore {
+	if cached, ok := store.(cachedTenantStore); ok {
+		return cached.live
+	}
+	return store
+}
+
 func (s cachedTenantStore) ListProjects(ctx context.Context) ([]tenant.IncusProject, error) {
 	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
 	defer cancel()

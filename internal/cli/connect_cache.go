@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -44,26 +47,32 @@ var connectCacheKeyscan = hostkeys.Keyscan
 // The keyscan doubles as the sshd reachability probe: a machine the cache
 // wrongly believes is up fails it and falls back to the live path, which
 // starts it.
-func dialV2MachineViaCache(ctx context.Context, config commandConfig, reference string) (dialedV2Machine, bool) {
+func dialV2MachineViaCache(ctx context.Context, config commandConfig, reference string) (dialedV2Machine, connectCacheMiss, bool) {
+	miss := func(reason connectCacheMissReason, subject string, cause error) (dialedV2Machine, connectCacheMiss, bool) {
+		missed := connectCacheMiss{reason: reason, subject: subject, cause: cause}
+		if reason != missCacheDisabled {
+			verboseCLI(config, "connect cache: falling back to live resolution (%s)", missed.detail())
+		}
+		return dialedV2Machine{}, missed, false
+	}
 	if !connectCacheEnabled(os.Getenv(connectCacheEnv)) {
-		return dialedV2Machine{}, false
+		return miss(missCacheDisabled, "", nil)
 	}
 	project, machineName, ok := cacheableConnectReference(config, reference)
 	if !ok {
-		logConnectCacheFallback(config, "reference needs live resolution")
-		return dialedV2Machine{}, false
+		return miss(missReferenceNeedsLive, reference, nil)
 	}
+	baseURL := commandAuthHostname(config, "")
+	authHost := strings.TrimPrefix(baseURL, "https://")
 	client := config.authResources
 	if client == nil {
 		token := strings.TrimSpace(config.adminConfig.AuthToken)
-		baseURL := commandAuthHostname(config, "")
 		if token == "" || baseURL == "" {
-			logConnectCacheFallback(config, "no stored AuthToken/Auth Hostname")
-			return dialedV2Machine{}, false
+			return miss(missNotLoggedIn, authHost, nil)
 		}
 		client = authapp.DeviceClient{BaseURL: baseURL, AuthToken: token, Tenant: strings.TrimSpace(config.adminConfig.Tenant)}
 	}
-	cacheCtx, cancel := context.WithTimeout(ctx, resourceCacheRequestTimeout())
+	cacheCtx, cancel := context.WithTimeout(ctx, connectCacheRequestTimeout())
 	defer cancel()
 	result, err := client.ListResources(cacheCtx, authapp.ResourceListRequest{
 		Tenant:  strings.TrimSpace(config.adminConfig.Tenant),
@@ -72,67 +81,172 @@ func dialV2MachineViaCache(ctx context.Context, config commandConfig, reference 
 		Include: []string{authapp.ResourceKindMachines, authapp.ResourceKindProfiles},
 	})
 	if err != nil {
-		logConnectCacheFallback(config, err.Error())
-		return dialedV2Machine{}, false
+		return miss(resourceCacheErrorReason(err), authHost, err)
 	}
 	cached, found := cachedConnectMachine(result.Machines, project, machineName)
 	switch {
 	case !found:
-		logConnectCacheFallback(config, "machine not in cache")
-		return dialedV2Machine{}, false
+		return miss(missMachineNotCached, machineName, nil)
 	case cached.Bare:
-		logConnectCacheFallback(config, "machine is bare (exec door is live-path work)")
-		return dialedV2Machine{}, false
+		return miss(missMachineBare, machineName, nil)
 	case !cached.Running || strings.TrimSpace(cached.PrivateIP) == "":
-		logConnectCacheFallback(config, "machine not cached as running with an address")
-		return dialedV2Machine{}, false
+		return miss(missMachineNotRunning, machineName, nil)
 	}
 	summary := result.Tenant
 	names := v2MachineNames(summary, project, machineName, cached.PublicNames())
 	if len(names) == 0 {
-		logConnectCacheFallback(config, "cached tenant summary has no DNS suffix")
-		return dialedV2Machine{}, false
-	}
-	keysConfig := hostKeysConfig(config, summary, "")
-	recorded := keysConfig.Recorded(names[0])
-	if len(recorded) == 0 {
-		logConnectCacheFallback(config, "no recorded host key for "+names[0])
-		return dialedV2Machine{}, false
+		return miss(missNoDNSSuffix, summary.Tenant, nil)
 	}
 	// One round trip to the machine itself: proves sshd is up AND that the
 	// pinned identity is the one it presents. A rebuilt machine mismatches here
 	// and takes the live path, which repairs known_hosts authoritatively.
-	scanned, err := connectCacheKeyscan(ctx, cached.PrivateIP)
-	if err != nil {
-		logConnectCacheFallback(config, "keyscan "+cached.PrivateIP+": "+err.Error())
-		return dialedV2Machine{}, false
-	}
-	if !recordedKeyMatchesScan(recorded, scanned) {
-		logConnectCacheFallback(config, "host key on port 22 does not match known_hosts (machine rebuilt?)")
-		return dialedV2Machine{}, false
+	switch pin, err := checkHostKeyPin(ctx, hostKeysConfig(config, summary, "").Recorded(names[0]), cached.PrivateIP); pin {
+	case pinNotRecorded:
+		return miss(missNoRecordedHostKey, names[0], nil)
+	case pinUnreachable:
+		return miss(missSSHUnreachable, cached.PrivateIP, err)
+	case pinChanged:
+		return miss(missHostKeyChanged, names[0], nil)
 	}
 	loginUser := cachedConnectLoginUser(summary, result.Profiles)
 	sshKey, err := prepareLoginSSHKey(loginSSHKeyRequest{})
 	if err != nil {
-		logConnectCacheFallback(config, err.Error())
-		return dialedV2Machine{}, false
+		return miss(missNoLoginKey, "", err)
 	}
 	verboseCLI(config, "connect cache: hit — %s/%s at %s (skipping live Incus resolution)", project, machineName, cached.PrivateIP)
-	privateKeyPath := strings.TrimSuffix(sshKey.PublicKeyPath, ".pub")
-	sshArgs := []string{
-		"-o", "IdentitiesOnly=yes", "-i", privateKeyPath,
-		"-o", "HostKeyAlias=" + names[0],
-		"-o", "StrictHostKeyChecking=yes",
-		"-o", "CheckHostIP=no",
-		loginUser + "@" + cached.PrivateIP,
-	}
 	return dialedV2Machine{
-		sshArgs:   sshArgs,
+		sshArgs:   pinnedSSHArgs(sshKey.PublicKeyPath, names[0], loginUser, cached.PrivateIP),
 		loginUser: loginUser,
 		privateIP: cached.PrivateIP,
 		project:   project,
 		machine:   machineName,
-	}, true
+	}, connectCacheMiss{}, true
+}
+
+type connectCacheMissReason int
+
+const (
+	missCacheDisabled connectCacheMissReason = iota
+	missReferenceNeedsLive
+	missNotLoggedIn
+	missTokenRejected
+	missAuthAppTimeout
+	missCacheUnavailable
+	missMachineNotCached
+	missMachineNotRunning
+	missMachineBare
+	missNoDNSSuffix
+	missNoRecordedHostKey
+	missSSHUnreachable
+	missHostKeyChanged
+	missNoLoginKey
+)
+
+type connectCacheMiss struct {
+	reason  connectCacheMissReason
+	subject string
+	cause   error
+}
+
+func (m connectCacheMiss) explain() (why string, hint string) {
+	switch m.reason {
+	case missReferenceNeedsLive:
+		return fmt.Sprintf("reference %q needs live resolution", m.subject), "name one machine as project:machine for the fast path"
+	case missNotLoggedIn:
+		return "no Auth App login is stored for this remote", "run: sc login " + firstNonEmptyString(m.subject, "<auth-host>")
+	case missTokenRejected:
+		return m.subject + " rejected the stored login token", "run: sc login " + m.subject
+	case missAuthAppTimeout:
+		return fmt.Sprintf("%s did not answer within %s", m.subject, connectCacheRequestTimeout()),
+			"the Auth App is slow or unreachable; " + resourceCacheTimeoutEnv + " sets how long sc waits for it"
+	case missCacheUnavailable:
+		return "the resource cache at " + m.subject + " is unavailable", "connecting over the Incus API instead"
+	case missMachineNotCached:
+		return "machine " + m.subject + " is not in the resource cache", "it is looked up live, and created if it does not exist"
+	case missMachineNotRunning:
+		return "machine " + m.subject + " is not running", "it is started first"
+	case missMachineBare:
+		return "machine " + m.subject + " is bare", "a bare machine has no sshd and is always reached over the Incus API"
+	case missNoDNSSuffix:
+		return "the resource cache knows no DNS suffix for tenant " + m.subject, "connecting over the Incus API instead"
+	case missNoRecordedHostKey:
+		return "no recorded host key for " + m.subject, "this connect pins it, the next one is fast"
+	case missSSHUnreachable:
+		return "sshd at " + m.subject + " did not answer a key scan", "checking the machine over the Incus API"
+	case missHostKeyChanged:
+		return "the host key of " + m.subject + " does not match known_hosts", "the machine was probably rebuilt; its keys are re-read over the Incus API"
+	case missNoLoginKey:
+		return "the login SSH key is not usable", "the live path reports the details"
+	}
+	return "", ""
+}
+
+func (m connectCacheMiss) detail() string {
+	why, _ := m.explain()
+	if m.cause != nil {
+		return why + ": " + m.cause.Error()
+	}
+	return why
+}
+
+func (m connectCacheMiss) authAppUnusable() bool {
+	switch m.reason {
+	case missTokenRejected, missAuthAppTimeout, missCacheUnavailable:
+		return true
+	}
+	return false
+}
+
+func resourceCacheErrorReason(err error) connectCacheMissReason {
+	var listErr *authapp.ResourceListError
+	switch {
+	case errors.As(err, &listErr) && (listErr.StatusCode == http.StatusUnauthorized || listErr.StatusCode == http.StatusForbidden):
+		return missTokenRejected
+	case errors.Is(err, context.DeadlineExceeded):
+		return missAuthAppTimeout
+	}
+	return missCacheUnavailable
+}
+
+func warnSlowConnect(config commandConfig, miss connectCacheMiss) {
+	why, hint := miss.explain()
+	if why == "" || config.stderr == nil {
+		return
+	}
+	fmt.Fprintf(config.stderr, "sc: slow connect (%s); %s\n", why, hint)
+}
+
+type hostKeyPin int
+
+const (
+	pinConfirmed hostKeyPin = iota
+	pinNotRecorded
+	pinUnreachable
+	pinChanged
+)
+
+func checkHostKeyPin(ctx context.Context, recorded []hostkeys.Key, ip string) (hostKeyPin, error) {
+	if len(recorded) == 0 {
+		return pinNotRecorded, nil
+	}
+	scanned, err := connectCacheKeyscan(ctx, ip)
+	if err != nil {
+		return pinUnreachable, err
+	}
+	if !recordedKeyMatchesScan(recorded, scanned) {
+		return pinChanged, nil
+	}
+	return pinConfirmed, nil
+}
+
+func pinnedSSHArgs(publicKeyPath string, alias string, loginUser string, ip string) []string {
+	return []string{
+		"-o", "IdentitiesOnly=yes", "-i", strings.TrimSuffix(publicKeyPath, ".pub"),
+		"-o", "HostKeyAlias=" + alias,
+		"-o", "StrictHostKeyChecking=yes",
+		"-o", "CheckHostIP=no",
+		loginUser + "@" + ip,
+	}
 }
 
 // cacheableConnectReference parses the reference shapes the cache path serves:
@@ -232,8 +346,4 @@ func connectCacheEnabled(value string) bool {
 		return false
 	}
 	return true
-}
-
-func logConnectCacheFallback(config commandConfig, reason string) {
-	verboseCLI(config, "connect cache: falling back to live resolution (%s)", reason)
 }
