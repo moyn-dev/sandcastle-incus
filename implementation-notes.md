@@ -5,6 +5,24 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-11-23 — kitchen.toml becomes kitchen-setup.toml; the e2e reads ~/.kitchen-setup/env
+
+moyn-dev/kitchen-setup#50 renames the repo's file to `kitchen-setup.toml` and
+drops #47's secrets mapping; the stack #44/#42/#45/#46 (deployed) reads the
+secrets from the vault `kitchen` and writes them to `~/.kitchen-setup/env`,
+outside the clone, not to `[env] file`. So: the file is renamed, and
+`scripts/e2e.sh` reads `~/.kitchen-setup/env` when neither
+`SANDCASTLE_E2E_ENV_FILE` nor `.env.sc2` is there. Alternatives: a symlink
+`.env.sc2 -> ~/.kitchen-setup/env` from `scripts/kitchen-setup.sh`, turned down
+because #47's launch, still on kitchen-setup's `main`, writes `.env.sc2` and
+would write through the link over the box's own secrets; or setting
+`SANDCASTLE_E2E_ENV_FILE`, which nothing on a box would persist. `[env] file`
+stays: #50's `box/kitchen.py` refuses `[secrets]` without it, and the stack's
+`bin/grants.py` ignores it. Remove it when kitchen-setup's one reader stops
+asking for it. `[setup] run` stays too, until kitchen-setup picks between it
+and a mise task `setup` (#44). Merge this with kitchen-setup#50: before it, a
+launch reads `kitchen.toml` and would find nothing.
+
 ## 2026-11-23 — kitchen.toml: a kitchen-setup box that can run the e2e
 
 A kitchen-setup box (moyn-dev/kitchen-setup#38) had no Incus, no nesting and

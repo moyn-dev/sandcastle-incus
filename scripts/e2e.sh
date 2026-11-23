@@ -13,7 +13,7 @@ Tiers:
   cleanup   Remove managed disposable e2e projects for SANDCASTLE_E2E_RUN_ID. Requires SANDCASTLE_E2E=1 and an explicit run id.
   pdz       e2e Phase 12 — Public DNS Zones against Let's Encrypt staging (docs/e2e-sc2.md). Reads
             SANDCASTLE_E2E_CLOUDFLARE_TOKEN + SANDCASTLE_E2E_PUBLIC_DNS_ZONE from the environment or
-            .env.sc2; SKIPPED (exit 0) when either is absent or SANDCASTLE_E2E is not 1.
+            .env.sc2 (on a kitchen-setup box: ~/.kitchen-setup/env); SKIPPED (exit 0) when either is absent or SANDCASTLE_E2E is not 1.
   publications  Fresh nested-Incus Machine Tunnel + direct-Machine Tailnet lifecycle. Requires
             SANDCASTLE_E2E_MACHINE_PUBLICATIONS=1 and SANDCASTLE_E2E_SIMULATED_GITHUB=1.
   all       Run unit, gated, incus, images and pdz tiers.
@@ -95,13 +95,29 @@ require_route_broker_env() {
 
 
 
+# The e2e secrets file: SANDCASTLE_E2E_ENV_FILE, else .env.sc2 at the repo root, else, on a kitchen-setup box
+# (moyn-dev/kitchen-setup), ~/.kitchen-setup/env, where the launch writes the secrets kitchen-setup.toml names.
+# A missing file is returned as .env.sc2, for the SKIP message.
+e2e_env_file() {
+  local repo_env
+  repo_env="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.sc2"
+  if [[ -n "${SANDCASTLE_E2E_ENV_FILE:-}" ]]; then
+    printf '%s\n' "$SANDCASTLE_E2E_ENV_FILE"
+  elif [[ ! -f "$repo_env" && -f "$HOME/.kitchen-setup/env" ]]; then
+    printf '%s\n' "$HOME/.kitchen-setup/env"
+  else
+    printf '%s\n' "$repo_env"
+  fi
+}
+
 # Phase 12 (Public DNS Zones, ADR-0027). The two gate variables normally live in
 # .env.sc2 next to the other e2e secrets; the tier sources it so `make e2e-safe`
 # picks the phase up automatically once they are there, and skips — never
 # fails — while they are not. The Go test carries the same gate (t.Skip), so
 # the plain `gated` tier skips it too.
 run_pdz() {
-  local env_file="${SANDCASTLE_E2E_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.sc2}"
+  local env_file
+  env_file=$(e2e_env_file)
   if [[ -f "$env_file" ]]; then
     set -a
     # shellcheck disable=SC1090
@@ -121,7 +137,8 @@ run_pdz() {
 }
 
 run_publications() {
-  local env_file="${SANDCASTLE_E2E_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.sc2}"
+  local env_file
+  env_file=$(e2e_env_file)
   if [[ -f "$env_file" ]]; then
     set -a
     # shellcheck disable=SC1090
