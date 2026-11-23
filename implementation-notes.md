@@ -5,6 +5,26 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-11-23 — kitchen.toml: a kitchen-setup box that can run the e2e
+
+A kitchen-setup box (moyn-dev/kitchen-setup#38) had no Incus, no nesting and
+no e2e credentials. `kitchen.toml` names what the box needs, never a value:
+nesting (required), kvm (optional, for the VM phases), the secrets of
+`.env.e2e.sample` by name, written to `.env.sc2`, and
+`scripts/kitchen-setup.sh`. The values come from the launcher's side, by repo,
+so this public repo names nobody's vault. `TAILSCALE_AUTH_KEY` is required
+because every live phase needs it; the Cloudflare pair is optional, as
+Phase 12 skips without it. The script installs Incus from Zabbly as
+`scripts/setup-workvm.sh` does, not Debian's 6.0, and inits with a preseed
+instead of `--minimal`: a box routes all of 10.0.0.0/8 and 100.64.0.0/10 to
+Sandcastle, and `--minimal` stops with "Failed to automatically find an
+unused IPv4 subnet". incusbr0 is 172.30.0.1/24 (`INCUS_BRIDGE_ADDRESS`).
+The user is added to incus-admin, and a socket ACL covers the shells and T3
+the launch started before that. On a box without security.nesting the first
+`incus launch` fails as in #38 (`Failed to mount "proc"`); without
+`/dev/vsock`, `--vm` is refused, which `kvm` in kitchen.toml asks the
+launch for.
+
 ## 2026-09-22 — A new project always gets a default image
 
 `sc project create claw` left the project without an image, so machines
