@@ -1369,6 +1369,8 @@ sc create tod0s:web --hostname web12.tc42.uk --fqdn shop.tc42.uk</code></pre>
         <tr><td><code>SANDCASTLE_E2E_PUBLIC_DOMAIN</code></td><td>e2e public-routes tier</td><td>Public domain suffix for route broker and Caddy e2e.</td></tr>
         <tr><td><code>SANDCASTLE_E2E_INFRA_HOST</code></td><td>e2e public-routes tier</td><td>Public infrastructure host/IP for e2e.</td></tr>
         <tr><td><code>SANDCASTLE_E2E_LETSENCRYPT_EMAIL</code></td><td>e2e public-routes tier</td><td>Let's Encrypt email for public TLS e2e.</td></tr>
+        <tr><td><code>SANDCASTLE_E2E_ENV_FILE</code></td><td><code>scripts/e2e.sh</code> (<code>pdz</code>, <code>publications</code>)</td><td>The e2e secrets file. Default <code>.env.sc2</code> at the repo root, else, on a kitchen-setup box, <code>~/.kitchen-setup/env</code>.</td></tr>
+        <tr><td><code>INCUS_BRIDGE_ADDRESS</code></td><td><code>mise run setup</code> (<code>scripts/kitchen-setup.sh</code>, kitchen-setup boxes only)</td><td><code>incusbr0</code>'s address, default <code>172.30.0.1/24</code>, outside the box's routes to <code>10.0.0.0/8</code> and <code>100.64.0.0/10</code>.</td></tr>
         <tr><td><code>SANDCASTLE_E2E_LOCAL_VM</code></td><td>local VM e2e</td><td>Set to <code>1</code> to enable VM-only local DNS/trust/hosts e2e tests.</td></tr>
         <tr><td><code>SANDCASTLE_E2E_VM_NAME</code></td><td><code>scripts/e2e-local-vm.sh</code></td><td>Override disposable VM name.</td></tr>
         <tr><td><code>SANDCASTLE_E2E_VM_IMAGE</code></td><td><code>scripts/e2e-local-vm.sh</code></td><td>Override VM image, default Debian cloud image.</td></tr>

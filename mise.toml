@@ -39,6 +39,10 @@ ${ln_cmd} -sf sandcastle "${bindir}/sc"
 echo "Installed ${bindir}/sandcastle and ${bindir}/sc"
 """
 
+[tasks.setup]
+description = "On a kitchen-setup box only: Incus from Zabbly, Tailscale, and incusbr0 off the box's routes, for the e2e (scripts/kitchen-setup.sh)"
+run = "scripts/kitchen-setup.sh"
+
 [tasks."skill:sync"]
 description = "Copy the tracked agent skill (docs/agents/skills/sandcastle) into the embedded copy the binary ships (internal/agentskill/sandcastle)"
 run = "make skill-sync"

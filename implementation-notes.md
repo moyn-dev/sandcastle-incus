@@ -16,16 +16,18 @@ outside the clone, not to `[env] file`. So: the file is renamed, and
 `.env.sc2 -> ~/.kitchen-setup/env` from `scripts/kitchen-setup.sh`, turned down
 because #47's launch, still on kitchen-setup's `main`, writes `.env.sc2` and
 would write through the link over the box's own secrets; or setting
-`SANDCASTLE_E2E_ENV_FILE`, which nothing on a box would persist. `[env] file`
-stays: #50's `box/kitchen.py` refuses `[secrets]` without it, and the stack's
-`bin/grants.py` ignores it. Remove it when kitchen-setup's one reader stops
-asking for it. `[setup] run` stays too, until kitchen-setup picks between it
-and a mise task `setup` (#44). `TAILSCALE_AUTH_KEY` is now optional: in the
+`SANDCASTLE_E2E_ENV_FILE`, which nothing on a box would persist. Then kitchen-setup decided (2026-11-23): the stack moves onto #50,
+`box/kitchen.py` is the one reader, and it refuses `[env]` and `[setup] run`
+for `~/.kitchen-setup/env` and the mise task `setup`. So the file drops both,
+and `mise.toml` gets a task `setup` that runs `scripts/kitchen-setup.sh`. The
+script now refuses to run without `~/.kitchen-setup`: `setup` is a generic
+task name, and the script installs packages and inits Incus with sudo, which
+must not happen on a laptop that runs `mise run setup` by habit. `TAILSCALE_AUTH_KEY` is now optional: in the
 vault stack a required secret that is not granted stops the launch, so every
 box for this repo, most of them for work that never runs the e2e, waited on
 a grant (kitchen-setup#49). The live phases fail without the key anyway.
-Merge this with kitchen-setup#50: before it, a
-launch reads `kitchen.toml` and would find nothing.
+Merge this together with kitchen-setup's stack (#50, #44, #42, #45, #46):
+#50 alone still reads `[env]` and `[setup] run`.
 
 ## 2026-11-23 — kitchen.toml: a kitchen-setup box that can run the e2e
 
