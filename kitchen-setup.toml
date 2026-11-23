@@ -16,8 +16,8 @@ file = ".env.sc2"      # kitchen-setup#50 refuses [secrets] without it. The vaul
                        # ~/.kitchen-setup/env instead, which scripts/e2e.sh reads when .env.sc2 is absent
 
 [secrets.TAILSCALE_AUTH_KEY]
-description = "REUSABLE, pre-authorized Tailscale auth key allowed to carry tag:sandcastle; the e2e client and the tenant sidecar both join with it"
-required = true
+description = "REUSABLE, pre-authorized Tailscale auth key allowed to carry tag:sandcastle; the e2e client and the tenant sidecar both join with it. Every live e2e phase needs it; a box for other work does not"
+required = false       # a required secret that is not granted stops every launch of this repo (kitchen-setup#49)
 
 [secrets.SANDCASTLE_E2E_CLOUDFLARE_TOKEN]
 description = "Cloudflare API token, Zone:Read + DNS:Edit on the e2e zone only; Phase 12 (pdz) is skipped without it"

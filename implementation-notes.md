@@ -20,7 +20,11 @@ would write through the link over the box's own secrets; or setting
 stays: #50's `box/kitchen.py` refuses `[secrets]` without it, and the stack's
 `bin/grants.py` ignores it. Remove it when kitchen-setup's one reader stops
 asking for it. `[setup] run` stays too, until kitchen-setup picks between it
-and a mise task `setup` (#44). Merge this with kitchen-setup#50: before it, a
+and a mise task `setup` (#44). `TAILSCALE_AUTH_KEY` is now optional: in the
+vault stack a required secret that is not granted stops the launch, so every
+box for this repo, most of them for work that never runs the e2e, waited on
+a grant (kitchen-setup#49). The live phases fail without the key anyway.
+Merge this with kitchen-setup#50: before it, a
 launch reads `kitchen.toml` and would find nothing.
 
 ## 2026-11-23 — kitchen.toml: a kitchen-setup box that can run the e2e
