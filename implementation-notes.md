@@ -7499,3 +7499,18 @@ The script tested `[ -r /dev/kvm ] && [ -w /dev/kvm ]` as the box user. In a kit
 (#237). It now checks for `qemu` in `incus info`'s `driver:` line: Incus decides VM support at daemon start, as
 root, so that is the fact the log line claims. Alternatives: `[ -c /dev/kvm ]` (says nothing about whether the
 daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user does not run QEMU here).
+
+## 2026-11-24 — the first e2e run in a kitchen-setup box (#239)
+
+- **`make` in `kitchen-setup.toml`.** The box image has no `make`, and `make build` as well as every
+  `mise run build:*` task runs it. Added to `[setup] apt` rather than rewriting the mise tasks to call `go build`
+  directly: the Makefile stays the one build recipe.
+- **Edge stand-in for `--ingress none`.** The protocol fronts the Auth Hostname with cloudflared; a box has no
+  Cloudflare token. The run used an Incus proxy device on `sc2-auth-app` (server VM `:80` → `127.0.0.1:9444`) and
+  logged in over `http://`. Alternatives: `--ingress acme` (needs public DNS + inbound :80/:443, which a box lacks)
+  or a hand-run Caddy with a self-signed cert (more moving parts, and the client would have to trust it). The doc
+  records the proxy-device recipe as a box variant, not a product change.
+- **Doc drift fixed, not code.** Step 2 used `sc list` for the column table (now `sc ls -l`, names-only by
+  default per ADR-0030), and step 4a expected the ambiguity question from the project that holds one of the two
+  machines, which `resolveV2MachineTarget` deliberately resolves to the current project. Both are documented
+  behaviour, so the doc moved.

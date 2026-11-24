@@ -14,7 +14,11 @@ starts from a clean slate.
 
 ## Prerequisites
 - Run from a host with the **admin** Incus remote: `export INCUS_CONF=~/.config/incus-admin` (remote `big`).
-- **On a kitchen-setup box** (moyn-dev/kitchen-setup): `kitchen-setup.toml` (the name since kitchen-setup#50; a launch reads no `kitchen.toml`) asks the launch for nesting, `/dev/kvm` with vsock, and the e2e secrets by name; the box then runs `mise run setup`, which is `scripts/kitchen-setup.sh` (it refuses to run anywhere but a box) and installs Incus from Zabbly and inits it with incusbr0 on `172.30.0.1/24` (`INCUS_BRIDGE_ADDRESS`), clear of the box's routes to `10.0.0.0/8` and `100.64.0.0/10`. The values come from kitchen-setup's vault (`kitchen-setup grant moyn-dev/sandcastle-incus`) and land in `~/.kitchen-setup/env`, outside the clone: `scripts/e2e.sh` reads that file when `.env.sc2` is absent, and the manual steps source it in place of `./.env.sc2`. `TAILSCALE_AUTH_KEY` is optional there, so a box for other work launches without a grant; every live phase still needs it. The box's Incus is reached over its unix socket as the box user, not through `INCUS_CONF`. 🚧 the phases have not run on a box yet.
+- **On a kitchen-setup box** (moyn-dev/kitchen-setup): `kitchen-setup.toml` (the name since kitchen-setup#50; a launch reads no `kitchen.toml`) asks the launch for nesting, `/dev/kvm` with vsock, and the e2e secrets by name; the box then runs `mise run setup`, which is `scripts/kitchen-setup.sh` (it refuses to run anywhere but a box) and installs Incus from Zabbly and inits it with incusbr0 on `172.30.0.1/24` (`INCUS_BRIDGE_ADDRESS`), clear of the box's routes to `10.0.0.0/8` and `100.64.0.0/10`. The values come from kitchen-setup's vault (`kitchen-setup grant moyn-dev/sandcastle-incus`) and land in `~/.kitchen-setup/env`, outside the clone: `scripts/e2e.sh` reads that file when `.env.sc2` is absent, and the manual steps source it in place of `./.env.sc2`. `TAILSCALE_AUTH_KEY` is optional there, so a box for other work launches without a grant; every live phase still needs it. The box's Incus is reached over its unix socket as the box user, not through `INCUS_CONF`. ⚠️ **First box run (#239, 2026-11-24, no secrets granted):** the `unit`, `gated`, `incus` and `pdz` (clean SKIP) tiers PASS, and the two-VM protocol runs nested in the box's Incus, with these changes:
+  - Launch the VMs one at a time: two parallel `incus launch` of the same uncached image race in the box user's `~/.cache/incus` (`mkdir …: file exists`). `images:debian/13/cloud --vm` boots to `cloud-init status` done in about 30 s; a VM inside the server VM (`sc create vm1 --vm`) in about 50 s.
+  - Give the server VM a bigger root disk (`-d root,size=80GiB`): the default 10 GiB fills up after the appliances, a sidecar and about five machines (`Unable to unpack image, run out of disk space`). Growing it later needs a VM restart; the appliances and machines come back by themselves.
+  - With `--ingress none` the auth-app serves plain HTTP on `:9444` inside the server VM's `sc2-net`. A proxy device stands in for the edge: `incus config device add sc2-auth-app e2eedge proxy listen=tcp:0.0.0.0:80 connect=tcp:127.0.0.1:9444 --project sc2-infra`, an `/etc/hosts` line for the Auth Hostname on the client, and `sc login http://<auth-host> …`; `curl http://<auth-host>/healthz` from the client is 200.
+  - The tenant's Incus remote is enrolled as `https://<server-vm>:8443`, which the client reaches over `incusbr0`, so without any tailnet `sc login --skip-setup` provisions the tenant, and steps 1 (suffix), 2, 2b, 2c, 2d, 2e, 4 (except `sc c`), 4a and 5 PASS. Step 3 PASSES when `dig` runs on the server VM. What needs the tailnet (`sc c`/ssh, 2d-ii/iii, routing checks) is blocked: the client has no route to the tenant /24.
 - The one **fat binary** built static for linux: `bin/linux-amd64/sandcastle` (`make build` with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 BIN_DIR=bin/linux-amd64`). It is copied into every appliance.
 - **Stock images, no `sandcastle/base`.** Everything (auth-app, broker, tenant sidecars) runs on the stock upstream image `images:debian/13`, **pulled on demand from the public `images:` remote** — no custom image build and no manual `incus image copy` pre-caching required. (The appliance/sidecar launch code resolves `images:…`/`ubuntu:…` refs to a simplestreams pull; a bare alias or fingerprint still means a local image.) The Incus **server** just needs outbound access to `images.linuxcontainers.org`.
 - **Host network listener — now automatic.** Provisioning turns the daemon's network listener on itself: `CreateToken` calls `ensureServerListening`, which sets `core.https_address=:8443` if unset (a fresh `incus admin init --minimal` host only has the unix socket). No manual `incus config set core.https_address :8443` is needed anymore; before this fix, provisioning failed at token issuance with `Can't issue token when server isn't listening on network`.
@@ -471,7 +475,7 @@ sc create web --detach                       # default project
 sc project create backend                    # NO flags: broker URL + cert from the login
 sc create backend:api --detach
 sc create backend:web --detach               # SAME machine name as default:web
-sc list                                      # FQDN column shows canonical names
+sc ls -a -l                                  # FQDN column shows canonical names (plain `sc ls` prints names only, ADR-0030)
 # PASS: EVERY machine created above appears in `sc list` immediately (list is
 #       scoped to the current remote's install — a same-named tenant of another
 #       install on the same daemon must never shadow this one)
@@ -683,11 +687,17 @@ sc delete api:backend --yes # PASS: swapped-reference hint: did you mean "backen
 # in another project starts CLEANLY with its own IP — the old "Instance DNS name
 # already used on network" refusal is gone (validated on majestix 2026-07-17;
 # both webs RUNNING, distinct FQDNs web.default.castle / web.backend.castle).
-# What remains is the REFERENCE ambiguity when a bare name matches two projects:
+# What remains is the REFERENCE ambiguity when a bare name matches two projects.
+# A bare name means the CURRENT project first (resolveV2MachineTarget): from
+# `default`, `sc start web` is default:web and asks nothing. The question only
+# comes from a project that has no `web` of its own:
 sc create backend:web       # PASS: created AND running, own IP, FQDN web.backend.castle
-sc ls -a                    # PASS: both webs listed, both running
+sc ls -a -l                 # PASS: both webs listed, both running
+sc start web                # PASS: from default, acts on default:web (no question)
+sc project create third && sc project switch third
 sc start web                # PASS (no tty): "machine \"web\" exists in 2 projects (backend:web, default:web); name the one you mean as project:machine"
                             # PASS (tty): numbered prompt "Which one? [1-2]"
+sc project switch default && sc project delete third --yes
 sc delete backend:web --yes # PASS: qualified reference deletes without asking
 sc delete web               # PASS (tty): confirm names it "default:web", not "web"
 
@@ -927,7 +937,12 @@ Stock image is the default (`--base-image images:debian/13`, pulled on demand �
 > `https://login.tailscale.com/…` URL; Ctrl-C + `sc login --force` prints a URL
 > again (same one while the pending join is healthy); awaiting polls cycle in
 > seconds, not minutes; opening the URL and approving the route lets the waiting
-> login complete enrollment on its next poll. The old separate
+> login complete enrollment on its next poll. The CLIENT must already be a
+> tailnet node for this: without `tailscale up` the tailnet precheck (Phase 9)
+> refuses before the device flow, and `--skip-setup` enrolls without waiting and
+> prints no URL ("its sidecar is waiting to join your tailnet"); the URL is then
+> only in the sidecar's `tailscale status` (server: `incus exec --project
+> sc2-<tenant> sidecar -- tailscale status`). The old separate
 > `auth-app deploy` + `bootstrap` commands still exist for piecewise installs.
 
 **Simulated GitHub (recommended for e2e — no OAuth app):**

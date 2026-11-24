@@ -8,7 +8,7 @@ nesting = "required"   # Incus runs inside the box: system containers need secur
 kvm = "optional"       # the VM phases; container-only without it
 
 [setup]                # then the box runs `mise run setup`: scripts/kitchen-setup.sh
-apt = ["gnupg", "jq", "acl"]
+apt = ["gnupg", "jq", "acl", "make"]   # make: `make build` and every mise build:* task run it (#239)
 # The vault's secrets land in ~/.kitchen-setup/env, outside the clone; scripts/e2e.sh reads it when .env.sc2 is absent.
 
 [secrets.TAILSCALE_AUTH_KEY]
