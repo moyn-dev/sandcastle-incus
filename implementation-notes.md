@@ -7491,3 +7491,11 @@ connect took the live path: median 4.7 s over 5 runs, 10 Incus GETs.
   summary (about 0.35 s). Both are shared by every command. The tracked
   project copy of the skill under `.agents/skills/sandcastle` already
   differs from the source in every file and was left alone.
+
+## 2026-11-24 — `scripts/kitchen-setup.sh` asks Incus whether it can run VMs
+
+The script tested `[ -r /dev/kvm ] && [ -w /dev/kvm ]` as the box user. In a kitchen-setup box `/dev/kvm` is
+`root:kvm 0660` and the user is not in `kvm`, so it logged "containers only" although `incus launch --vm` worked
+(#237). It now checks for `qemu` in `incus info`'s `driver:` line: Incus decides VM support at daemon start, as
+root, so that is the fact the log line claims. Alternatives: `[ -c /dev/kvm ]` (says nothing about whether the
+daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user does not run QEMU here).
