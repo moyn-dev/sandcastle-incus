@@ -74,10 +74,11 @@ sudo setfacl -m "u:$USER:rw" /var/lib/incus/unix.socket
 incus info >/dev/null
 log "incus $(incus version | sed -n 's/^Server version: //p') answers as $USER"
 
-# Incus runs VMs only with /dev/kvm and /dev/vsock; kitchen-setup.toml's kvm asks the launch for both.
-if [ -r /dev/kvm ] && [ -w /dev/kvm ] && [ -e /dev/vsock ]; then
-  log "/dev/kvm and /dev/vsock are there: incus launch --vm can run"
+# Incus runs VMs only with /dev/kvm and /dev/vsock; kitchen-setup.toml's kvm asks the launch for both. Ask Incus
+# (root) rather than test the devices as $USER: /dev/kvm is root:kvm 0660 and $USER is not in kvm.
+if incus info | grep -q '^  driver: .*qemu'; then
+  log "incus has the qemu driver: incus launch --vm can run"
 else
-  log "no /dev/kvm or no /dev/vsock: containers only"
+  log "incus lacks the qemu driver (no /dev/kvm or /dev/vsock when it started): containers only"
 fi
 log "tailscale $(tailscale version | head -1) is installed, not joined; TAILSCALE_AUTH_KEY is in ~/.kitchen-setup/env when the vault grants it"
