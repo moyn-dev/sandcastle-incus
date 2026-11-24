@@ -5,6 +5,30 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-11-23 — kitchen.toml becomes kitchen-setup.toml; the e2e reads ~/.kitchen-setup/env
+
+moyn-dev/kitchen-setup#50 renames the repo's file to `kitchen-setup.toml` and
+drops #47's secrets mapping; the stack #44/#42/#45/#46 (deployed) reads the
+secrets from the vault `kitchen` and writes them to `~/.kitchen-setup/env`,
+outside the clone, not to `[env] file`. So: the file is renamed, and
+`scripts/e2e.sh` reads `~/.kitchen-setup/env` when neither
+`SANDCASTLE_E2E_ENV_FILE` nor `.env.sc2` is there. Alternatives: a symlink
+`.env.sc2 -> ~/.kitchen-setup/env` from `scripts/kitchen-setup.sh`, turned down
+because #47's launch, still on kitchen-setup's `main`, writes `.env.sc2` and
+would write through the link over the box's own secrets; or setting
+`SANDCASTLE_E2E_ENV_FILE`, which nothing on a box would persist. Then kitchen-setup decided (2026-11-23): the stack moves onto #50,
+`box/kitchen.py` is the one reader, and it refuses `[env]` and `[setup] run`
+for `~/.kitchen-setup/env` and the mise task `setup`. So the file drops both,
+and `mise.toml` gets a task `setup` that runs `scripts/kitchen-setup.sh`. The
+script now refuses to run without `~/.kitchen-setup`: `setup` is a generic
+task name, and the script installs packages and inits Incus with sudo, which
+must not happen on a laptop that runs `mise run setup` by habit. `TAILSCALE_AUTH_KEY` is now optional: in the
+vault stack a required secret that is not granted stops the launch, so every
+box for this repo, most of them for work that never runs the e2e, waited on
+a grant (kitchen-setup#49). The live phases fail without the key anyway.
+Merge this together with kitchen-setup's stack (#50, #44, #42, #45, #46):
+#50 alone still reads `[env]` and `[setup] run`.
+
 ## 2026-11-23 — kitchen.toml: a kitchen-setup box that can run the e2e
 
 A kitchen-setup box (moyn-dev/kitchen-setup#38) had no Incus, no nesting and

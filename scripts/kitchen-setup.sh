@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Run by kitchen-setup on its box, from kitchen.toml, as the box's login user, after the clone and mise install:
+# `mise run setup`, which kitchen-setup runs on its box as the box's login user, after the clone and mise install:
 # Incus from Zabbly (as scripts/setup-workvm.sh installs it) with a minimal init, for the e2e in docs/e2e-sc2.md,
 # and Tailscale, installed but not joined. Every launch runs it again; each step skips what is there.
 #   INCUS_BRIDGE_ADDRESS   default 172.30.0.1/24: incusbr0's address, outside the box's own routes
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 log() { printf '==> %s\n' "$*"; }
+# It installs packages and inits Incus with sudo: never on a computer that is not a box.
+[ -d "$HOME/.kitchen-setup" ] || { echo "scripts/kitchen-setup.sh runs on a kitchen-setup box only (no ~/.kitchen-setup here)" >&2; exit 1; }
 
 # shellcheck disable=SC1091 # the box's own
 . /etc/os-release
@@ -72,10 +74,10 @@ sudo setfacl -m "u:$USER:rw" /var/lib/incus/unix.socket
 incus info >/dev/null
 log "incus $(incus version | sed -n 's/^Server version: //p') answers as $USER"
 
-# Incus runs VMs only with /dev/kvm and /dev/vsock; kitchen.toml's kvm asks the launch for both.
+# Incus runs VMs only with /dev/kvm and /dev/vsock; kitchen-setup.toml's kvm asks the launch for both.
 if [ -r /dev/kvm ] && [ -w /dev/kvm ] && [ -e /dev/vsock ]; then
   log "/dev/kvm and /dev/vsock are there: incus launch --vm can run"
 else
   log "no /dev/kvm or no /dev/vsock: containers only"
 fi
-log "tailscale $(tailscale version | head -1) is installed, not joined; TAILSCALE_AUTH_KEY is in .env.sc2 when the launch mapped it"
+log "tailscale $(tailscale version | head -1) is installed, not joined; TAILSCALE_AUTH_KEY is in ~/.kitchen-setup/env when the vault grants it"
