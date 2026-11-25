@@ -101,6 +101,14 @@ part of the default protocol.
 
 ### Multi-install coexistence + shared identity (validated from scratch 2026-07-07)
 
+> Re-run 2026-11-25 in a kitchen-setup box (#239): a second `sc-adm install
+> --prefix id --ingress cloudflare --cidr-pool 10.253.0.0/16` beside the default
+> install on one nested Incus, the same user logged into both from one client
+> (suffixes `castle`, `e2eid`). PASS: distinct `sc2-net`/`id-net`, nothing on
+> `:9443`, `INCUS_PROJECT` follows the remote, both resolver zones answer at once
+> and cross-zone queries are `REFUSED`, 7c-glob-installs, 14g, 14j and
+> cross-install `sc connect e2eid:default:dev`.
+
 Several sandcastles share one Incus host via `--prefix` (e.g. `sc` +
 `--prefix id`), each with its own hostname/tunnel, CIDR pool, and Tenant DNS
 Suffix. Validated **from scratch** (purged host → `install-incus` → two
