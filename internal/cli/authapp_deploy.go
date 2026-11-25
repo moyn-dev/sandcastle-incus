@@ -184,6 +184,7 @@ func newAdminAuthAppDeployCommand(config commandConfig) *cobra.Command {
 	_ = command.Flags().MarkHidden("route-tls")
 	command.Flags().StringVar(&routeDNSCloudflareAPIToken, "route-dns-cloudflare-api-token", "", "Cloudflare API token with zone DNS edit access; wildcard public routes use one DNS-01 certificate instead of issuing a certificate per subdomain")
 	command.Flags().StringSliceVar(&routeDNSCloudflareWildcards, "route-dns-cloudflare-wildcard", nil, "exact leading-wildcard Public Route hostname authorized for Cloudflare DNS-01 (repeat for multiple hostnames)")
+	deprecateRouteFlags(command.Flags())
 	oidcLogin.register(command)
 	return command
 }

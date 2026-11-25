@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
 	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 )
@@ -250,5 +252,24 @@ func TestRouteGuideOnInstallWithoutRoutes(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "not available on this install") {
 		t.Errorf("guide should explain routes are off, got:\n%s", stdout)
+	}
+}
+
+// Public Routes are superseded by Machine Tunnels: the command and the
+// appliance's route flags stay usable but announce it and leave --help.
+func TestPublicRoutesAreDeprecated(t *testing.T) {
+	route := newRouteCommand(commandConfig{}, &rootOptions{})
+	for _, cmd := range append([]*cobra.Command{route}, route.Commands()...) {
+		if !strings.Contains(cmd.Deprecated, "sc tunnel publish") {
+			t.Fatalf("%s Deprecated = %q", cmd.CommandPath(), cmd.Deprecated)
+		}
+	}
+	for _, cmd := range []*cobra.Command{newAdminInstallCommand(commandConfig{}), newAdminAuthAppDeployCommand(commandConfig{})} {
+		for _, name := range []string{"route-ingress", "route-base-domain", "route-cname-target", "route-front", "route-dns-cloudflare-api-token", "route-dns-cloudflare-wildcard"} {
+			flag := cmd.Flags().Lookup(name)
+			if flag == nil || !strings.Contains(flag.Deprecated, "sc tunnel publish") {
+				t.Fatalf("%s --%s not deprecated: %+v", cmd.Name(), name, flag)
+			}
+		}
 	}
 }

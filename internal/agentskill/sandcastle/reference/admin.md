@@ -18,9 +18,6 @@ sc-adm install \
   --admin-github-users alice,bob \
   --github-client-id … --github-client-secret … \
   --ingress cloudflare --cloudflare-api-token … \
-  --route-ingress acme --acme-email ops@example.com \
-  --route-dns-cloudflare-wildcard '*.jot.example.com' \
-  --route-dns-cloudflare-api-token … \
   --prefix sc --cidr-pool 10.248.0.0/16
 ```
 
@@ -41,6 +38,9 @@ Decisions worth getting right the first time:
   record itself given `--cloudflare-api-token`), `acme` (binds host `:80`/`:443`
   for Let's Encrypt; needs a public IP and an A record), or `none` (bring your
   own edge).
+- **The `--route-*` flags are deprecated.** Public Routes are superseded by
+  Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`); the flags still
+  work and print a warning. Do not add them to new installs. Legacy semantics:
 - **`--route-ingress`** is independent of `--ingress`, so public routes can run
   beside a tunnelled login host: `acme` binds the host ports, `acme-proxied`
   terminates route TLS in the appliance behind an upstream SNI proxy that owns

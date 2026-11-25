@@ -206,7 +206,12 @@ remove every recorded publication of that kind from that Machine.
 For a pre-platform connector or Caddy unit, run `sc payload-sync`, then
 `sc fix <machine> --only cloudflared` or `--only caddy-publications`.
 
-## Public routes
+## Public routes (deprecated)
+
+**Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels. To
+publish a machine, use `sc tunnel publish <machine> --port <port> --hostname <fqdn>` (above). `sc route` and its subcommands still work
+and print a deprecation warning; use them only to inspect or remove routes an
+install already has. Existing routes are not migrated or removed.
 
 `sc route` publishes a machine's local port to the public Internet through the
 auth-app appliance's Caddy. Bare `sc route` prints this install's route

@@ -103,9 +103,11 @@ The canonical domain vocabulary. Architecture overview in [`topology.md`](topolo
 - **Sandcastle Broker** — The appliance that authorizes and performs privileged
   tenant + project lifecycle over the host Incus socket, authenticating callers by
   their restricted client certificate.
-- **Public Route** — A public HTTP(S) hostname → a machine, served by the edge
-  (a caddy vhost, or a tunnel host). The host routes between `incusbr0` and the
-  tenant bridge, so the edge reaches the machine's private IP directly.
+- **Public Route** — *Deprecated; use a Machine Tunnel (`sc tunnel publish
+  <machine> --port <port> --hostname <fqdn>`).* A public HTTP(S) hostname → a
+  machine, served by the edge (a caddy vhost, or a tunnel host). The host
+  routes between `incusbr0` and the tenant bridge, so the edge reaches the
+  machine's private IP directly.
 - **Workload Identity / OIDC** — Short-lived Workload Identity Tokens the Auth
   App issues to machines; the OIDC issuer is per tenant.
 - **Infrastructure Seed File** — The operator bootstrap bundle carrying Auth

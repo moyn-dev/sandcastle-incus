@@ -808,6 +808,10 @@ target-dir = "/scratch/cache/&lt;user&gt;/cargo-target"</code></pre>
   <p>No port flag is accepted: the publication always targets the Machine's normal private HTTPS service on port 443. The Auth App uses the encrypted Public DNS Zone token for DNS-01 and retains it there; neither the Machine nor Tenant Sidecar receives the Cloudflare API token. Repeating publish is idempotent. With <code>VERBOSE=1</code>, publish prints the DNS-only target private IP and explicitly notes that DNS, certificate, and Caddy convergence are asynchronous. <code>sc tailnet unpublish</code> removes only its owned direct and wildcard records and Machine-Caddy site; it is safe to repeat. Omit <code>--hostname</code> to remove all Tailnet publications recorded on that Machine, or use a shell-quoted wildcard to select only matching recorded names. Wait for DNS propagation before the name is reused—Sandcastle never automatically retargets a live hostname.</p>
   <p><code>sc ls</code> shows requested publication views in its <code>TUNNEL</code> and <code>TAILNET</code> columns. The legacy Sidecar proxy is transition-only: explicitly unpublish it, wait for propagation, then publish the direct-Machine name.</p>
 
+  <h2>Public Routes (deprecated)</h2>
+
+  <div class="note"><strong>Deprecated: use Machine Tunnels.</strong> Public Routes (<code>sc route</code> and every subcommand) and the install flags <code>--route-ingress</code>, <code>--route-base-domain</code>, <code>--route-cname-target</code>, <code>--route-front</code>, <code>--route-dns-cloudflare-api-token</code>, and <code>--route-dns-cloudflare-wildcard</code> are superseded by Cloudflare Machine Tunnels. Publish with <code>sc tunnel publish &lt;machine&gt; --port &lt;port&gt; --hostname &lt;fqdn&gt;</code> (see <a href="#routes">Machine Tunnels</a> above). The commands and flags still work and print a deprecation warning; existing routes are neither migrated nor removed. The reference below is kept for installs that still use them.</div>
+
   <div class="note"><strong>Requires route ingress.</strong> <code>sc route</code> works only on installs where native-ACME <strong>route ingress</strong> is enabled — deploy with <code>--route-ingress acme</code> (on <code>sc-adm install</code> or <code>sc-adm auth-app deploy</code>). Caddy then binds the host's <code>:80</code>/<code>:443</code> and gets real Let's Encrypt certificates for route hostnames. This is <em>independent of the Auth Hostname's own ingress</em>: routes can run beside a Cloudflare-tunnelled login host — e.g. login on <code>--ingress cloudflare</code> (<code>home.thieso2.dev</code>) and routes on <code>--route-ingress acme --route-base-domain home.tc42.uk</code>, served by the same appliance Caddy. By default routes live under the Auth Hostname; <code>--route-base-domain</code> puts them under a separate domain. The operator provisions a wildcard <code>*.&lt;route-base-domain&gt;</code> → the host's public IP (a wildcard CNAME to a dynamic-DNS name works — the record tracks the IP). On an install without route ingress every <code>sc route</code> command returns a clear error telling you to enable it.</div>
 
   <div class="note"><strong>One certificate for an authorized wildcard route.</strong> The compatible default is one broker-authorized certificate per concrete hostname, issued on its first request. Operators whose service continuously creates hostnames can instead pass <code>--route-dns-cloudflare-wildcard '*.jot.moyn.dev'</code> and <code>--route-dns-cloudflare-api-token &lt;token&gt;</code> with <code>--route-ingress</code>. The appliance Caddy then uses Cloudflare DNS-01 only when a leading-wildcard Public Route exactly matches that operator allowlist, obtaining one wildcard certificate during reconciliation; other wildcard routes and exact-host routes remain on-demand. Restrict the token to <code>Zone:Read</code> and <code>DNS:Edit</code> for the relevant zone. The token is stored in a Caddy-only <code>0600</code> environment file and must be supplied again on appliance redeploy.</div>
@@ -837,7 +841,7 @@ http:// {
   <div class="note"><strong>Operators: declare the front door.</strong> <code>--route-cname-target &lt;hostname&gt;</code> (on <code>sc-adm install</code> or <code>sc-adm auth-app deploy</code>) records what a tenant must CNAME a custom route hostname onto. Set it whenever an SNI proxy or edge sits in front of the appliance — only you know that name. It is inferred <em>only</em> when the Auth Hostname is itself ACME-served by this appliance; a Cloudflare-tunnelled Auth Hostname is never guessed at, because the tunnel carries login only. Tenants read it back with <code>sc route</code>.</div>
 
   <div class="step">
-    <h3>Find out what this install offers <span class="badge badge-user">user</span></h3>
+    <h3>Find out what this install offers (deprecated) <span class="badge badge-user">user</span></h3>
     <p><code>sc route</code> with no subcommand asks the install itself and prints the answer: the tenant's own auto-hostname pattern, the exact CNAME record for a custom hostname, and a warning when the wildcard for auto-hostnames does not actually resolve (a publish would otherwise sit at <code>awaiting-dns</code> with no explanation). On an install without route ingress it says so and points at the admin fix.</p>
     <pre><code><span class="cmd">sc route</span>
 
@@ -852,7 +856,7 @@ Publish a machine's port to the public Internet.
   </div>
 
   <div class="step">
-    <h3>Publish a machine's port <span class="badge badge-user">user</span></h3>
+    <h3>Publish a machine's port (deprecated) <span class="badge badge-user">user</span></h3>
     <p>Exposes an HTTP app running inside one of your machines to the public Internet through the Auth App's Caddy. The default public hostname is <code>&lt;name&gt;.&lt;tenant&gt;.&lt;auth-hostname&gt;</code> (the <code>&lt;tenant&gt;</code> segment is fixed to your tenant, so it can't collide with another tenant); <code>--name</code> defaults to the machine name. Exact routes and wildcard routes on default installs issue a certificate on the first request, so that first hit is slow. A wildcard route on an install configured with route DNS-01 already has one wildcard certificate and avoids that delay.</p>
     <pre><code><span class="comment"># Publish port 3000 of machine "web" → https://web.&lt;tenant&gt;.&lt;auth-hostname&gt;</span>
 <span class="cmd">sc route publish</span> <span class="arg">web</span> <span class="flag">--port</span> <span class="arg">3000</span>
@@ -871,7 +875,7 @@ Publish a machine's port to the public Internet.
   </div>
 
   <div class="step">
-    <h3>List, inspect, and delete routes <span class="badge badge-user">user</span></h3>
+    <h3>List, inspect, and delete routes (deprecated) <span class="badge badge-user">user</span></h3>
     <pre><code><span class="cmd">sc route list</span>                                  <span class="comment"># HOSTNAME · MACHINE (FQDN) · PORT · STATUS</span>
 <span class="cmd">sc route status</span> <span class="arg">web.acme.sc2.example.dev</span>       <span class="comment"># backend, URL, health</span>
 <span class="cmd">sc route delete</span> <span class="arg">web.acme.sc2.example.dev</span> <span class="flag">--yes</span></code></pre>

@@ -263,7 +263,10 @@ public-dns-zone set-token`), `validation`, `auth-app-unreachable`, `expired`,
   name. Check `/usr/local/share/ca-certificates/sandcastle-tenant.crt` exists
   and `openssl s_client -servername <m>.<p>.<suffix>` returns the tenant leaf.
 
-## A published route is `awaiting-dns` or serves no certificate
+## A published route is `awaiting-dns` or serves no certificate (deprecated Public Routes)
+
+Public Routes are deprecated; for new publishing use `sc tunnel publish <machine> --port <port> --hostname <fqdn>`.
+The steps below cover routes an install already has.
 
 ```bash
 sc route                       # what this install supports, and the CNAME target

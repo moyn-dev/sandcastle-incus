@@ -52,7 +52,7 @@ The publicly trusted DNS-01 certificate owned by a Project with a Project Domain
 
 
 **Machine Public Hostname**:
-One of a Machine's set of public DNS names: the *derived* name `<machine>.<Project Domain>` when the Project has a Project Domain, plus any *explicit* names the tenant claims under a Public DNS Zone (`sc create --hostname`, `sc hostname add`). A Machine has zero or more; it always keeps its Machine Private Hostname beside them. An explicit name reserves itself and its wildcard subtree install-wide, first come. Distinct from a Public Route: a Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
+One of a Machine's set of public DNS names: the *derived* name `<machine>.<Project Domain>` when the Project has a Project Domain, plus any *explicit* names the tenant claims under a Public DNS Zone (`sc create --hostname`, `sc hostname add`). A Machine has zero or more; it always keeps its Machine Private Hostname beside them. An explicit name reserves itself and its wildcard subtree install-wide, first come. Distinct from a Public Route (deprecated, superseded by a Machine Tunnel published with `sc tunnel publish <machine> --port <port> --hostname <fqdn>`): a Machine Public Hostname resolves to the Machine's tenant-private address and is reachable only over the Tenant Tailnet.
 _Avoid_: Public hostname, route hostname, public machine, zone-mode machine
 
 **Naming Mode**:
