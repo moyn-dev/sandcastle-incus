@@ -109,7 +109,17 @@ assert_machine_platform_launchers() {
 }
 
 step "register disposable Public DNS Zone and create an HTTP Machine"
-CF_ZONE_ID="$(cf_get "zones?name=$ZONE" | jq -er 'if length==1 then .[0].id else error("expected one zone") end')"
+# The test zone may be a subzone of the Cloudflare zone (a disposable
+# subzone is the recommended setup): walk up to the enclosing Cloudflare
+# zone the way the product's zone lookup does.
+CF_ZONE_ID=""
+candidate="$ZONE"
+while [[ "$candidate" == *.* ]]; do
+  CF_ZONE_ID="$(cf_get "zones?name=$candidate" | jq -r 'if length==1 then .[0].id else empty end')"
+  [[ -n "$CF_ZONE_ID" ]] && break
+  candidate="${candidate#*.}"
+done
+[[ -n "$CF_ZONE_ID" ]] || fail "no Cloudflare zone encloses $ZONE (does the token see it?)"
 if sc_adm public-dns-zone list --output json | jq -e --arg z "$ZONE" 'map(select(.zone==$z)) | length > 0' >/dev/null; then ZONE_PREREGISTERED=1; else sc_adm public-dns-zone add "$ZONE" --token-file <(printf %s "$TOKEN"); fi
 sc project create "$PROJECT"
 sc create "$REF"

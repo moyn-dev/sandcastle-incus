@@ -2598,6 +2598,8 @@ machine on another install.
 # 1. Fresh tenant defaults on (created in this run, so the key was seeded)
 incus project get <prefix>-<tenant> user.sandcastle.v2.tailnet-egress   # true
 sc tailscale egress <tenant>                                             # Tailnet egress: on
+#   (admin identity: a tenant's login certificate cannot read its infra
+#   project, #245 — on the server: SANDCASTLE_REMOTE=local sandcastle tailscale egress <tenant>)
 
 # 2. Bridge carries both options (project default); the order is load-bearing
 incus network get <prefix>-<tenant> raw.dnsmasq
@@ -2629,6 +2631,14 @@ incus exec sidecar --project <prefix>-<tenant> -- tailscale debug prefs | grep R
 incus project get <prefix>-<old-tenant> user.sandcastle.v2.tailnet-egress   # empty
 sc tailscale egress <old-tenant> on && sc-adm tenant create <old-tenant> ...  # then steps 2-5 apply
 ```
+
+Run 2026-11-25 in a kitchen-setup box (#239), steps 1–6 PASS with both peers
+being the run's own nodes (the client VM's tailnet IP, and a machine behind the
+second tenant's sidecar `/24`), so nothing else on the tailnet is touched. Converge
+with the tenant's own `sc login --force` rather than `sc-adm tenant create`, which
+clobbers a stored user/key when re-run without them. In a box, step 6's tailnet-node
+curl still answers after `off`: the route falls back to `.1`, and the box itself
+routes `100.64.0.0/10`; the other sidecar's `/24` fails closed as specified.
 
 PASS: step 1 reads on for the fresh tenant. In step 5 the remote peer behind
 another sidecar's subnet route answers once the ACL allows it, and internet
@@ -3241,6 +3251,14 @@ uses Tailscale for control-plane access only and keeps `tailscale set
 --accept-routes=false`; a separate enrolled Tailnet client accepts the Tenant
 subnet route.
 
+The Public DNS Zone may be a subzone of the Cloudflare zone; the driver walks up
+to the enclosing zone as the product does. But the tunnel hostname
+`tunnel-<id>.<zone>` is proxied, and Cloudflare's Universal SSL covers only one
+label below the Cloudflare zone: with a subzone such as `e2e.sc.<cf-zone>` the edge
+answers `ssl/tls alert handshake failure` and the tunnel phase cannot pass (#239).
+Use a Public DNS Zone that is itself a Cloudflare zone (or has an edge certificate
+for `*.<zone>`) for this phase.
+
 The Public DNS Zone token needs `Zone:Read`, `DNS:Edit`, and account-level
 `Cloudflare Tunnel:Edit`. Use a disposable subzone and Let's Encrypt staging.
 The automated phase creates a disposable project and Machine, starts an HTTP
@@ -3451,7 +3469,7 @@ restart repair one machine). Run every guest step on a container AND a VM
 | **15f** snapshots | `incus snapshot create s1` (or waiting for a scheduled run) creates no snapshot of `s1-scratch` (`incus storage volume snapshot list <pool> s1-scratch --project <p>` is empty); a pool with `volume.snapshots.schedule` set still gives the new volume no schedule |
 | **15g** delete | `sc delete s1 --yes` removes `s1` and `s1-scratch`; `incus storage volume list <pool> --project <p>` shows no `*-scratch` orphan. With a scratch volume that cannot be deleted (e.g. attached to a second instance by hand), `sc delete` exits non-zero naming the volume and the `incus storage volume delete` command |
 | **15h** opt-out and legacy | `sc create s3 --no-scratch` creates no volume, `/tmp` stays on the root disk, `systemctl --failed` lists nothing, and after `sc restart s3` `systemctl is-active sc-scratch` is `active` (the unit ran and found no volume); `sc create s4 --scratch-size lots` fails before anything is created; a machine created by an older binary (no unit) boots unchanged with no failed units; in a project not yet re-rendered, a new machine gets `/scratch` but `systemctl cat sc-scratch` fails until `sc project rerender` (new machines) or `sc fix <m> --only scratch` (that machine) |
-| **15i** project delete | a project holding machines with scratch volumes is deleted by `sc project delete` without a volume-in-use or volume-left error |
+| **15i** project delete | `sc project delete` refuses while the project still holds a machine (`still contains machine …`); after `sc delete` of its machines the project deletes with no volume-in-use or volume-left error, and no `*-scratch` volume remains |
 | **15j** migration | on a tenant with a machine `old` created by a pre-#210 binary (container, running) and a stopped VM `oldvm`: `sc-adm tenant scratch-migrate <tenant> --check` lists both as `would attach` and creates nothing (`incus storage volume list` unchanged); the real run reports `old` as `attached (live)` and `oldvm` as `attached (mounted at next start)`, and `old` sees `/scratch` without a restart; a second run reports every machine as `already has scratch` and changes nothing; the sidecar is never listed. A pre-#210 `--bare` machine is listed as `skipped (bare machine: re-create it to get scratch)` by both runs and gets no volume; a hand-made unmarked `<m>-scratch` volume makes `--check` report that machine `FAILED` with the same reason as the real run. Run without `SANDCASTLE_INCUS_PROJECT_PREFIX` against a non-default install (obelix): stderr notes the install and the run proceeds. With a second app project, `--check --project <short>` and `--project <full incus name>` list only that project's machines, and `--project nope` fails naming `"nope"` before touching anything. Then `sc fix old --only scratch` and `sc restart old`: `findmnt /tmp` shows the bind. A file put in `/var/tmp` before the restart (`touch /var/tmp/keep`) is still there after it, now on the volume (`ls /scratch/var-tmp/keep`); data in the old `/tmp` is not copied and nothing is deleted |
 
 ---
@@ -3470,5 +3488,5 @@ Sandcastle remote into `~/.config/incus` with the Sandcastle keypair as
 | **16a** login | `sc login <auth-hostname>` prints ``Plain `incus` remotes in ~/.config/incus: added <remote>.``; with no `INCUS_CONF`, `incus list <remote>:` lists the tenant's machines, and `incus list <admin-remote>:` still works with the admin identity |
 | **16b** untouched | `~/.config/incus/client.crt`, `default-remote`, aliases and every admin remote are byte-identical before and after; a native remote that already had the Sandcastle remote's name is left as-is and the login prints `Note: not mirroring <name>: …` |
 | **16c** idempotent | `sc update --check` shows `native incus mirror … N remote(s) current`; a second `sc login` leaves `~/.config/incus/config.yml` unmodified (same mtime) |
-| **16d** removal | after the remote is dropped from `~/.config/sandcastle/incus` (`INCUS_CONF=~/.config/sandcastle/incus incus remote remove <remote>`), `sc update --yes` removes it and its `clientcerts`/`servercerts` files from `~/.config/incus` |
+| **16d** removal | after the remote is dropped from `~/.config/sandcastle/incus` (`INCUS_CONF=~/.config/sandcastle/incus incus remote switch local` first when it is that dir's default remote — Incus refuses to remove the default — then `… incus remote remove <remote>`), `sc update --yes` removes it and its `clientcerts`/`servercerts` files from `~/.config/incus` |
 | **16e** opt-out | with `SANDCASTLE_INCUS_NATIVE_MIRROR=0` (or `incus_native_mirror: false` in `~/.config/sandcastle/config.yml`) no sync runs and `sc update --check` shows no mirror row; mirrors made earlier stay |

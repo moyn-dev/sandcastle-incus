@@ -74,6 +74,10 @@ cleanup() {
   sc project delete api --yes >/dev/null 2>&1 || true
   adm tenant delete "$TENANT" --yes --purge >/dev/null 2>&1 || true   # a v2 tenant refuses a delete without --purge
   sc tenant switch "$OWNER" >/dev/null 2>&1 || true
+  # The members' clients keep the shared tenant's remote, which now points at
+  # nothing; every cross-install glob (`sc ls -a '*:*:*'`, `sc stop '/**/x'`)
+  # would refuse on it. There is no `sc remote remove` yet.
+  client_sh "incus remote remove $SUFFIX" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
