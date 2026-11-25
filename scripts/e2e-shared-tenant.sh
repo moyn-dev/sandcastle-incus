@@ -68,10 +68,14 @@ cleanup() {
   local rc=$?
   [[ $rc -ne 0 && "${SANDCASTLE_E2E_SHARED_KEEP:-0}" == 1 ]] && { echo "KEEP: tenant $TENANT left in place" >&2; return; }
   as_user "$OWNER" 2>/dev/null || true
-  sc tenant switch "$TENANT" --local-only >/dev/null 2>&1 || true
-  sc delete web --yes >/dev/null 2>&1 || true
-  sc delete api:svc --yes >/dev/null 2>&1 || true
-  sc project delete api --yes >/dev/null 2>&1 || true
+  # Delete machines only once the shared tenant is the current one: when the
+  # switch fails (13b never created it) a bare `sc delete web` would act on
+  # the owner's Personal Tenant and destroy its own web.
+  if sc tenant switch "$TENANT" --local-only >/dev/null 2>&1; then
+    sc delete web --yes >/dev/null 2>&1 || true
+    sc delete api:svc --yes >/dev/null 2>&1 || true
+    sc project delete api --yes >/dev/null 2>&1 || true
+  fi
   adm tenant delete "$TENANT" --yes --purge >/dev/null 2>&1 || true   # a v2 tenant refuses a delete without --purge
   sc tenant switch "$OWNER" >/dev/null 2>&1 || true
   # The members' clients keep the shared tenant's remote, which now points at

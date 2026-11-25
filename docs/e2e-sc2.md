@@ -2280,7 +2280,7 @@ leaf; the corrected machine-id reset was validated live (old→new random id).
 
 ---
 
-## Phase 8e — Dev Image: `sc create --image <dev-alias>` provisioning ⚠️
+## Phase 8e — Dev Image: `sc create --image <dev-alias>` provisioning ✅ in-project build + shell/toolchain/no-ingress checks (2026-11-25, #239)
 
 Validates the third Machine Template (`images/dev/Dockerfile`, `FROM
 ubuntu:26.04` — a distinct OS lineage from `base`/`ai`'s Debian) end to end: a
@@ -2340,8 +2340,9 @@ not for producing machine images. **PASS:** `incus image info <alias>` reports
   `-net.ipv4.ping_group_range = 0 2147483647` silently fails in an unprivileged
   container (gid unmapped → `EINVAL`, swallowed by the `-`), leaving
   `65534 65534` and "missing cap_net_raw+p capability or setuid?".
-  **PASS:** `sysctl -n net.ipv4.ping_group_range` → `0 65534`, from the image's
-  `/etc/sysctl.d/99-sandcastle-ping.conf`.
+  **PASS:** `sysctl -n net.ipv4.ping_group_range` → `0 65535` (the project
+  profile's cloud-init writes `/etc/sysctl.d/99-sandcastle-ping.conf` on every
+  machine, Dev Image included) and `ping -c1 <gateway>` succeeds as the login user.
 
 **PASS — AI CLI tooling (spec B6):**
 - `claude --version` and `codex --version` resolve; `~/.claude/skills`
@@ -2379,8 +2380,13 @@ not for producing machine images. **PASS:** `incus image info <alias>` reports
 
 **PASS — git identity self-populates (spec B9):**
 - Fresh machine, before any `gh auth login`: `git config --global
-  user.email` is empty; `git config --global --get-regexp 'alias\.'` already
-  lists the baseline (`co`, `br`, `st`, `last`, `unstage`, `amend`).
+  user.email` is empty; `git config --get-regexp '^alias\.'` already lists the
+  baseline (`co`, `br`, `st`, `last`, `unstage`, `amend`) — they live in the
+  system `/etc/gitconfig`, so `--global` (`~/.gitconfig`) shows none of them.
+  `mise ls` in an interactive shell (`zsh -ic`) lists `go`, `node`, `herdr`,
+  `starship`; a non-interactive `zsh -lc` has no mise on `PATH` (activation is in
+  `.zshrc`). Validated 2026-11-25 in a kitchen-setup box (#239):
+  `mise run image:dev:build-in-project` built the image in 240 s.
 - `gh auth login` (interactive; credential goes to `gh`'s own storage — OS
   keyring where available, 0600 file fallback — never a plaintext token file,
   never co-located with `~/.ssh/`), then a new shell: `git config --global
@@ -2524,6 +2530,15 @@ Homebrew-managed); 10d atomic replace with `.bak` rollback artifact through the
 symlink (brew installs never self-replace); 10e notices
 throttled ≤1/24h per target and env-suppressible; 10f card states match the
 stamps.
+
+**Run 2026-11-25 (kitchen-setup box, #239), 10a–10f PASS** with release
+artifacts v0.25.0/v0.25.1. A dev-build sidecar (`v0.0.0-dev`) always reads
+`current` (`update.IsNewer` never calls a dev build outdated), so for 10c first
+roll a tenant to a release with the admin tree
+(`sc-adm update --version v0.25.0 --tenants <t> --yes`, which also moves the
+appliance), then `sc-adm update --yes` (appliance only): `sc update --check` then
+reads `v0.25.0 v0.25.1 outdated (tenant-managed)` and `sc update --yes` restarts
+only `sandcastle-tls-sign`.
 
 **Status (2026-07-17, v0.1.1 cut):** 10d validated live against the real
 v0.1.1 release — dev binary pinned to v0.1.1: asset + `checksums.txt`
