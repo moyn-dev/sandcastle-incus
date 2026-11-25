@@ -49,7 +49,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { echo; echo "== $*"; }
 expect_fail() { local want="$1"; shift; local out rc=0; out="$("$@" 2>&1)" || rc=$?; [[ $rc -ne 0 && "$out" == *"$want"* ]] || fail "expected refusal containing '$want', got (rc=$rc): $out"; pass "refused: $want"; }
 wait_for() { local seconds="$1" what="$2"; shift 2; local start; start=$(date +%s); until "$@"; do (( $(date +%s) - start < seconds )) || fail "timed out waiting for $what"; sleep 5; done; }
-as_user() { sc remote switch "${1}sh" >/dev/null; }   # remotes are named after each login's DNS suffix: <user>sh
+# Remotes are named after each login's DNS suffix: <user>sh unless the run
+# logged in with other suffixes (SANDCASTLE_E2E_SHARED_{OWNER,MEMBER}_REMOTE).
+as_user() {
+  local remote="${1}sh"
+  [[ "$1" == "$OWNER" && -n "${SANDCASTLE_E2E_SHARED_OWNER_REMOTE:-}" ]] && remote="$SANDCASTLE_E2E_SHARED_OWNER_REMOTE"
+  [[ "$1" == "$MEMBER" && -n "${SANDCASTLE_E2E_SHARED_MEMBER_REMOTE:-}" ]] && remote="$SANDCASTLE_E2E_SHARED_MEMBER_REMOTE"
+  sc remote switch "$remote" >/dev/null
+}
 machine_ip() { # machine_ip <project|""> <machine>
   local out
   if [[ -n "$1" ]]; then out="$(sc ls "$1" --json 2>/dev/null)"; else out="$(sc ls --json 2>/dev/null)"; fi
@@ -65,7 +72,7 @@ cleanup() {
   sc delete web --yes >/dev/null 2>&1 || true
   sc delete api:svc --yes >/dev/null 2>&1 || true
   sc project delete api --yes >/dev/null 2>&1 || true
-  adm tenant delete "$TENANT" --yes >/dev/null 2>&1 || true
+  adm tenant delete "$TENANT" --yes --purge >/dev/null 2>&1 || true   # a v2 tenant refuses a delete without --purge
   sc tenant switch "$OWNER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -125,7 +132,7 @@ step "13h — a device enrolled AFTER the grant reaches the shared tenant (login
 # call in the shared project answered "User does not have permission".
 AUTH_HOST="${SANDCASTLE_E2E_AUTH_HOST:?set SANDCASTLE_E2E_AUTH_HOST (https://<auth-hostname>)}"
 SIM="${SANDCASTLE_E2E_SIMULATE_TOKEN:?set SANDCASTLE_E2E_SIMULATE_TOKEN (the --simulate-github-token of the install)}"
-NEWHOME="/root/e2e-newdev-$MEMBER"
+NEWHOME="${SANDCASTLE_E2E_SHARED_NEWHOME:-/root/e2e-newdev-$MEMBER}"   # a dir the client user may create
 client_sh "rm -rf $NEWHOME && mkdir -p $NEWHOME/.ssh && cp ${MEMBER_KEY} ${MEMBER_KEY}.pub $NEWHOME/.ssh/ && chmod 700 $NEWHOME/.ssh"
 # Run from inside the new HOME too: the client's own /tmp/.sandcastle (the
 # first identity's selection) would otherwise be picked up by the walk-up

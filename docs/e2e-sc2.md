@@ -3374,6 +3374,18 @@ SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFI
   scripts/e2e-shared-tenant.sh
 ```
 
+On a **default-prefix** install (`SANDCASTLE_E2E_PREFIX=sc`, projects `sc2-*`) the
+member grants used to address `sc-<tenant>` and failed with `update certificate …:
+Project not found` (#239: `usertrust` did not normalize the prefix the way every
+other v2 path does); it now passes there too. When the two logins used DNS
+suffixes other than `<user>sh`, name their remotes with
+`SANDCASTLE_E2E_SHARED_OWNER_REMOTE` / `SANDCASTLE_E2E_SHARED_MEMBER_REMOTE`;
+`SANDCASTLE_E2E_SHARED_NEWHOME` moves 13h's fresh device home off `/root` for a
+non-root client user. Validated 2026-11-25 in a kitchen-setup box (#239): driven
+from the box with `SANDCASTLE_E2E_ADMIN_EXEC='incus exec e2eserver --'` and
+`SANDCASTLE_E2E_CLIENT_EXEC='incus exec e2eclient --user <uid> --group <gid> --env HOME=<home> --cwd <dir> --'`,
+ALL PASS in 120 s.
+
 | Step | PASS criteria |
 |---|---|
 | **13a** prerequisite | both users list their Personal Tenant; `sc-adm tenant create … --member never-logged-in` is **refused** with ``must run `sc login` `` and creates nothing |

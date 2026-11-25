@@ -455,7 +455,7 @@ func TestTenantAccessAdminListsUsersTenantsAndGrants(t *testing.T) {
 	if grantResponse.Code != http.StatusSeeOther {
 		t.Fatalf("grant = %d %q", grantResponse.Code, grantResponse.Body.String())
 	}
-	if len(access.grants) != 1 || access.grants[0].User != "alice" || !slices.Equal(access.grants[0].Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if len(access.grants) != 1 || access.grants[0].User != "alice" || !slices.Equal(access.grants[0].Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("grants = %#v", access.grants)
 	}
 }
@@ -489,7 +489,7 @@ func TestTenantAccessAdminRevokesPersonalTenantAccess(t *testing.T) {
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("revoke = %d %q", response.Code, response.Body.String())
 	}
-	if len(access.revokes) != 1 || access.revokes[0].User != "1octocat" || !slices.Equal(access.revokes[0].Projects, []string{"sc-1octocat", "sc-1octocat-default"}) {
+	if len(access.revokes) != 1 || access.revokes[0].User != "1octocat" || !slices.Equal(access.revokes[0].Projects, []string{"sc2-1octocat", "sc2-1octocat-default"}) {
 		t.Fatalf("revokes = %#v", access.revokes)
 	}
 	if len(sshAccess.revokes) != 1 || sshAccess.revokes[0].tenant != "1octocat" || sshAccess.revokes[0].user != "1octocat" {

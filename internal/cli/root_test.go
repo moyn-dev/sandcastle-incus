@@ -2647,7 +2647,7 @@ func TestAdminTenantGrantDryRunJSON(t *testing.T) {
 	if payload.CertificateName != "sandcastle-alice" {
 		t.Fatalf("CertificateName = %q", payload.CertificateName)
 	}
-	if !slices.Equal(payload.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !slices.Equal(payload.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("Projects = %#v", payload.Projects)
 	}
 }
@@ -2662,7 +2662,7 @@ func TestAdminTenantGrantCallsTrustManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manager.grantCalled || manager.plan.User != "alice" || !slices.Equal(manager.plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !manager.grantCalled || manager.plan.User != "alice" || !slices.Equal(manager.plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("manager = %#v", manager)
 	}
 }
@@ -2677,7 +2677,7 @@ func TestAdminTenantRevokeCallsTrustManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manager.revokeCalled || manager.plan.User != "alice" || !slices.Equal(manager.plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !manager.revokeCalled || manager.plan.User != "alice" || !slices.Equal(manager.plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("manager = %#v", manager)
 	}
 }
@@ -2762,7 +2762,7 @@ func TestAdminUserTokenSupportsPreGrantedTenant(t *testing.T) {
 	if !manager.tokenCalled {
 		t.Fatal("expected token manager to be called")
 	}
-	if !slices.Equal(manager.plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !slices.Equal(manager.plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("Projects = %#v", manager.plan.Projects)
 	}
 	if !strings.Contains(stdout, "sc remote add sandcastle-alice certificate-add-token --tenant acme") {

@@ -271,15 +271,20 @@ func validateUser(user string) error {
 	return nil
 }
 
+// grantProjectName is the tenant's infra project. The install prefix is
+// normalized as everywhere else in v2 (the default "sc" names sc2-* projects):
+// the raw prefix named sc-<tenant>, which no v2 install has, so every grant on
+// a default install failed with "Project not found" (#239).
 func grantProjectName(admin config.Admin, raw string, personal bool) (string, error) {
+	prefix := naming.NormalizeV2Prefix(admin.IncusProjectPrefix)
 	if personal {
-		return naming.PersonalTenantIncusProjectNameWithPrefix(admin.IncusProjectPrefix, raw)
+		return naming.PersonalTenantIncusProjectNameWithPrefix(prefix, raw)
 	}
 	ref, err := naming.ParseTenantRef(raw)
 	if err != nil {
 		return "", err
 	}
-	return naming.TenantIncusProjectNameWithPrefix(admin.IncusProjectPrefix, ref)
+	return naming.TenantIncusProjectNameWithPrefix(prefix, ref)
 }
 
 func planTenantAccess(admin config.Admin, request TenantAccessRequest) (UserPlan, error) {
