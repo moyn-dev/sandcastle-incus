@@ -407,7 +407,7 @@
     <section id="operations">
       <h2>Operational Notes</h2>
       <ul>
-        <li>The Auth Hostname is reserved infrastructure routing and should not be used as a user Public Route.</li>
+        <li>The Auth Hostname is reserved infrastructure routing and should not be used as a user Public Route (Public Routes are deprecated; publish with <code>sc tunnel publish</code>).</li>
         <li>The JWKS endpoint publishes public keys only. Private signing keys remain encrypted in the Auth Database.</li>
         <li>Machine runtime secrets are rotated when workload identity is enabled or re-enabled for a machine.</li>
         <li>Cloud Identity Configs are user-owned and tenant-scoped. They can be selected per machine or set as a validated project default.</li>

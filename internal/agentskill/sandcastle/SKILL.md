@@ -1,6 +1,6 @@
 ---
 name: sandcastle
-description: Drive Sandcastle from the shell with the `sc` and `sc-adm` CLIs. Use when creating, connecting to, listing, starting/stopping, or deleting Sandcastle machines; managing projects, public routes, base images, tenant DNS, trust, or SSH host keys; running `sc login` or enrolling a remote; operating an install with `sc-adm` (install, tenant/user provisioning, image aliases, fleet updates); or diagnosing a Sandcastle machine that will not connect, resolve, or serve a route.
+description: Drive Sandcastle from the shell with the `sc` and `sc-adm` CLIs. Use when creating, connecting to, listing, starting/stopping, or deleting Sandcastle machines; managing projects, Machine Tunnels (public publishing; legacy public routes are deprecated), base images, tenant DNS, trust, or SSH host keys; running `sc login` or enrolling a remote; operating an install with `sc-adm` (install, tenant/user provisioning, image aliases, fleet updates); or diagnosing a Sandcastle machine that will not connect, resolve, or serve a route.
 ---
 
 # Sandcastle from the shell
@@ -197,7 +197,7 @@ reach for a lifecycle verb, which refuses an unknown name. `sc fix` still
 creates silently.
 
 **Destructive commands need `--yes` without a TTY.** `sc delete`, `sc project
-delete`, `sc route delete`, `sc ssh-key purge` prompt interactively; with no
+delete`, `sc route delete` (deprecated), `sc ssh-key purge` prompt interactively; with no
 terminal the missing confirmation is an error, not a default-no. Pass `--yes`
 deliberately.
 
@@ -235,7 +235,8 @@ a TTY; `SANDCASTLE_NO_UPDATE_NOTIFIER=1` silences them.
 | `sc project …` | create, delete, list, switch, per-project settings |
 | `sc tenant …` / `sc remote …` | select tenant (Personal or Shared; `*` marks the active one) / manage and switch installs |
 | `sc login` / `sc enroll` | device login and provisioning / enroll from a token |
-| `sc route …` | publish a machine port to the public Internet |
+| `sc tunnel …` / `sc tailnet …` | publish a machine port publicly (Machine Tunnel) / over the tenant tailnet |
+| `sc route …` | **deprecated** legacy Public Routes; publish with `sc tunnel publish` instead |
 | `sc image …` | save, list, remove reusable base images |
 | `sc dns …` / `sc trust …` / `sc ssh-key purge` | legacy local resolver / legacy tenant CA / known_hosts |
 | `sc tailscale …` | attach, detach, check the tenant sidecar |
@@ -251,7 +252,7 @@ carry the semantics and gotchas `--help` does not.
 ## Reference
 
 - **`reference/operations.md`** — per-area recipes and semantics: projects,
-  public routes, base images, DNS and trust, the `/.sc` payload, SSH host keys,
+  Machine Tunnels, deprecated public routes, base images, DNS and trust, the `/.sc` payload, SSH host keys,
   updates, cloud identity, and the raw-`incus` escape hatch.
 - **`reference/admin.md`** — the `sc-adm` operator plane: installing a
   sandcastle, provisioning tenants and users, image aliases, appliances, and
@@ -259,7 +260,7 @@ carry the semantics and gotchas `--help` does not.
 - **`reference/internals.md`** — naming rules, Incus project and bridge layout,
   files on disk, environment variables, and JSON output shapes.
 - **`reference/troubleshooting.md`** — symptom → diagnosis → fix for connect,
-  DNS, tailnet, route, login, listing failures, and a public-named machine's
+  DNS, tailnet, legacy route, login, listing failures, and a public-named machine's
   per-hostname certificate states (`pending`/`issued`/`installed`/`renewing`/
   `failed:<reason>`, how to read the per-name `cert-state` and `last_error`,
   and what the zone reconciler logs).

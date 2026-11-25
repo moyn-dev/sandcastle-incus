@@ -7514,3 +7514,16 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
   default per ADR-0030), and step 4a expected the ambiguity question from the project that holds one of the two
   machines, which `resolveV2MachineTarget` deliberately resolves to the current project. Both are documented
   behaviour, so the doc moved.
+
+## 2026-11-25 — Public Routes deprecated in favour of Cloudflare Machine Tunnels
+
+- **Decision.** `sc route` (and `publish`/`list`/`status`/`delete`), the auth-app's own Caddy on host `:80`/`:443`,
+  and the install/deploy flags `--route-ingress`, `--route-base-domain`, `--route-cname-target`, `--route-front`,
+  `--route-dns-cloudflare-api-token`, `--route-dns-cloudflare-wildcard` are deprecated. The replacement is
+  `sc tunnel publish <machine> --port <port> --hostname <fqdn>`.
+- **Mechanism.** Cobra `Deprecated` on the commands and `MarkDeprecated` on the flags: each use prints a warning
+  and they drop out of `--help`, but behaviour is unchanged. Existing routes are neither migrated nor removed
+  (CLAUDE.md "Compatibility"). Docs mark the route sections deprecated and keep their content; the e2e route
+  phases (7b, 7f and variants) are marked as not part of the e2e; the agent skill steers to `sc tunnel publish`.
+- **Alternatives.** Removal now — rejected: it breaks installs and routes that exist today. Doc-only deprecation —
+  rejected: CLI users would never see it.

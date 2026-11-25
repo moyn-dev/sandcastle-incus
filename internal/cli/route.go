@@ -10,6 +10,7 @@ import (
 
 	authapp "github.com/moyn-dev/sandcastle-incus/internal/authapp"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // newRouteCommand assembles `sc route`: publish a Machine's local port to the
@@ -18,7 +19,11 @@ import (
 func newRouteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "route",
-		Short: "Publish a machine's local port to the public Internet",
+		Short: "Publish a machine's local port to the public Internet (deprecated: use sc tunnel publish)",
+		// Public Routes need host :80/:443 and a public IP; Machine Tunnels
+		// (Cloudflare) replace them. The command keeps working for existing
+		// routes; Cobra prints the notice and hides it from help.
+		Deprecated: routeDeprecation,
 		// Bare `sc route` answers "how do I publish, and what DNS do I need?"
 		// from the install itself. That answer is per-install (base domain, CNAME
 		// target, whether routes are enabled at all), so it cannot live in static
@@ -59,6 +64,10 @@ func newRouteCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	command.AddCommand(newRouteListCommand(config, opts))
 	command.AddCommand(newRouteStatusCommand(config, opts))
 	command.AddCommand(newRouteDeleteCommand(config, opts))
+	// Cobra announces deprecation only for the command actually run.
+	for _, sub := range command.Commands() {
+		sub.Deprecated = routeDeprecation
+	}
 	return command
 }
 
@@ -375,4 +384,16 @@ func routeMachineLabel(view authapp.RouteView) string {
 		return fqdn
 	}
 	return view.Machine
+}
+
+// routeDeprecation is the notice `sc route` and the --route-* install flags
+// print. Cobra prefixes it with `Command "route" is deprecated, `.
+const routeDeprecation = "public routes are superseded by Cloudflare Machine Tunnels: use `sc tunnel publish <machine> --port <port> --hostname <fqdn>`"
+
+// deprecateRouteFlags marks the appliance's route-ingress flags deprecated:
+// they still configure Public Routes, but say so and leave --help.
+func deprecateRouteFlags(flags *pflag.FlagSet) {
+	for _, name := range []string{"route-ingress", "route-base-domain", "route-cname-target", "route-front", "route-dns-cloudflare-api-token", "route-dns-cloudflare-wildcard"} {
+		_ = flags.MarkDeprecated(name, routeDeprecation)
+	}
 }

@@ -190,7 +190,7 @@
       <a href="#admin">Admin UI</a>
       <a href="#login">CLI Login</a>
       <a href="#workload">Workload Identity</a>
-      <a href="#routes">Public Routes</a>
+      <a href="#routes">Public Routes (deprecated)</a>
       <a href="#verify">Verify</a>
     </nav>
   </header>
@@ -352,7 +352,8 @@ curl https://auth.example.com/t/acme/.well-known/jwks.json</code></pre>
     </section>
 
     <section id="routes">
-      <h2>10. Public Routes</h2>
+      <h2>10. Public Routes (deprecated)</h2>
+      <p><strong>Deprecated.</strong> Public Routes are superseded by Cloudflare Machine Tunnels: use <code>sc tunnel publish &lt;machine&gt; --port &lt;port&gt; --hostname &lt;fqdn&gt;</code>. Existing routes keep working; this section is kept for reference.</p>
       <p>Public routes go through shared Caddy and the Route Broker. Configure these only when you have public DNS and an infrastructure host.</p>
       <pre><code>export SANDCASTLE_INFRA_HOST=203.0.113.10
 export SANDCASTLE_LETSENCRYPT_EMAIL=ops@example.com

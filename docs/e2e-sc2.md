@@ -1599,7 +1599,10 @@ sc delete web:dev1 --yes
 
 ---
 
-## Phase 7b — Expose a machine on `sc-edge` (public HTTPS) ✅
+## Phase 7b — Expose a machine on `sc-edge` (public HTTPS) ✅ — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 Create a machine with a name of your choice, run an app on `:3000`,
 find its internal IP with the **admin** incus, and add an `sc-edge` vhost. `sc-edge`
 lives in project **`infrastructure`** and reverse-proxies to the machine's internal IP
@@ -1638,7 +1641,10 @@ echo | openssl s_client -servername $HOST -connect 65.21.132.31:443 2>/dev/null 
 
 ---
 
-## Phase 7f — Publish a public route with `sc route` (Spec #111) ✅
+## Phase 7f — Publish a public route with `sc route` (Spec #111) ✅ — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 Phase 7b's manual `sc-edge` vhost is exactly what `sc route` productizes, but
 against the **auth-app appliance's own Caddy**, not a separate `sc-edge`.
 Requires **route ingress** — deploy with `--route-ingress acme` (on `sc-adm
@@ -1720,7 +1726,10 @@ sc route delete <hostname> --yes
 > (the tenant `sc` restricted cert wasn't set up on the test client); the `sc route`
 > CLI drives the same endpoints after a normal `sc login`.
 
-### Variant — wildcard route (`--hostname '*.<domain>'`, #141)
+### Variant — wildcard route (`--hostname '*.<domain>'`, #141) — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 A single Route can cover an open-ended set of subdomains — e.g. a push-to-deploy
 platform minting a fresh `<slug>.jot.moyn.dev` per deployment — instead of
 publishing one Route per name. There is no real wildcard certificate: Caddy's
@@ -1759,7 +1768,9 @@ sc route status '*.jot.moyn.dev'   # live once ANY real subdomain resolves —
   previously-hit subdomains stop resolving through this Route (their leaf certs
   simply go unused, nothing to clean up per-subdomain).
 
-### Variant — one DNS-01 certificate for a wildcard route
+### Variant — one DNS-01 certificate for a wildcard route — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
 
 Redeploy the appliance with route ingress plus a zone-scoped Cloudflare token:
 
@@ -1787,7 +1798,10 @@ Publish `*.jot.moyn.dev` as above.
 - `/etc/sandcastle/auth-app/route-dns.env` is mode `0600`, contains only the
   route DNS token, and is empty after redeploying without the option.
 
-### Route discovery — `sc route` and `GET /api/routes/config`
+### Route discovery — `sc route` and `GET /api/routes/config` — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 A Tenant cannot derive the route base domain or the CNAME target from anything
 they can see, so the install reports both: `GET /api/routes/config` (token-gated)
 returns `{enabled, ingress, baseDomain, cnameTarget}`, and bare `sc route` renders
@@ -1812,7 +1826,10 @@ carries login only).
 - The signed-in web page at the Auth Hostname shows the same facts under
   *Publish a public route*, and omits the section entirely where routes are off.
 
-### Variant — routes behind an existing edge (`--route-ingress acme-proxied`)
+### Variant — routes behind an existing edge (`--route-ingress acme-proxied`) — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 When the Incus host's `:80/:443` are already held by another appliance (a shared
 `sc-edge` fronting unrelated vhosts), `--route-ingress acme` cannot bind them.
 `--route-ingress acme-proxied` enables Public Routes **without** adding the
@@ -1854,7 +1871,10 @@ lives in the appliance.
   <ip>`) before pointing the front at it; the bridge lease is otherwise free to
   move on restart and the SNI upstream would go stale.
 
-### The front's SNI list is generated, not maintained (`--route-front`)
+### The front's SNI list is generated, not maintained (`--route-front`) — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 A shared front must know which hostnames to forward, and only the Auth App knows
 — it is where Routes are published. Deploy with `--route-front <project>/<instance>`
 and every Caddyfile regeneration also renders `/etc/caddy/sandcastle/<prefix>.caddy`
@@ -1881,7 +1901,10 @@ install, named by install prefix, with a per-install matcher name
   the connection back to the HTTP app — every local vhost broke with a TLS
   handshake failure until the config was rolled back (caught live 2026-07-21).
 
-### Non-interactive / hermetic variant (`scripts/e2e-route.sh`)
+### Non-interactive / hermetic variant (`scripts/e2e-route.sh`) — ⛔ deprecated — not part of the e2e; Machine Tunnels replace them
+
+> ⛔ **Deprecated.** Public Routes are superseded by Cloudflare Machine Tunnels (`sc tunnel publish <machine> --port <port> --hostname <fqdn>`, see "Machine publication lifecycle"). Kept for reference; not run in the e2e.
+
 The live check above needs public DNS + inbound `:80/:443` + real Let's Encrypt.
 For CI, deploy the appliance in **hermetic route-TLS mode** so the *entire chain*
 runs on a LAN with no public dependencies:

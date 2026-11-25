@@ -332,6 +332,7 @@ func newAdminInstallCommand(config commandConfig) *cobra.Command {
 	_ = command.Flags().MarkHidden("route-tls")
 	command.Flags().StringVar(&routeDNSCloudflareAPIToken, "route-dns-cloudflare-api-token", "", "Cloudflare API token with zone DNS edit access; wildcard public routes use one DNS-01 certificate instead of issuing a certificate per subdomain")
 	command.Flags().StringSliceVar(&routeDNSCloudflareWildcards, "route-dns-cloudflare-wildcard", nil, "exact leading-wildcard Public Route hostname authorized for Cloudflare DNS-01 (repeat for multiple hostnames)")
+	deprecateRouteFlags(command.Flags())
 	command.Flags().StringVar(&tunnelToken, "cloudflare-tunnel-token", "", "connector token of a dashboard-created Cloudflare tunnel routing the hostname to http://localhost:8080 (cloudflare ingress)")
 	command.Flags().StringVar(&cloudflareAPIToken, "cloudflare-api-token", "", "Cloudflare API token (Tunnel:Edit + DNS:Edit + Zone:Read): install creates the tunnel, ingress rule, and proxied DNS record itself (cloudflare ingress)")
 	return command
