@@ -78,8 +78,9 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 	if err != nil {
 		return cfg, "", err
 	}
-	// ~/.sandcastle is the local DNS state directory (localdns.DefaultStatePath),
-	// not a selection file; the walk passes it instead of failing on it.
+	// A ~/.sandcastle directory is legacy local DNS state (it now lives in
+	// ~/.config/sandcastle, and localdns removes the old dir once migrated), not
+	// a selection file; the walk passes it instead of failing on it.
 	stateDir := ""
 	if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
 		stateDir = filepath.Join(home, ".sandcastle")
@@ -153,6 +154,9 @@ func SaveDirectoryConfig(cfg DirectoryConfig) (string, error) {
 		if err != nil {
 			return "", err
 		}
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return "", fmt.Errorf("save selection: %s is a directory, not a selection file; move or remove it and retry", path)
 	}
 	if err := cfg.validate(); err != nil {
 		return "", err

@@ -71,8 +71,9 @@ func TestDirectorySelectionInvalidFileStopsLookup(t *testing.T) {
 	}
 }
 
-// sc login on Linux creates ~/.sandcastle/dns.yaml (local DNS state). That
-// directory must not break every command run below $HOME.
+// Older sc login runs on Linux left local DNS state in ~/.sandcastle/dns.yaml.
+// Until localdns migrates it, that directory must not break every command run
+// below $HOME, and a switch from $HOME must say why it cannot save.
 func TestDirectorySelectionSkipsHomeStateDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -95,8 +96,9 @@ func TestDirectorySelectionSkipsHomeStateDir(t *testing.T) {
 		t.Fatalf("from home: path=%q err=%v", path, err)
 	}
 	// A first switch from $HOME has nowhere to write: the name is taken.
-	if _, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"}); err == nil {
-		t.Fatal("save over the state dir should fail")
+	_, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("save over the state dir: want a clear is-a-directory error, got %v", err)
 	}
 }
 

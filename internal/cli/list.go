@@ -231,7 +231,11 @@ expand it first.`,
 				ShowImages:         showImages,
 			}
 			result, ok := listMachinesViaCache(cmd.Context(), runCfg, request, renderOpts)
-			if !ok {
+			if ok {
+				// The cache serves the raw cert-state mirror ("project");
+				// resolve it as the live listing does.
+				enrichProjectCertificates(cmd.Context(), runCfg, &result)
+			} else {
 				var err error
 				result, err = listMachines(cmd.Context(), runCfg, request)
 				if err != nil {

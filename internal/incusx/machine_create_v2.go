@@ -534,8 +534,8 @@ func shortProjectName(incusProject string) string {
 }
 
 // MachineLifecycleV2 applies start/stop/restart/delete to a freeform v2
-// machine. Delete force-stops a running instance first; state changes go
-// through the normal instance-state API.
+// machine. Delete force-stops a running instance first; stop and restart shut
+// the guest down cleanly and force only one that does not stop in time.
 func (c TenantCreator) MachineLifecycleV2(ctx context.Context, incusProject string, name string, action string) error {
 	server, err := c.resolveV2Server()
 	if err != nil {
@@ -571,18 +571,36 @@ func (c TenantCreator) MachineLifecycleV2(ctx context.Context, incusProject stri
 			}
 		}
 		return nil
-	case "start", "stop", "restart":
-		op, err := project.UpdateInstanceState(name, api.InstanceStatePut{Action: action, Force: action != "start", Timeout: -1}, "")
-		if err != nil {
-			return fmt.Errorf("%s machine %s: %w", action, name, err)
+	case "start":
+		return changeV2InstanceState(project, name, api.InstanceStatePut{Action: action, Timeout: -1})
+	case "stop", "restart":
+		// Shut the guest down cleanly first. A forced stop is a power cut: a VM
+		// loses what its page cache had not flushed yet (a first boot's TLS leaf
+		// came back as an empty file after `sc restart`, #239). Force only a
+		// guest that does not stop within the timeout.
+		graceful := api.InstanceStatePut{Action: action, Timeout: int(v2GracefulStopTimeout / time.Second)}
+		if err := changeV2InstanceState(project, name, graceful); err == nil {
+			return nil
 		}
-		if err := op.Wait(); err != nil {
-			return fmt.Errorf("wait for machine %s %s: %w", name, action, err)
-		}
-		return nil
+		return changeV2InstanceState(project, name, api.InstanceStatePut{Action: action, Force: true, Timeout: -1})
 	default:
 		return fmt.Errorf("unsupported machine action %q", action)
 	}
+}
+
+// v2GracefulStopTimeout is how long `sc stop`/`sc restart` waits for a
+// guest's own shutdown before forcing it.
+const v2GracefulStopTimeout = 30 * time.Second
+
+func changeV2InstanceState(project TenantResourceServer, name string, state api.InstanceStatePut) error {
+	op, err := project.UpdateInstanceState(name, state, "")
+	if err != nil {
+		return fmt.Errorf("%s machine %s: %w", state.Action, name, err)
+	}
+	if err := op.Wait(); err != nil {
+		return fmt.Errorf("wait for machine %s %s: %w", name, state.Action, err)
+	}
+	return nil
 }
 
 func v2MachineIPTimeout(vm bool) time.Duration {

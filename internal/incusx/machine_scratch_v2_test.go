@@ -53,6 +53,9 @@ type fakeScratchResource struct {
 	getVolumeErr      error
 	updateVolumeErr   error
 	deleteVolumeErr   error
+	updateStateErr    func(api.InstanceStatePut) error
+
+	stateChanges []api.InstanceStatePut
 
 	createdInstances []api.InstancesPost
 	createdVolumes   []api.StorageVolumesPost
@@ -109,7 +112,13 @@ func (r *fakeScratchResource) UpdateInstance(name string, put api.InstancePut, _
 	return fakeOperation{}, nil
 }
 
-func (r *fakeScratchResource) UpdateInstanceState(string, api.InstanceStatePut, string) (incus.Operation, error) {
+func (r *fakeScratchResource) UpdateInstanceState(_ string, state api.InstanceStatePut, _ string) (incus.Operation, error) {
+	r.stateChanges = append(r.stateChanges, state)
+	if r.updateStateErr != nil {
+		if err := r.updateStateErr(state); err != nil {
+			return nil, err
+		}
+	}
 	return fakeOperation{}, nil
 }
 
@@ -244,5 +253,47 @@ func TestProjectDeleteSweepsScratchVolumes(t *testing.T) {
 	}
 	if server.deletedProject != "sc-acme-default" {
 		t.Fatalf("project not deleted: %q", server.deletedProject)
+	}
+}
+
+// A forced stop is a power cut for a VM: unflushed writes are lost (#239).
+func TestMachineStopAndRestartShutDownCleanly(t *testing.T) {
+	for _, action := range []string{"stop", "restart"} {
+		resource, creator := scratchMachineFixture("tank")
+		if err := creator.MachineLifecycleV2(context.Background(), "sc-acme-default", "web", action); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		if len(resource.stateChanges) != 1 {
+			t.Fatalf("%s: state changes %+v, want one clean one", action, resource.stateChanges)
+		}
+		if got := resource.stateChanges[0]; got.Action != action || got.Force || got.Timeout <= 0 {
+			t.Fatalf("%s: sent %+v, want a non-forced %s with a timeout", action, got, action)
+		}
+	}
+}
+
+func TestMachineStopForcesAGuestThatDoesNotShutDown(t *testing.T) {
+	resource, creator := scratchMachineFixture("tank")
+	resource.updateStateErr = func(state api.InstanceStatePut) error {
+		if !state.Force {
+			return errors.New("Failed shutting down instance, status is \"Running\": context deadline exceeded")
+		}
+		return nil
+	}
+	if err := creator.MachineLifecycleV2(context.Background(), "sc-acme-default", "web", "stop"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if len(resource.stateChanges) != 2 || resource.stateChanges[0].Force || !resource.stateChanges[1].Force {
+		t.Fatalf("state changes %+v, want clean then forced", resource.stateChanges)
+	}
+}
+
+func TestMachineStartIsNotForced(t *testing.T) {
+	resource, creator := scratchMachineFixture("tank")
+	if err := creator.MachineLifecycleV2(context.Background(), "sc-acme-default", "web", "start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if len(resource.stateChanges) != 1 || resource.stateChanges[0].Force {
+		t.Fatalf("start sent %+v", resource.stateChanges)
 	}
 }

@@ -169,6 +169,22 @@ func DefaultStatePath() string {
 	if err != nil || home == "" {
 		return filepath.Join(".", "sandcastle-dns.yaml")
 	}
+	return filepath.Join(config.DefaultConfigDir(), "dns.yaml")
+}
+
+// legacyStatePath returns ~/.sandcastle/dns.yaml, where local DNS state lived
+// before it moved beside config.yml, when path is the default state path. The
+// old location collided with the `.sandcastle` directory-selection file, so a
+// state dir in $HOME blocked `sc remote switch` there. It returns "" for an
+// explicit SANDCASTLE_LOCAL_DNS_STATE or any other path: nothing to migrate.
+func legacyStatePath(path string) string {
+	if os.Getenv("SANDCASTLE_LOCAL_DNS_STATE") != "" || path != DefaultStatePath() {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
 	return filepath.Join(home, ".sandcastle", "dns.yaml")
 }
 

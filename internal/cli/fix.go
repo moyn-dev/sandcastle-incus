@@ -164,6 +164,11 @@ func knownFixupNames() string {
 // runFixV2 dials the machine and runs each selected fixup's script as root via
 // `sudo sh -s`, feeding the script on stdin so there is nothing to shell-quote.
 func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary, reference string, fixups []machineFixup, checkOnly bool) error {
+	// Refuse a bare machine before any fixup runs: the central ones would
+	// otherwise try (and fail) to install a key for a user it does not have.
+	if machine, bare := fixTargetIsBare(ctx, config, summary, reference); bare {
+		return bareFixError(machine)
+	}
 	var central, sshFixups []machineFixup
 	for _, fixup := range fixups {
 		if fixup.central != nil {
@@ -194,7 +199,7 @@ func runFixV2(ctx context.Context, config commandConfig, summary tenant.Summary,
 	// shell shims, the forwarded agent, sshd. A bare machine has none of it by
 	// design, so there is nothing to fix rather than something broken.
 	if dialed.bare {
-		return fmt.Errorf("machine %s was created with --bare: it has no login user, no sshd and no shell setup, so there is nothing for `sc fix` to install", dialed.machine)
+		return bareFixError(dialed.machine)
 	}
 	verb := "Fixing"
 	if checkOnly {
@@ -326,6 +331,36 @@ func reconcileMachineSudoFix(ctx context.Context, config commandConfig, summary 
 		fmt.Fprintf(config.stdout, "sudo: NEEDS FIX%s\n", detail)
 	}
 	return nil
+}
+
+func bareFixError(machine string) error {
+	return fmt.Errorf("machine %s was created with --bare: it has no login user, no sshd and no shell setup, so there is nothing for `sc fix` to install", machine)
+}
+
+// fixTargetIsBare looks the machine up in the store. A lookup that fails is
+// not an answer: the dial after the central fixups checks again.
+func fixTargetIsBare(ctx context.Context, config commandConfig, summary tenant.Summary, reference string) (string, bool) {
+	if config.machineStore == nil {
+		return "", false
+	}
+	project, machine, err := resolveV2MachineTarget(ctx, config, summary, reference)
+	if err != nil {
+		return "", false
+	}
+	machines, err := config.machineStore.ListMachines(ctx, summary)
+	if err != nil {
+		return "", false
+	}
+	for _, candidate := range machines {
+		name := strings.TrimSpace(candidate.Project)
+		if name == "" {
+			name = naming.DefaultProjectName
+		}
+		if name == project && candidate.Name == machine {
+			return machine, candidate.Bare
+		}
+	}
+	return "", false
 }
 
 // syncMachineSSHConfig maintains the machine's managed Host block in the local

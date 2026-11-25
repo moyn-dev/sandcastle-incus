@@ -434,6 +434,7 @@ func addIncusRemoteWithToken(ctx context.Context, ioConfig remoteAddIO, name str
 	// which every tenant-tailnet client can reach directly, so answer that prompt
 	// automatically instead of failing. Falls back to the caller's stdin when no
 	// tailnet address is known (v1 / non-sidecar remotes).
+	interactive := false
 	if addr := strings.TrimSpace(incusAddress); addr != "" {
 		// The prompt parses each entry as a URL, so it must carry a scheme —
 		// a bare host:port fails with "first path segment in URL cannot contain
@@ -441,10 +442,17 @@ func addIncusRemoteWithToken(ctx context.Context, ioConfig remoteAddIO, name str
 		addCmd.Stdin = strings.NewReader("https://" + net.JoinHostPort(addr, "8443") + "\n")
 	} else {
 		addCmd.Stdin = ioConfig.stdin
+		interactive = true
 	}
 	addCmd.Stdout = ioConfig.stdout
 	var addErr strings.Builder
-	addCmd.Stderr = io.MultiWriter(ioConfig.stderr, &addErr)
+	// With the prompt answered for it, incus's stderr is only shown when the
+	// add really failed: the expected "already trusted" refusal below is not
+	// an error the user should see. An interactive add streams it (prompts).
+	addCmd.Stderr = &addErr
+	if interactive {
+		addCmd.Stderr = io.MultiWriter(ioConfig.stderr, &addErr)
+	}
 	if err := addCmd.Run(); err != nil {
 		// Shared client identity: when this daemon already trusts our keypair
 		// (enrolled by another install on the same host), token redemption is
@@ -452,6 +460,9 @@ func addIncusRemoteWithToken(ctx context.Context, ioConfig remoteAddIO, name str
 		// unioned this install's projects into the trust entry, so add the
 		// remote certificate-based (with the SAME project pin) instead.
 		if !strings.Contains(addErr.String(), "already trusted") {
+			if !interactive {
+				fmt.Fprint(ioConfig.stderr, addErr.String())
+			}
 			return restoreBackup(fmt.Errorf("incus remote add: %w", err))
 		}
 		// The sidecar's tailnet address is preferred (ADR-0017), but it is only
