@@ -54,6 +54,7 @@ func connectInstanceServer(loaded *cliconfig.Config, remote string) (incus.Insta
 	if err != nil {
 		return nil, err
 	}
+	installPinnedDial(server)
 	return TraceInstanceServer(server), nil
 }
 

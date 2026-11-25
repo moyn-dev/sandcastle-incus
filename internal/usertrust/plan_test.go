@@ -44,7 +44,7 @@ func TestPlanGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !slices.Equal(plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("Projects = %#v", plan.Projects)
 	}
 }
@@ -58,7 +58,7 @@ func TestPlanGrantPersonalTenantAllowsGitHubUsernameNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CertificateName != "sandcastle-1octocat" || !slices.Equal(plan.Projects, []string{"sc-1octocat", "sc-1octocat-default"}) {
+	if plan.CertificateName != "sandcastle-1octocat" || !slices.Equal(plan.Projects, []string{"sc2-1octocat", "sc2-1octocat-default"}) {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -71,7 +71,7 @@ func TestPlanGrantDeduplicatesProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if !slices.Equal(plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("Projects = %#v", plan.Projects)
 	}
 }
@@ -98,7 +98,7 @@ func TestPlanTenantGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.User != "alice" || !slices.Equal(plan.Projects, []string{"sc-acme", "sc-acme-default"}) {
+	if plan.User != "alice" || !slices.Equal(plan.Projects, []string{"sc2-acme", "sc2-acme-default"}) {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -108,7 +108,7 @@ func TestPlanTenantUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Tenant != "acme" || plan.IncusProject != "sc-acme" {
+	if plan.Tenant != "acme" || plan.IncusProject != "sc2-acme" {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -210,7 +210,7 @@ func TestPlanTenantGrantCoversEveryAppProjectAndInstallCertificateName(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(plan.Projects, []string{"sc-moyn-dev", "sc-moyn-dev-default", "sc-moyn-dev-web"}) {
+	if !slices.Equal(plan.Projects, []string{"sc2-moyn-dev", "sc2-moyn-dev-default", "sc2-moyn-dev-web"}) {
 		t.Fatalf("Projects = %#v", plan.Projects)
 	}
 	if plan.CertificateName != "sandcastle-skorfmann" {

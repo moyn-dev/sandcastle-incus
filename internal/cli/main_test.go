@@ -8,7 +8,7 @@ import (
 )
 
 // TestMain points HOME at a throwaway directory for the whole package. Many
-// commands read and write ~/.config/sandcastle, ~/.ssh and ~/.sandcastle; a
+// commands read and write ~/.config/sandcastle and ~/.ssh; a
 // test that forgets useLoginHomeForTest must not reach the developer's real
 // files (it once wrote a fake login and SSH key there).
 func TestMain(m *testing.M) {

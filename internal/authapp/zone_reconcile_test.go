@@ -42,6 +42,8 @@ type fakeZoneFleet struct {
 	pushErr        error
 	// unreachable makes ReadInstanceFile fail with a non-404 error.
 	unreachable map[string]bool
+	// reads counts ReadInstanceFile calls per "<incusProject>/<name>:<path>".
+	reads map[string]int
 }
 
 type fakePush struct {
@@ -62,7 +64,7 @@ type fakeStamp struct {
 }
 
 func newFakeZoneFleet(machines ...ZoneMachine) *fakeZoneFleet {
-	return &fakeZoneFleet{machines: machines, files: map[string]string{}, unreachable: map[string]bool{}}
+	return &fakeZoneFleet{machines: machines, files: map[string]string{}, unreachable: map[string]bool{}, reads: map[string]int{}}
 }
 
 func (f *fakeZoneFleet) key(incusProject, name string) string { return incusProject + "/" + name }
@@ -78,6 +80,12 @@ func (f *fakeZoneFleet) file(incusProject, name, path string) (string, bool) {
 	defer f.mu.Unlock()
 	content, ok := f.files[f.key(incusProject, name)+":"+path]
 	return content, ok
+}
+
+func (f *fakeZoneFleet) readCount(incusProject, name, path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[f.key(incusProject, name)+":"+path]
 }
 
 func (f *fakeZoneFleet) ListZoneMachines(context.Context) ([]ZoneMachine, error) {
@@ -118,6 +126,7 @@ func (f *fakeZoneFleet) StampInstanceConfig(_ context.Context, incusProject, nam
 func (f *fakeZoneFleet) ReadInstanceFile(_ context.Context, incusProject, name, path string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads[f.key(incusProject, name)+":"+path]++
 	if f.unreachable[f.key(incusProject, name)] {
 		return "", errors.New("instance agent not reachable")
 	}

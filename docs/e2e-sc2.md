@@ -101,6 +101,14 @@ part of the default protocol.
 
 ### Multi-install coexistence + shared identity (validated from scratch 2026-07-07)
 
+> Re-run 2026-11-25 in a kitchen-setup box (#239): a second `sc-adm install
+> --prefix id --ingress cloudflare --cidr-pool 10.253.0.0/16` beside the default
+> install on one nested Incus, the same user logged into both from one client
+> (suffixes `castle`, `e2eid`). PASS: distinct `sc2-net`/`id-net`, nothing on
+> `:9443`, `INCUS_PROJECT` follows the remote, both resolver zones answer at once
+> and cross-zone queries are `REFUSED`, 7c-glob-installs, 14g, 14j and
+> cross-install `sc connect e2eid:default:dev`.
+
 Several sandcastles share one Incus host via `--prefix` (e.g. `sc` +
 `--prefix id`), each with its own hostname/tunnel, CIDR pool, and Tenant DNS
 Suffix. Validated **from scratch** (purged host → `install-incus` → two
@@ -469,6 +477,14 @@ sc login "https://$E2E_HOSTNAME" --simulate-token "$SIMULATE_TOKEN" --as e2edns 
 #    tag:sandcastle autoApprover)
 # PASS: all four routing checks ✓; the tenant's stored suffix is the chosen one
 #       (server: incus project get sc2-<tenant> user.sandcastle.v2.suffix)
+# PASS: `✓ local resolver: *.castle → tenant CoreDNS at <tenant .3>:53`, and
+#       afterwards `cd ~ && sc ls` and `cd ~ && sc remote switch <suffix>` work.
+#       The local DNS state lives in ~/.config/sandcastle/dns.yaml; a legacy
+#       ~/.sandcastle/dns.yaml is read once and moved there on the next write, and
+#       the empty ~/.sandcastle directory is removed. Before (#239) the state
+#       directory sat on the `.sandcastle` selection-file name: every `sc` under
+#       $HOME failed with `read ~/.sandcastle: is a directory`, the elevated
+#       resolver install with it, and a switch from $HOME with `rename … file exists`.
 
 # 2. projects + machines (flagless broker path, project-scoped refs)
 sc create web --detach                       # default project
@@ -1408,7 +1424,9 @@ sc ls -a 'zz*:*'                # project glob matching nothing → empty listin
 sc ls 'zzznope:*'               # literal project that does not exist → error, exit 1
 
 sc stop 'lc*'                   # acts on lc1 AND lc2, one report line each
-sc ls -a '*:lc*'                # both stopped
+sc ls -a '*:lc*'                # both stopped (a cache-backed listing can still say
+                                #   running for ~3 s after the stop: the cache follows the
+                                #   lifecycle event, not the CLI's own write)
 sc start 'lc?'                  # ? matches exactly one character
 sc restart '[lw]*'              # character class: lc1, lc2, web-a
 
@@ -1521,7 +1539,11 @@ sc delete $M --yes && sc c --yes $M -- true    # must NOT warn; must reclaim the
 # first boot: cloud-init deletes and regenerates every host key AFTER sshd is up
 sc delete $M --yes
 sc c --yes $M -- true                          # create+connect in one shot; must NOT warn
-ssh -o BatchMode=yes $M.default.$SUFFIX true   # bare ssh works, by name
+sc fix $M --only ssh-key                       # bare ssh needs the ~/.ssh/config block when the CLI
+                                               #   key is ~/.ssh/sandcastle_ed25519 (no id_ed25519)
+ssh -o BatchMode=yes $M.default.$SUFFIX true   # bare ssh works, by name (a lookup made while the
+                                               #   rebuilt name was briefly absent is NXDOMAIN-cached
+                                               #   by systemd-resolved for the zone's 60 s minimum)
 ssh -o BatchMode=yes $M.$SUFFIX true           # short alias too (default project, ADR-0018)
 
 # convergence: bare ssh's UpdateHostKeys must find nothing to add
@@ -2103,7 +2125,8 @@ sc c web -- 'hostname -f; id -un'
 #     web.default.<suffix>
 #     root
 sc ls                                       # → TYPE column reads "CT (bare)"
-sc fix web                                  # → refuses: nothing interactive to fix
+sc fix web                                  # → refuses up front: nothing interactive to fix
+                                            #   (no fixup runs first, no `invalid user` error)
 
 # …and nothing else is there
 sc incus exec web -- sh -c 'getent passwd | grep -c :2000:; systemctl is-active ssh'
@@ -2111,7 +2134,9 @@ sc incus exec web -- sh -c 'getent passwd | grep -c :2000:; systemctl is-active 
 sc incus exec web -- hostname -f            # → web.default.<suffix>
 
 # no shared storage: the only volume mount left is the read-only /.sc/platform
-sc incus exec web -- df --output=target | grep -E '^/(home|workspace)$'   # → no match
+sc incus exec web -- findmnt -n -o TARGET /home /workspace /.sc/platform  # → only /.sc/platform
+#   (`df` in a container lists no custom-volume mounts on a `dir` pool, so it
+#   proves nothing there; findmnt does)
 sc incus config device show web
 #   → home: {type: none}, workspace: {type: none}   (masks, not mounts)
 ```
@@ -2263,7 +2288,7 @@ leaf; the corrected machine-id reset was validated live (old→new random id).
 
 ---
 
-## Phase 8e — Dev Image: `sc create --image <dev-alias>` provisioning ⚠️
+## Phase 8e — Dev Image: `sc create --image <dev-alias>` provisioning ✅ in-project build + shell/toolchain/no-ingress checks (2026-11-25, #239)
 
 Validates the third Machine Template (`images/dev/Dockerfile`, `FROM
 ubuntu:26.04` — a distinct OS lineage from `base`/`ai`'s Debian) end to end: a
@@ -2323,8 +2348,9 @@ not for producing machine images. **PASS:** `incus image info <alias>` reports
   `-net.ipv4.ping_group_range = 0 2147483647` silently fails in an unprivileged
   container (gid unmapped → `EINVAL`, swallowed by the `-`), leaving
   `65534 65534` and "missing cap_net_raw+p capability or setuid?".
-  **PASS:** `sysctl -n net.ipv4.ping_group_range` → `0 65534`, from the image's
-  `/etc/sysctl.d/99-sandcastle-ping.conf`.
+  **PASS:** `sysctl -n net.ipv4.ping_group_range` → `0 65535` (the project
+  profile's cloud-init writes `/etc/sysctl.d/99-sandcastle-ping.conf` on every
+  machine, Dev Image included) and `ping -c1 <gateway>` succeeds as the login user.
 
 **PASS — AI CLI tooling (spec B6):**
 - `claude --version` and `codex --version` resolve; `~/.claude/skills`
@@ -2362,8 +2388,13 @@ not for producing machine images. **PASS:** `incus image info <alias>` reports
 
 **PASS — git identity self-populates (spec B9):**
 - Fresh machine, before any `gh auth login`: `git config --global
-  user.email` is empty; `git config --global --get-regexp 'alias\.'` already
-  lists the baseline (`co`, `br`, `st`, `last`, `unstage`, `amend`).
+  user.email` is empty; `git config --get-regexp '^alias\.'` already lists the
+  baseline (`co`, `br`, `st`, `last`, `unstage`, `amend`) — they live in the
+  system `/etc/gitconfig`, so `--global` (`~/.gitconfig`) shows none of them.
+  `mise ls` in an interactive shell (`zsh -ic`) lists `go`, `node`, `herdr`,
+  `starship`; a non-interactive `zsh -lc` has no mise on `PATH` (activation is in
+  `.zshrc`). Validated 2026-11-25 in a kitchen-setup box (#239):
+  `mise run image:dev:build-in-project` built the image in 240 s.
 - `gh auth login` (interactive; credential goes to `gh`'s own storage — OS
   keyring where available, 0600 file fallback — never a plaintext token file,
   never co-located with `~/.ssh/`), then a new shell: `git config --global
@@ -2508,6 +2539,15 @@ symlink (brew installs never self-replace); 10e notices
 throttled ≤1/24h per target and env-suppressible; 10f card states match the
 stamps.
 
+**Run 2026-11-25 (kitchen-setup box, #239), 10a–10f PASS** with release
+artifacts v0.25.0/v0.25.1. A dev-build sidecar (`v0.0.0-dev`) always reads
+`current` (`update.IsNewer` never calls a dev build outdated), so for 10c first
+roll a tenant to a release with the admin tree
+(`sc-adm update --version v0.25.0 --tenants <t> --yes`, which also moves the
+appliance), then `sc-adm update --yes` (appliance only): `sc update --check` then
+reads `v0.25.0 v0.25.1 outdated (tenant-managed)` and `sc update --yes` restarts
+only `sandcastle-tls-sign`.
+
 **Status (2026-07-17, v0.1.1 cut):** 10d validated live against the real
 v0.1.1 release — dev binary pinned to v0.1.1: asset + `checksums.txt`
 downloaded, SHA-256 verified, atomic replace through the `sc` symlink
@@ -2581,6 +2621,8 @@ machine on another install.
 # 1. Fresh tenant defaults on (created in this run, so the key was seeded)
 incus project get <prefix>-<tenant> user.sandcastle.v2.tailnet-egress   # true
 sc tailscale egress <tenant>                                             # Tailnet egress: on
+#   (admin identity: a tenant's login certificate cannot read its infra
+#   project, #245 — on the server: SANDCASTLE_REMOTE=local sandcastle tailscale egress <tenant>)
 
 # 2. Bridge carries both options (project default); the order is load-bearing
 incus network get <prefix>-<tenant> raw.dnsmasq
@@ -2612,6 +2654,14 @@ incus exec sidecar --project <prefix>-<tenant> -- tailscale debug prefs | grep R
 incus project get <prefix>-<old-tenant> user.sandcastle.v2.tailnet-egress   # empty
 sc tailscale egress <old-tenant> on && sc-adm tenant create <old-tenant> ...  # then steps 2-5 apply
 ```
+
+Run 2026-11-25 in a kitchen-setup box (#239), steps 1–6 PASS with both peers
+being the run's own nodes (the client VM's tailnet IP, and a machine behind the
+second tenant's sidecar `/24`), so nothing else on the tailnet is touched. Converge
+with the tenant's own `sc login --force` rather than `sc-adm tenant create`, which
+clobbers a stored user/key when re-run without them. In a box, step 6's tailnet-node
+curl still answers after `off`: the route falls back to `.1`, and the box itself
+routes `100.64.0.0/10`; the other sidecar's `/24` fails closed as specified.
 
 PASS: step 1 reads on for the fresh tenant. In step 5 the remote peer behind
 another sidecar's subnet route answers once the ACL allows it, and internet
@@ -2788,7 +2838,7 @@ API-key path — approval is a tenant action on the tenant's tailnet.)
 > what this appendix tests.
 
 
-## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027/0028) ⚠️ 12a–12f ALL PASS 2026-09-13 (`docs/e2e-runs/`), 12g not yet run
+## Phase 12 — Public DNS Zones: Machine Public Hostnames + Let's Encrypt staging (ADR-0027/0028) ✅ `scripts/e2e-pdz.sh` ALL PASS 2026-11-25 (12a–12c, 12f, 12g; kitchen-setup box, #239)
 
 A project claims a **Project Domain** under a Cloudflare zone the admin
 registered; every machine created in it afterwards gets the derived **Machine
@@ -2911,7 +2961,8 @@ sc project set-domain zp e2e-$RUN.$ZONE            # re-claim for the rest of th
 ```bash
 sc create zp:web
 # PASS: output has "DNS: web.zp.<suffix> (auto-registers within seconds)" and, under it,
-#       "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
+#       "Public name: web.e2e-$RUN.$ZONE (A record pending, served by project certificate)" — the name is
+#       one label under the Project Domain, so the project certificate (<domain>, *.<domain>) covers it
 #       (the IP: line stands alone above both) and returns without waiting;
 #       `sc create zp:web2 --dry-run` prints the same DNS: + Public name lines and makes no Auth App request;
 #       with the Auth App stopped the parenthesis reads
@@ -2969,10 +3020,15 @@ sc ls zp:web; sc project status zp
 #       (the push's `sandcastle-caddy-setup --refresh`), no failure loop.
 openssl s_client -connect <bridge-ip>:443 -servername web.e2e-$RUN.$ZONE </dev/null 2>/dev/null \
   | openssl x509 -noout -ext subjectAltName -issuer
-# PASS: both SANs `DNS:web.e2e-$RUN.$ZONE, DNS:*.web.e2e-$RUN.$ZONE` and an issuer from the Let's Encrypt
-#       STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
+# PASS: the project certificate's SANs `DNS:e2e-$RUN.$ZONE, DNS:*.e2e-$RUN.$ZONE` and an issuer from the
+#       Let's Encrypt STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
+#       `sc ls -l zp:web` CERT reads "ok (project installed; expires …)" — the cache-backed listing too
+#       (#239: it used to show the raw "project" mirror, so `sc ls` never said installed).
+#       The certificate lands within about a minute of `sc create`: the reconciler re-checks a young
+#       machine's Caddy Setup Marker every 30 s (#239: a cached "marker missing" used to hold it 10+ min).
 curl -s -o /dev/null -w '%{http_code}\n' --resolve x.web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://x.web.e2e-$RUN.$ZONE/
-# PASS: an HTTP status from Caddy (502 with nothing on :3000), not 000 — the wildcard vhost reaches the same Caddy.
+# PASS: 000 — the derived name's site carries no *.web.e2e-$RUN.$ZONE vhost (the project certificate covers
+#       one label); a machine wildcard is an explicit `--hostname '*.web.e2e-$RUN.$ZONE'` with its own order.
 dig +short TXT _acme-challenge.web.e2e-$RUN.$ZONE @1.1.1.1
 # PASS: empty once installed (certmagic cleans up; the reconciler sweeps before every order).
 sc create --bare zp:b1
@@ -3088,7 +3144,7 @@ sc create zp:api --hostname api-$RUN.$ZONE
 # PASS: output has "DNS: api.zp.<suffix> (auto-registers within seconds)" (every machine keeps its Machine
 #       Private Hostname) and one Public name line PER name:
 #       "Public name: api-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)" and
-#       "Public name: api.e2e-$RUN.$ZONE (A record pending, certificate pending — …)"; returns at once.
+#       "Public name: api.e2e-$RUN.$ZONE (A record pending, served by project certificate)"; returns at once.
 sc ls zp:api; sc ls zp:api --json | jq .machines[0].publicHostnames
 # PASS: FQDN column reads "api-$RUN.$ZONE (+1)" (first name + count); --json carries exactly
 #       ["api-$RUN.$ZONE","api.e2e-$RUN.$ZONE"] (sorted). `sc incus config get api user.sandcastle.v2.public-hostnames`
@@ -3131,15 +3187,17 @@ openssl s_client -connect <api-ip>:443 -servername api-$RUN.$ZONE </dev/null 2>/
 
 # refusals — every one --dry-run, and `sc ls zp:api --json` .publicHostnames is unchanged afterwards
 sc hostname add zp:api sub.e2e-$RUN.$ZONE --dry-run
-# PASS: `machine hostname "sub.e2e-$RUN.$ZONE" overlaps project domain "e2e-$RUN.$ZONE" claimed by project "zp"
-#       in this tenant` (a name inside a Project Domain — even the project's own — is the domain's).
+# PASS: accepted — "[dry-run] would have: claimed sub.e2e-$RUN.$ZONE for machine zp:api … served by project
+#       certificate": a name one label under the project's own domain is an alias the project certificate
+#       serves (only the project's derived name of ANOTHER machine, or another tenant's domain, conflicts).
 sc hostname add zp:web api-$RUN.$ZONE --dry-run
 # PASS: `machine hostname "api-$RUN.$ZONE" overlaps "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`.
 sc project create x-$RUN --domain api-$RUN.$ZONE --dry-run
 # PASS: `project domain "api-$RUN.$ZONE" overlaps hostname "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`
 #       (reverse check: a domain may not sit on, above or below a hostname).
 sc hostname add zp:api $ZONE --dry-run
-# PASS: `machine hostname "$ZONE" is a zone apex; use at least one label below $ZONE`.
+# PASS: `machine hostname "$ZONE" overlaps project domain "e2e-$RUN.$ZONE" claimed by project "zp" in this
+#       tenant` — a machine hostname may be the zone apex itself, but this apex's subtree holds the claim.
 sc hostname remove zp:api api.e2e-$RUN.$ZONE --dry-run
 # PASS: `machine hostname "api.e2e-$RUN.$ZONE" is not held by machine "zp:api"` — the derived name goes with the
 #       project's domain, never per machine.
@@ -3215,6 +3273,14 @@ GitHub client credentials are prohibited. The nested VM
 uses Tailscale for control-plane access only and keeps `tailscale set
 --accept-routes=false`; a separate enrolled Tailnet client accepts the Tenant
 subnet route.
+
+The Public DNS Zone may be a subzone of the Cloudflare zone; the driver walks up
+to the enclosing zone as the product does. But the tunnel hostname
+`tunnel-<id>.<zone>` is proxied, and Cloudflare's Universal SSL covers only one
+label below the Cloudflare zone: with a subzone such as `e2e.sc.<cf-zone>` the edge
+answers `ssl/tls alert handshake failure` and the tunnel phase cannot pass (#239).
+Use a Public DNS Zone that is itself a Cloudflare zone (or has an edge certificate
+for `*.<zone>`) for this phase.
 
 The Public DNS Zone token needs `Zone:Read`, `DNS:Edit`, and account-level
 `Cloudflare Tunnel:Edit`. Use a disposable subzone and Let's Encrypt staging.
@@ -3349,6 +3415,18 @@ SANDCASTLE_E2E_ADMIN_EXEC="incus exec big:sc-shared-e2e --" SANDCASTLE_E2E_PREFI
   scripts/e2e-shared-tenant.sh
 ```
 
+On a **default-prefix** install (`SANDCASTLE_E2E_PREFIX=sc`, projects `sc2-*`) the
+member grants used to address `sc-<tenant>` and failed with `update certificate …:
+Project not found` (#239: `usertrust` did not normalize the prefix the way every
+other v2 path does); it now passes there too. When the two logins used DNS
+suffixes other than `<user>sh`, name their remotes with
+`SANDCASTLE_E2E_SHARED_OWNER_REMOTE` / `SANDCASTLE_E2E_SHARED_MEMBER_REMOTE`;
+`SANDCASTLE_E2E_SHARED_NEWHOME` moves 13h's fresh device home off `/root` for a
+non-root client user. Validated 2026-11-25 in a kitchen-setup box (#239): driven
+from the box with `SANDCASTLE_E2E_ADMIN_EXEC='incus exec e2eserver --'` and
+`SANDCASTLE_E2E_CLIENT_EXEC='incus exec e2eclient --user <uid> --group <gid> --env HOME=<home> --cwd <dir> --'`,
+ALL PASS in 120 s.
+
 | Step | PASS criteria |
 |---|---|
 | **13a** prerequisite | both users list their Personal Tenant; `sc-adm tenant create … --member never-logged-in` is **refused** with ``must run `sc login` `` and creates nothing |
@@ -3408,13 +3486,13 @@ restart repair one machine). Run every guest step on a container AND a VM
 |---|---|
 | **15a** container | `sc create s1` prints a `Scratch: /scratch on volume s1-scratch (100GiB)` line; `incus storage volume show <pool> s1-scratch --project <p>` shows `user.sandcastle.scratch: "true"`, `size: 100GiB`, no `snapshots.schedule` value, and `used_by` lists only `s1`; `incus config device show s1` has a `scratch` disk at `/scratch` with that source |
 | **15b** VM | `sc create s2 --vm --scratch-size 20GiB`: the volume has `size: 20GiB`; inside, `findmnt /scratch` shows `virtiofs` and `touch /scratch/tmp/x` works as the login user |
-| **15c** guest binds | inside `s1` and `s2`, after first boot and again after `sc restart`: `systemctl is-system-running` prints `running` and `systemctl --failed` lists nothing (no `226/NAMESPACE` from a PrivateTmp service); `hostnamectl` prints the machine's hostname; `findmnt /tmp` and `findmnt /var/tmp` show bind mounts whose source path ends in `/tmp` and `/var-tmp` of the scratch volume; `stat -c %a /tmp /var/tmp` prints `1777` twice; `systemctl is-enabled sc-scratch` is `enabled`, and after the restart `systemctl is-active sc-scratch` is `active` (on first boot cloud-init runs the setup itself and restarts the PrivateTmp services, so the unit is only enabled); in `s2` (VM) `findmnt -n /scratch \| wc -l` prints `1` (the unit mounted the share, the Incus agent did not mount it again) |
+| **15c** guest binds | inside `s1` and `s2`, after first boot and again after `sc restart`: `systemctl is-system-running` prints `running` and `systemctl --failed` lists nothing (no `226/NAMESPACE` from a PrivateTmp service); `hostnamectl` prints the machine's hostname; `findmnt /tmp` and `findmnt /var/tmp` show bind mounts whose source path ends in `/tmp` and `/var-tmp` of the scratch volume; `stat -c %a /tmp /var/tmp` prints `1777` twice; `systemctl is-enabled sc-scratch` is `enabled`, and after the restart `systemctl is-active sc-scratch` is `active` (on first boot cloud-init runs the setup itself and restarts the PrivateTmp services, so the unit is only enabled); in `s2` (VM) `findmnt -n /scratch \| wc -l` prints `1` (the unit mounted the share, the Incus agent did not mount it again); `stat -c %s /etc/sandcastle/tls/cert.pem` is non-zero after the restart and `systemctl is-active caddy` is `active` (a restart within ~30 s of first boot used to be a forced power-off that left the VM's TLS leaf as an empty file and Caddy failed, #239: `sc stop`/`restart` now shut down cleanly, forcing only after 30 s). Restart only after `cloud-init status --wait` reports `done`: interrupting first-boot cloud-init leaves the machine half-provisioned whatever the stop mode |
 | **15d** caches | the default profile installs no Go, pip or zsh, so first `sudo apt-get update && sudo apt-get install -y golang-go python3-pip`. In an interactive `sc connect <m>` shell: `echo $XDG_CACHE_HOME` and `bash -lc 'echo $XDG_CACHE_HOME'` both print `/scratch/cache/<user>`, and `stat -c '%a %U' /scratch/cache/<user>` prints `700 <user>`; a non-interactive `ssh <m> 'echo $XDG_CACHE_HOME'` prints nothing (documented). Then `mkdir /tmp/h && cd /tmp/h && go mod init h && printf 'package main\nfunc main() {}\n' > main.go && go build` and `python3 -m pip download --no-deps -d /tmp/dl requests`: `du -s /scratch/cache/<user>/go-build /scratch/cache/<user>/pip` prints two non-zero sizes. `XDG_CACHE_HOME=/elsewhere bash -lic 'echo $XDG_CACHE_HOME'` prints `/elsewhere`. With the dir loosened (`chmod 755 /scratch/cache/<user>`), a fresh login shell (`env -u XDG_CACHE_HOME bash -lc true`) sets it back to `700` |
 | **15e** quota | in `s2` (20GiB), `dd if=/dev/urandom of=/scratch/tmp/big bs=1M count=21000` fails (urandom, because ZFS compression stores zeros as nothing) with `Disk quota exceeded` (EDQUOT from the ZFS quota); `df /home /` before and after shows no change in free space |
 | **15f** snapshots | `incus snapshot create s1` (or waiting for a scheduled run) creates no snapshot of `s1-scratch` (`incus storage volume snapshot list <pool> s1-scratch --project <p>` is empty); a pool with `volume.snapshots.schedule` set still gives the new volume no schedule |
 | **15g** delete | `sc delete s1 --yes` removes `s1` and `s1-scratch`; `incus storage volume list <pool> --project <p>` shows no `*-scratch` orphan. With a scratch volume that cannot be deleted (e.g. attached to a second instance by hand), `sc delete` exits non-zero naming the volume and the `incus storage volume delete` command |
 | **15h** opt-out and legacy | `sc create s3 --no-scratch` creates no volume, `/tmp` stays on the root disk, `systemctl --failed` lists nothing, and after `sc restart s3` `systemctl is-active sc-scratch` is `active` (the unit ran and found no volume); `sc create s4 --scratch-size lots` fails before anything is created; a machine created by an older binary (no unit) boots unchanged with no failed units; in a project not yet re-rendered, a new machine gets `/scratch` but `systemctl cat sc-scratch` fails until `sc project rerender` (new machines) or `sc fix <m> --only scratch` (that machine) |
-| **15i** project delete | a project holding machines with scratch volumes is deleted by `sc project delete` without a volume-in-use or volume-left error |
+| **15i** project delete | `sc project delete` refuses while the project still holds a machine (`still contains machine …`); after `sc delete` of its machines the project deletes with no volume-in-use or volume-left error, and no `*-scratch` volume remains |
 | **15j** migration | on a tenant with a machine `old` created by a pre-#210 binary (container, running) and a stopped VM `oldvm`: `sc-adm tenant scratch-migrate <tenant> --check` lists both as `would attach` and creates nothing (`incus storage volume list` unchanged); the real run reports `old` as `attached (live)` and `oldvm` as `attached (mounted at next start)`, and `old` sees `/scratch` without a restart; a second run reports every machine as `already has scratch` and changes nothing; the sidecar is never listed. A pre-#210 `--bare` machine is listed as `skipped (bare machine: re-create it to get scratch)` by both runs and gets no volume; a hand-made unmarked `<m>-scratch` volume makes `--check` report that machine `FAILED` with the same reason as the real run. Run without `SANDCASTLE_INCUS_PROJECT_PREFIX` against a non-default install (obelix): stderr notes the install and the run proceeds. With a second app project, `--check --project <short>` and `--project <full incus name>` list only that project's machines, and `--project nope` fails naming `"nope"` before touching anything. Then `sc fix old --only scratch` and `sc restart old`: `findmnt /tmp` shows the bind. A file put in `/var/tmp` before the restart (`touch /var/tmp/keep`) is still there after it, now on the volume (`ls /scratch/var-tmp/keep`); data in the old `/tmp` is not copied and nothing is deleted |
 
 ---
@@ -3433,5 +3511,5 @@ Sandcastle remote into `~/.config/incus` with the Sandcastle keypair as
 | **16a** login | `sc login <auth-hostname>` prints ``Plain `incus` remotes in ~/.config/incus: added <remote>.``; with no `INCUS_CONF`, `incus list <remote>:` lists the tenant's machines, and `incus list <admin-remote>:` still works with the admin identity |
 | **16b** untouched | `~/.config/incus/client.crt`, `default-remote`, aliases and every admin remote are byte-identical before and after; a native remote that already had the Sandcastle remote's name is left as-is and the login prints `Note: not mirroring <name>: …` |
 | **16c** idempotent | `sc update --check` shows `native incus mirror … N remote(s) current`; a second `sc login` leaves `~/.config/incus/config.yml` unmodified (same mtime) |
-| **16d** removal | after the remote is dropped from `~/.config/sandcastle/incus` (`INCUS_CONF=~/.config/sandcastle/incus incus remote remove <remote>`), `sc update --yes` removes it and its `clientcerts`/`servercerts` files from `~/.config/incus` |
+| **16d** removal | after the remote is dropped from `~/.config/sandcastle/incus` (`INCUS_CONF=~/.config/sandcastle/incus incus remote switch local` first when it is that dir's default remote — Incus refuses to remove the default — then `… incus remote remove <remote>`), `sc update --yes` removes it and its `clientcerts`/`servercerts` files from `~/.config/incus` |
 | **16e** opt-out | with `SANDCASTLE_INCUS_NATIVE_MIRROR=0` (or `incus_native_mirror: false` in `~/.config/sandcastle/config.yml`) no sync runs and `sc update --check` shows no mirror row; mirrors made earlier stay |

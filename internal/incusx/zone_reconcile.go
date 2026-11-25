@@ -99,6 +99,8 @@ func (s ZoneMachineServer) listZoneMachines(ctx context.Context, fleet authapp.I
 					Running:         instance.IsActive(),
 					CertState:       strings.TrimSpace(instance.Config[meta.KeyV2CertState]),
 					CertNotAfter:    strings.TrimSpace(instance.Config[meta.KeyV2CertNotAfter]),
+					// Incus bumps last_used_at on every start.
+					StartedAt: instance.LastUsedAt,
 				})
 			}
 		}

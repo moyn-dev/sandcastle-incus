@@ -171,7 +171,15 @@ func writeLocalDNS(plan Plan) (legacyRemoved bool, err error) {
 func readState(path string) (State, error) {
 	content, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return State{}, nil
+		legacy := legacyStatePath(path)
+		if legacy == "" || !isDir(filepath.Dir(legacy)) {
+			return State{}, nil
+		}
+		// Not migrated yet: the next writeState moves it to path.
+		content, err = os.ReadFile(legacy)
+		if os.IsNotExist(err) {
+			return State{}, nil
+		}
 	}
 	if err != nil {
 		return State{}, err
@@ -187,6 +195,7 @@ func readState(path string) (State, error) {
 }
 
 func writeState(path string, state State) error {
+	created := missingAncestors(filepath.Dir(path))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -197,7 +206,65 @@ func writeState(path string, state State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, content, 0o644)
+	_, statErr := os.Stat(path)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return err
+	}
+	if os.IsNotExist(statErr) {
+		created = append(created, path)
+	}
+	chownToSudoInvoker(created)
+	removeLegacyState(path)
+	return nil
+}
+
+// removeLegacyState drops ~/.sandcastle/dns.yaml once its content lives at
+// path, then the ~/.sandcastle directory if that left it empty. A `.sandcastle`
+// selection file in $HOME is not a directory and is never touched. Failures are
+// ignored: the new file already wins on every read.
+func removeLegacyState(path string) {
+	legacy := legacyStatePath(path)
+	if legacy == "" || !isDir(filepath.Dir(legacy)) {
+		return
+	}
+	_ = os.Remove(legacy)
+	_ = os.Remove(filepath.Dir(legacy)) // fails unless empty
+}
+
+// missingAncestors lists dir and each parent that does not exist yet, outermost
+// first: the paths a MkdirAll(dir) is about to create.
+func missingAncestors(dir string) []string {
+	var missing []string
+	for ; ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); err == nil || filepath.Dir(dir) == dir {
+			break
+		}
+		missing = append([]string{dir}, missing...)
+	}
+	return missing
+}
+
+// chownToSudoInvoker hands paths this process just created back to the user who
+// ran sudo. The elevated `dns apply-elevated` child keeps the invoker's HOME, so
+// a root-owned ~/.config/sandcastle would break the user's next config.yml
+// write. Outside sudo it does nothing.
+func chownToSudoInvoker(paths []string) {
+	if os.Geteuid() != 0 || len(paths) == 0 {
+		return
+	}
+	uid, uidErr := strconv.Atoi(os.Getenv("SUDO_UID"))
+	gid, gidErr := strconv.Atoi(os.Getenv("SUDO_GID"))
+	if uidErr != nil || gidErr != nil {
+		return
+	}
+	for _, path := range paths {
+		_ = os.Lchown(path, uid, gid)
+	}
+}
+
+func isDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 func tenantState(plan Plan) (TenantState, error) {

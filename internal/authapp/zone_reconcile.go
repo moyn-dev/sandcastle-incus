@@ -69,6 +69,9 @@ type ZoneMachine struct {
 	// KeyV2CertNotAfter values, compared before mirroring.
 	CertState    string
 	CertNotAfter string
+	// StartedAt is the instance's last start (Incus last_used_at); zero
+	// when unknown, which never counts as young.
+	StartedAt time.Time
 }
 
 // key identifies the instance in per-pass caches and log dedupe.
@@ -155,6 +158,15 @@ type zoneReconciler struct {
 	kickMu sync.Mutex
 	kick   func()
 
+	// awaitingMarker is set by a pass that left a young Machine's push
+	// waiting on its Caddy Setup Marker; the pass then schedules one
+	// follow-up. followUpPending coalesces: one timer for the reconciler.
+	// afterFunc is time.AfterFunc (tests capture it).
+	awaitingMarker  bool
+	followUpMu      sync.Mutex
+	followUpPending bool
+	afterFunc       func(time.Duration, func())
+
 	mu sync.Mutex // serializes passes
 
 	inflightMu sync.Mutex
@@ -175,9 +187,10 @@ type zoneReconciler struct {
 
 	// fileCache remembers file reads across passes (HANDOFF incusd-polling:
 	// marker, hostnames, certificate and key reads were ~half of the
-	// auth-app's Incus traffic). An entry is trusted for fileCacheTTL unless
-	// the Machine was pushed to by us or its project saw a lifecycle event,
-	// which drop the Machine's entries. TTL 0 (tests) disables the cache.
+	// auth-app's Incus traffic). An entry is trusted for fileCacheTTL (a
+	// "not found" for at most zoneFileMissTTL) unless the Machine was pushed
+	// to by us or its project saw a lifecycle event, which drop the
+	// Machine's entries. TTL 0 (tests) disables the cache.
 	fileCacheMu  sync.Mutex
 	fileCache    map[string]map[string]cachedFileRead // machine key → path → read
 	fileCacheTTL time.Duration
@@ -187,6 +200,15 @@ type cachedFileRead struct {
 	content string
 	err     error
 	at      time.Time
+}
+
+// ttl is how long the read is trusted: fileCacheTTL, capped at
+// zoneFileMissTTL for "not found".
+func (c cachedFileRead) ttl(fileCacheTTL time.Duration) time.Duration {
+	if c.err != nil {
+		return min(fileCacheTTL, zoneFileMissTTL)
+	}
+	return fileCacheTTL
 }
 
 // markProjectDirty drops every cached read of the project's Machines (a
@@ -209,7 +231,10 @@ func (r *zoneReconciler) forgetMachineFiles(incusProject, name string) {
 }
 
 // readFile is ReadInstanceFile through the cache. Unreachable-instance
-// errors are not cached (the next pass retries); "not found" is.
+// errors are not cached (the next pass retries). "Not found" is cached for
+// at most zoneFileMissTTL: a file appearing (cloud-init writing the Caddy
+// Setup Marker a minute or two after boot) fires no lifecycle event, so a
+// long-lived miss would hold back the certificate push until fileCacheTTL.
 func (r *zoneReconciler) readFile(ctx context.Context, incusProject, name, path string) (string, error) {
 	if r.fileCacheTTL <= 0 {
 		return r.machines.ReadInstanceFile(ctx, incusProject, name, path)
@@ -218,7 +243,7 @@ func (r *zoneReconciler) readFile(ctx context.Context, incusProject, name, path 
 	now := r.now()
 	r.fileCacheMu.Lock()
 	if byPath := r.fileCache[key]; byPath != nil {
-		if cached, hit := byPath[path]; hit && now.Sub(cached.at) < r.fileCacheTTL {
+		if cached, hit := byPath[path]; hit && now.Sub(cached.at) < cached.ttl(r.fileCacheTTL) {
 			r.fileCacheMu.Unlock()
 			return cached.content, cached.err
 		}
@@ -257,7 +282,29 @@ func newZoneReconciler(db *sql.DB, machines ZoneMachineServer, issuer certIssuer
 		providerByZone:  map[string]zoneProvider{},
 		markerByMachine: map[string]markerRead{},
 		namedBefore:     map[string]struct{}{},
+		afterFunc:       func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}
+}
+
+// scheduleMarkerFollowUp asks for one pass in zoneMarkerFollowUpDelay when
+// the pass that just ran left a young Machine waiting on its marker, unless
+// a follow-up is already pending.
+func (r *zoneReconciler) scheduleMarkerFollowUp() {
+	if !r.awaitingMarker {
+		return
+	}
+	r.followUpMu.Lock()
+	defer r.followUpMu.Unlock()
+	if r.followUpPending {
+		return
+	}
+	r.followUpPending = true
+	r.afterFunc(zoneMarkerFollowUpDelay, func() {
+		r.followUpMu.Lock()
+		r.followUpPending = false
+		r.followUpMu.Unlock()
+		r.RequestPass()
+	})
 }
 
 // setKick installs the loop's trigger.
@@ -372,6 +419,8 @@ func (r *zoneReconciler) ReconcileFleet(ctx context.Context, listed InstanceFlee
 	// marker cache lives one pass too.
 	r.providerByZone = map[string]zoneProvider{}
 	r.markerByMachine = map[string]markerRead{}
+	r.awaitingMarker = false
+	defer r.scheduleMarkerFollowUp()
 
 	var errs []error
 	var fleet []machineTargets
@@ -1006,6 +1055,9 @@ func (r *zoneReconciler) markerReady(ctx context.Context, t zoneTarget) (bool, e
 		r.logOnce(r.markerLogged, m.key()+"/not-pushed/"+t.hostname, "INFO",
 			"zone reconcile: %s: caddy setup marker missing or unreadable (%s); certificate for %s not pushed",
 			m.key(), tenant.CaddySetupMarkerPath, t.hostname)
+		if !m.StartedAt.IsZero() && r.now().Sub(m.StartedAt) < zoneYoungMachineAge {
+			r.awaitingMarker = true
+		}
 		return false, nil
 	}
 	if !marker.ReadyFor(t.hostname) {

@@ -251,7 +251,7 @@ func TestAdminGrantAndRevokeMaintainTenantMembership(t *testing.T) {
 	}
 	// The certificate grant spans every app project the tenant has, and the
 	// membership is recorded in Tenant Metadata.
-	if len(access.grants) != 1 || !slices.Equal(access.grants[0].Projects, []string{"sc-moyn-dev", "sc-moyn-dev-default", "sc-moyn-dev-web"}) {
+	if len(access.grants) != 1 || !slices.Equal(access.grants[0].Projects, []string{"sc2-moyn-dev", "sc2-moyn-dev-default", "sc2-moyn-dev-web"}) {
 		t.Fatalf("grants = %#v", access.grants)
 	}
 	if !slices.Equal(members.added, []string{"moyn-dev:skorfmann"}) {

@@ -123,3 +123,19 @@ const dnsLoopInterval = 5 * time.Minute
 // our own pushes and lifecycle events invalidate earlier. External drift on
 // a quiet Machine is therefore noticed within this window, not per pass.
 const zoneFileCacheTTL = 10 * time.Minute
+
+// zoneFileMissTTL bounds how long a "not found" read is trusted. Longer
+// than the event settle passes (3s, 8s), so one event burst reads a missing
+// file once; shorter than zoneMarkerFollowUpDelay, so the follow-up pass
+// re-reads a young Machine's missing marker.
+const zoneFileMissTTL = 20 * time.Second
+
+// zoneYoungMachineAge is how long after its last start a Machine without a
+// Caddy Setup Marker is expected to get one (cloud-init writes it a minute
+// or two after boot). While such a young Machine waits for a push, the
+// reconciler asks for a follow-up pass every zoneMarkerFollowUpDelay; an
+// older markerless Machine (Dev Image, no Caddy) waits for the ticker.
+const zoneYoungMachineAge = 10 * time.Minute
+
+// zoneMarkerFollowUpDelay is the delay of that follow-up pass.
+const zoneMarkerFollowUpDelay = 30 * time.Second

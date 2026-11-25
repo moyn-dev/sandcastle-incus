@@ -1325,10 +1325,7 @@ func bootstrapTenant(config commandConfig, result usertrust.TokenResult) string 
 	if len(result.Projects) == 0 {
 		return ""
 	}
-	prefix := config.adminConfig.IncusProjectPrefix
-	if prefix == "" {
-		prefix = "sc"
-	}
+	prefix := naming.NormalizeV2Prefix(config.adminConfig.IncusProjectPrefix)
 	if tenant, ok := strings.CutPrefix(result.Projects[0], prefix+"-"); ok {
 		return tenant
 	}

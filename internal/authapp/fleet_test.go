@@ -112,6 +112,10 @@ func TestZoneFileCacheServesRepeatsUntilPushOrEvent(t *testing.T) {
 	if _, err := r.readFile(context.Background(), "sc2-acme-default", "web", "/etc/missing"); !errors.Is(err, ErrInstanceFileNotFound) {
 		t.Fatalf("not-found should stay cached: %v", err)
 	}
+	now = now.Add(zoneFileMissTTL)
+	if got, err := r.readFile(context.Background(), "sc2-acme-default", "web", "/etc/missing"); err != nil || got != "late" {
+		t.Fatalf("a cached not-found must expire after zoneFileMissTTL: %q %v", got, err)
+	}
 	r.fileCacheTTL = 0
 	if read() != "four" {
 		t.Fatal("TTL 0 bypasses the cache")

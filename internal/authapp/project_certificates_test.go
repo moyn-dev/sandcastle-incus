@@ -237,3 +237,136 @@ func TestProjectCertificateStatusAndUnset(t *testing.T) {
 		t.Fatalf("project row survived unset: %v", err)
 	}
 }
+
+// The Caddy Setup Marker lands a minute or two after boot and fires no
+// lifecycle event. The project certificate is issued before it; the next
+// ticker pass after the marker appears must push, while a Machine that never
+// gets a marker costs one marker read per ticker pass, not one per pass.
+func TestProjectCertificatePushedOnceMarkerAppearsWithoutEvent(t *testing.T) {
+	web, dev := zoneMachine("web", "10.249.7.9", true), zoneMachine("dev", "10.249.7.10", true)
+	h := newZoneHarness(t, web, dev)
+	h.rec.fileCacheTTL = zoneFileCacheTTL
+	certPath := tenant.MachineTLSHostCertPath("baum.hase.de")
+
+	// Create burst (event + settle passes): order completes, no marker yet.
+	h.passes(3)
+	if !h.row("baum.hase.de").hasCertificate() {
+		t.Fatal("project certificate not issued")
+	}
+	if _, ok := h.fleet.file(web.IncusProject, web.Name, certPath); ok {
+		t.Fatal("pushed before the marker exists")
+	}
+	if n := h.fleet.readCount(dev.IncusProject, dev.Name, tenant.CaddySetupMarkerPath); n != 1 {
+		t.Fatalf("marker reads in one burst = %d, want 1", n)
+	}
+
+	// cloud-init writes the marker; no event. The next ticker pass pushes.
+	h.ready(web.IncusProject, web.Name, web.PublicHostnames...)
+	h.now = h.now.Add(dnsLoopInterval)
+	h.passes(1)
+	if got, ok := h.fleet.file(web.IncusProject, web.Name, certPath); !ok || got != h.row("baum.hase.de").CertPEM {
+		t.Fatal("certificate not pushed on the ticker pass after the marker appeared")
+	}
+
+	// The markerless Machine: one marker read per ticker pass (the create
+	// burst read it once, the first ticker pass once more).
+	for tick := 2; tick <= 4; tick++ {
+		h.now = h.now.Add(dnsLoopInterval)
+		h.passes(3)
+		if n := h.fleet.readCount(dev.IncusProject, dev.Name, tenant.CaddySetupMarkerPath); n != tick+1 {
+			t.Fatalf("marker reads after tick %d = %d, want %d", tick, n, tick+1)
+		}
+	}
+}
+
+// A young Machine (just started) whose marker is missing gets a follow-up
+// pass within zoneMarkerFollowUpDelay, so its certificate lands about a
+// minute after the marker appears without any lifecycle event. An old
+// markerless Machine (Dev Image) never schedules one.
+func TestProjectCertificateFollowUpPassForYoungMachineAwaitingMarker(t *testing.T) {
+	web, dev := zoneMachine("web", "10.249.7.9", true), zoneMachine("dev", "10.249.7.10", true)
+	type timer struct {
+		at time.Time
+		f  func()
+	}
+	setup := func(machines ...ZoneMachine) (*zoneHarness, *[]timer, *int) {
+		h := newZoneHarness(t, machines...)
+		h.rec.fileCacheTTL = zoneFileCacheTTL
+		timers, kicks := &[]timer{}, new(int)
+		h.rec.afterFunc = func(d time.Duration, f func()) { *timers = append(*timers, timer{h.now.Add(d), f}) }
+		h.rec.setKick(func() { *kicks++ })
+		return h, timers, kicks
+	}
+
+	// Old markerless Machine only: no follow-up, ever.
+	dev.StartedAt = time.Date(2026, 9, 12, 9, 0, 0, 0, time.UTC) // an hour before the harness clock
+	h, timers, kicks := setup(dev)
+	h.passes(3)
+	*kicks = 0 // the finished order's own kick
+	for i := 0; i < 3; i++ {
+		h.now = h.now.Add(dnsLoopInterval)
+		h.passes(1)
+	}
+	if len(*timers) != 0 || *kicks != 0 {
+		t.Fatalf("old markerless machine: %d follow-ups, %d kicks; want none", len(*timers), *kicks)
+	}
+
+	// Young Machine beside it: the create burst schedules ONE follow-up.
+	h, timers, kicks = setup(web, dev)
+	h.fleet.machines[0].StartedAt = h.now
+	h.passes(3)
+	if !h.row("baum.hase.de").hasCertificate() {
+		t.Fatal("project certificate not issued")
+	}
+	if len(*timers) != 1 {
+		t.Fatalf("burst scheduled %d follow-ups, want 1 (coalesced)", len(*timers))
+	}
+	certPath := tenant.MachineTLSHostCertPath("baum.hase.de")
+	// Follow-ups keep coming while the marker is absent (cached miss or not).
+	fire := func() {
+		t.Helper()
+		next := (*timers)[0]
+		*timers = (*timers)[1:]
+		h.now = next.at
+		before := *kicks
+		next.f()
+		if *kicks != before+1 {
+			t.Fatal("follow-up did not request a pass")
+		}
+		h.passes(1)
+	}
+	fire()
+	if len(*timers) != 1 {
+		t.Fatalf("no follow-up rescheduled while the marker is missing: %d", len(*timers))
+	}
+	// cloud-init writes the marker at T; no event. Pushed within a minute.
+	markerAt := h.now.Add(time.Second)
+	h.ready(web.IncusProject, web.Name, web.PublicHostnames...)
+	fire()
+	if got, ok := h.fleet.file(web.IncusProject, web.Name, certPath); !ok || got != h.row("baum.hase.de").CertPEM {
+		t.Fatal("certificate not pushed by the follow-up pass")
+	}
+	if delay := h.now.Sub(markerAt); delay > time.Minute {
+		t.Fatalf("pushed %s after the marker appeared", delay)
+	}
+	if len(*timers) != 0 {
+		t.Fatalf("follow-up scheduled after the push: %d", len(*timers))
+	}
+
+	// A young Machine that never gets a marker: follow-ups stop once it is
+	// zoneYoungMachineAge old.
+	h, timers, kicks = setup(web)
+	h.fleet.machines[0].StartedAt = h.now
+	created := h.now
+	h.passes(3)
+	*kicks = 0
+	for len(*timers) > 0 {
+		fire()
+		if h.now.Sub(created) > zoneYoungMachineAge+zoneMarkerFollowUpDelay {
+			t.Fatalf("follow-ups past the young window (%s)", h.now.Sub(created))
+		}
+	}
+	if max := int(zoneYoungMachineAge / zoneMarkerFollowUpDelay); *kicks > max {
+		t.Fatalf("%d follow-up kicks, want at most %d", *kicks, max)
+	}
+}
