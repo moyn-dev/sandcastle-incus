@@ -78,8 +78,24 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 	if err != nil {
 		return cfg, "", err
 	}
+	// ~/.sandcastle is the local DNS state directory (localdns.DefaultStatePath),
+	// not a selection file; the walk passes it instead of failing on it.
+	stateDir := ""
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
+		stateDir = filepath.Join(home, ".sandcastle")
+	}
 	for {
 		path = filepath.Join(dir, ".sandcastle")
+		if path == stateDir {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					return cfg, "", nil
+				}
+				dir = parent
+				continue
+			}
+		}
 		data, readErr := os.ReadFile(path)
 		if readErr == nil {
 			if err = yaml.UnmarshalStrict(data, &cfg); err == nil {

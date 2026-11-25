@@ -469,6 +469,11 @@ sc login "https://$E2E_HOSTNAME" --simulate-token "$SIMULATE_TOKEN" --as e2edns 
 #    tag:sandcastle autoApprover)
 # PASS: all four routing checks ✓; the tenant's stored suffix is the chosen one
 #       (server: incus project get sc2-<tenant> user.sandcastle.v2.suffix)
+# PASS: `✓ local resolver: *.castle → tenant CoreDNS at <tenant .3>:53`, and
+#       afterwards `cd ~ && sc ls` works. Login keeps its DNS state in the
+#       directory ~/.sandcastle/; the directory-selection lookup passes over that
+#       directory instead of failing with `read ~/.sandcastle: is a directory`
+#       (which broke the elevated resolver install and every later `sc` under $HOME, #239)
 
 # 2. projects + machines (flagless broker path, project-scoped refs)
 sc create web --detach                       # default project
