@@ -71,6 +71,35 @@ func TestDirectorySelectionInvalidFileStopsLookup(t *testing.T) {
 	}
 }
 
+// sc login on Linux creates ~/.sandcastle/dns.yaml (local DNS state). That
+// directory must not break every command run below $HOME.
+func TestDirectorySelectionSkipsHomeStateDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".sandcastle"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".sandcastle", "dns.yaml"), []byte("suffixes: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(home, "src")
+	if err := os.Mkdir(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(child)
+	if _, path, err := LoadDirectoryConfig(""); err != nil || path != "" {
+		t.Fatalf("home state dir: path=%q err=%v", path, err)
+	}
+	t.Chdir(home)
+	if _, path, err := LoadDirectoryConfig(""); err != nil || path != "" {
+		t.Fatalf("from home: path=%q err=%v", path, err)
+	}
+	// A first switch from $HOME has nowhere to write: the name is taken.
+	if _, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"}); err == nil {
+		t.Fatal("save over the state dir should fail")
+	}
+}
+
 func TestLoadUserDirectoryPrecedenceAndIdentity(t *testing.T) {
 	clearAdminEnvForTest(t)
 	t.Setenv("HOME", t.TempDir())

@@ -7514,3 +7514,7 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
   default per ADR-0030), and step 4a expected the ambiguity question from the project that holds one of the two
   machines, which `resolveV2MachineTarget` deliberately resolves to the current project. Both are documented
   behaviour, so the doc moved.
+
+## 2026-11-25 — `~/.sandcastle` is both the DNS state dir and a selection-file name (#239)
+
+The e2e run in a kitchen-setup box found that `sc login` on Linux writes `~/.sandcastle/dns.yaml` (localdns state), and the directory-selection lookup (`LoadDirectoryConfig`) then fails on that directory for every command run below `$HOME`, including the elevated `dns apply-elevated` child, so the local resolver install failed too. Decision: the lookup passes over `$HOME/.sandcastle` when it is a directory, and only then. Alternatives: move the DNS state to `~/.config/sandcastle/` (changes an established path and needs a migration), or skip every `.sandcastle` directory (contradicts `TestDirectorySelectionInvalidFileStopsLookup`, which keeps a stray directory an error). The elevated child gets `HOME` passed through (`sudoPassthroughEnv`), so it skips the same path. A first `sc project switch` run from `$HOME` itself still can't write a file there; switching from a checkout below `$HOME` is unaffected.
