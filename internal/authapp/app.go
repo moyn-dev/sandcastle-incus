@@ -544,6 +544,17 @@ func (r HTTPRunner) runDNSReconcileLoop(ctx context.Context, logger *svclog.Logg
 						}
 						reconcile()
 					}
+					for _, settle := range lateSettles {
+						if !dirty.awaitingLease() {
+							break
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(settle):
+						}
+						reconcile()
+					}
 					dirty.clear()
 				}
 			}

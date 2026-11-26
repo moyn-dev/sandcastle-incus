@@ -39,6 +39,11 @@ func fleetFromSnapshot(snapshot ResourceCacheSnapshot) InstanceFleet {
 type dirtyProjects struct {
 	mu       sync.Mutex
 	projects map[string]struct{}
+	// awaiting marks the dirty projects whose last live read still had a
+	// running instance without an IPv4 address: the lease has not landed,
+	// so the loop keeps passing (lateSettles) instead of waiting for the
+	// ticker.
+	awaiting map[string]struct{}
 }
 
 func (d *dirtyProjects) add(project string) {
@@ -67,6 +72,55 @@ func (d *dirtyProjects) clear() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.projects = nil
+	d.awaiting = nil
+}
+
+// setAwaiting records whether project's live read is still waiting for a lease.
+func (d *dirtyProjects) setAwaiting(project string, waiting bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !waiting {
+		delete(d.awaiting, project)
+		return
+	}
+	if d.awaiting == nil {
+		d.awaiting = map[string]struct{}{}
+	}
+	d.awaiting[project] = struct{}{}
+}
+
+// awaitingLease reports whether any dirty project is still waiting for a lease.
+func (d *dirtyProjects) awaitingLease() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.awaiting) > 0
+}
+
+// leasePending reports a running instance with no global IPv4 address yet.
+func leasePending(instances []api.InstanceFull) bool {
+	for _, instance := range instances {
+		if instance.StatusCode != api.Running {
+			continue
+		}
+		if instance.State == nil {
+			return true
+		}
+		addressed := false
+		for name, network := range instance.State.Network {
+			if name == "lo" {
+				continue
+			}
+			for _, address := range network.Addresses {
+				if address.Family == "inet" && address.Scope == "global" {
+					addressed = true
+				}
+			}
+		}
+		if !addressed {
+			return true
+		}
+	}
+	return false
 }
 
 // fleetSource assembles the pass's fleet: the resource cache when ready, else
@@ -106,12 +160,19 @@ func (s fleetSource) fleet(ctx context.Context) InstanceFleet {
 			continue
 		}
 		fleet[project] = instances
+		s.dirty.setAwaiting(project, leasePending(instances))
 		if s.cache != nil {
 			s.cache.setProjectInstances(project, instances)
 		}
 	}
 	return fleet
 }
+
+// lateSettles are the extra passes after an event's settle passes while a
+// dirty project still has a running instance without an address: a lease
+// can land well after 8 s (a fresh machine on a loaded host), and its A
+// records should not wait for the ticker.
+var lateSettles = []time.Duration{15 * time.Second, 30 * time.Second, 60 * time.Second}
 
 // dnsLoopInterval is the fallback pass cadence. Events (with settle passes)
 // give convergence within seconds; the ticker only backstops missed events

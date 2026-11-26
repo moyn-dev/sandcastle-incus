@@ -16,9 +16,9 @@ description = "REUSABLE, pre-authorized Tailscale auth key allowed to carry tag:
 required = false       # a required secret that is not granted stops every launch of this repo (kitchen-setup#49)
 
 [secrets.SANDCASTLE_E2E_CLOUDFLARE_TOKEN]
-description = "Cloudflare API token, Zone:Read + DNS:Edit on the e2e zone only; Phase 12 (pdz) is skipped without it"
+description = "Cloudflare API token for the e2e test domain moyn-dev.net only: Zone:Read + DNS:Edit on that zone, plus account-level Cloudflare Tunnel:Edit (the Cloudflare-ingress install and the Machine Tunnel phase create tunnels); Phase 12 (pdz) is skipped without it"
 required = false
 
 [secrets.SANDCASTLE_E2E_PUBLIC_DNS_ZONE]
-description = "the Cloudflare zone Phase 12 creates its records under; Phase 12 is skipped without it"
+description = "moyn-dev.net, the dedicated e2e test domain (a Cloudflare zone of its own, so the free Universal SSL certificate covers every one-label e2e hostname: Auth Hostname, Project Domains, tunnels); Phase 12 is skipped without it"
 required = false

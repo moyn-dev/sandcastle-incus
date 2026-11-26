@@ -98,7 +98,7 @@ func newProjectSwitchCommand(config commandConfig, opts *rootOptions) *cobra.Com
 		Use:     "switch name",
 		Aliases: []string{"sw"},
 		Short:   "Select the local current project in the current tenant",
-		Long:    "Select the project in the nearest .sandcastle (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
+		Long:    "Select the project in the nearest .sandcastle.yml (create in the current directory if absent). By default this checks the project exists in the current tenant; use --local-only to skip the lookup. Global Sandcastle and Incus defaults are unchanged.",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := switchProjectSelection(cmd.Context(), config, strings.TrimSpace(args[0]), localOnly)

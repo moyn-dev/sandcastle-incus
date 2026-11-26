@@ -345,7 +345,7 @@ The first segment of a Sandcastle Path: the first DNS label of the install's Aut
 _Avoid_: Remote name, Tenant DNS Suffix, install prefix
 
 **Current Position**:
-The install, tenant and project every unqualified user command acts in, recorded per directory tree in the nearest `.sandcastle` (as the remote serving them) and shown by `sc pwd`. Its levels are root, install, tenant and project; it may stand above a project after `sc cd ..`. The switch commands and `sc cd` both move it.
+The install, tenant and project every unqualified user command acts in, recorded per directory tree in the nearest `.sandcastle.yml` (as the remote serving them) and shown by `sc pwd`. Its levels are root, install, tenant and project; it may stand above a project after `sc cd ..`. The switch commands and `sc cd` both move it.
 _Avoid_: Working directory, context, cwd, session position
 
 **Current Project**:

@@ -208,6 +208,13 @@ func (r *zoneReconciler) forgetMachineFiles(incusProject, name string) {
 	delete(r.fileCache, incusProject+"/"+name)
 }
 
+// forgetFile drops one cached read of a Machine.
+func (r *zoneReconciler) forgetFile(incusProject, name, path string) {
+	r.fileCacheMu.Lock()
+	defer r.fileCacheMu.Unlock()
+	delete(r.fileCache[incusProject+"/"+name], path)
+}
+
 // readFile is ReadInstanceFile through the cache. Unreachable-instance
 // errors are not cached (the next pass retries); "not found" is.
 func (r *zoneReconciler) readFile(ctx context.Context, incusProject, name, path string) (string, error) {
@@ -967,6 +974,11 @@ func (r *zoneReconciler) readMarker(ctx context.Context, m ZoneMachine) (tenant.
 	content, err := r.readFile(ctx, m.IncusProject, m.Name, tenant.CaddySetupMarkerPath)
 	switch {
 	case errors.Is(err, ErrInstanceFileNotFound):
+		// An absent marker is a Machine still booting: cloud-init writes it
+		// without an Incus lifecycle event, so a cached not-found would hold
+		// the first certificate push back for zoneFileCacheTTL. Re-read it
+		// next pass.
+		r.forgetFile(m.IncusProject, m.Name, tenant.CaddySetupMarkerPath)
 		r.logOnce(r.markerLogged, m.key()+"/absent", "INFO",
 			"zone reconcile: %s: no caddy setup marker; A record only", m.key())
 	case err != nil:

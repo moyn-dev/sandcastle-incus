@@ -62,7 +62,7 @@ func newPwdCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 
 // newCdCommand moves the Current Position: `sc cd /install/tenant/project`,
 // `sc cd ..`, `sc cd -`, `sc cd` (home). It is the path-shaped front of the
-// three switch commands and writes the same .sandcastle they do.
+// three switch commands and writes the same .sandcastle.yml they do.
 func newCdCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 	var localOnly bool
 	command := &cobra.Command{
@@ -85,7 +85,7 @@ install must be enrolled, the tenant listed by its Auth App and the project
 present in the tenant. A tenant with no Incus remote on this client yet is
 enrolled the way sc tenant switch enrols it. --local-only records the position
 without those lookups. A machine is a leaf: use sc connect to enter one. The
-position is saved in the nearest .sandcastle, the file the switch commands
+position is saved in the nearest .sandcastle.yml, the file the switch commands
 write, so it is per directory tree, not per terminal. A path that starts with
 a remote name instead of an install (/moyn-dev-miraculix/moyn-dev) still works
 and prints its install form.`,
@@ -110,7 +110,7 @@ and prints its install form.`,
 // runCd resolves the target and applies the switches it implies, in tree
 // order: the remote serving the install and tenant (enrolling one when the
 // tenant has none yet), then the tenant, then the project. Each switch
-// writes .sandcastle and the global config exactly as its command does; the
+// writes .sandcastle.yml and the global config exactly as its command does; the
 // config is reloaded between them so the next step sees the new state. The
 // level and the previous position are recorded last.
 func runCd(ctx context.Context, config commandConfig, arg string, localOnly bool) (positionOutput, error) {

@@ -8,17 +8,20 @@
 # What it proves, in order:
 #   12a  zone registry: add / list / duplicate / bad token / nesting refusals
 #   12b  Project Domain claim + status, the claim refusals, set-domain no-op
-#   12c  `sc create` prints the DNS: line AND the Public name line; both A
-#        records reach public DNS; CERT goes pending → ok; `sc project status`
-#        shows installed + NOT AFTER; `openssl s_client` serves both SANs from
-#        the STAGING issuer; the wildcard vhost answers over the same Caddy
+#   12c  `sc create` prints the DNS: line AND the Public name line ("served by
+#        project certificate"); both A records reach public DNS; the Project
+#        Certificate (docs/spec/project-certificates.md) goes pending → ok;
+#        `sc project status` shows installed + NOT AFTER + SANs <domain>,
+#        *.<domain>; `openssl s_client` serves that certificate for the derived
+#        name from the STAGING issuer, and Caddy answers HTTPS on it
 #   12g  `sc create --hostname` with an apex-level name under the zone: the
-#        machine carries the derived name AND the explicit one, records + a
-#        certificate per name, the private name still serves the tenant-CA
+#        machine carries the derived name (project certificate) AND the
+#        explicit one (its own per-name certificate), records per name, the private name still serves the tenant-CA
 #        leaf; `sc hostname add` on the running machine → its own certificate
-#        (the first one is not reissued); the refusals (inside a Project
-#        Domain, name held by another machine, domain over a hostname, apex,
-#        derived name not removable); `sc hostname remove` → records gone, the
+#        (the first one is not reissued); an alias under the own Project
+#        Domain accepted (dry-run); the refusals (the derived name claimed
+#        explicitly, name held by another machine, domain over a hostname,
+#        apex, derived name not removable); `sc hostname remove` → records gone, the
 #        name no longer served, the others untouched; `sc create --hostname`
 #        of a taken name refused
 #   12f  zone remove refused while the domain is claimed; delete → A records
@@ -151,6 +154,15 @@ assert_staging_cert() {
   [[ "$x509" == *"$STAGING_MARK"* ]] || fail "issuer for $2 is not the Let's Encrypt STAGING hierarchy (was the Auth App deployed with --acme-directory staging?)"
 }
 cert_serial() { served_cert "$1" "$2" | sed -n 's/^serial=//p'; }
+# assert_project_cert <ip> <name>: the SNI <name> (a derived one-label name
+# under $PD) serves the Project Certificate, $PD + *.$PD, from STAGING.
+assert_project_cert() {
+  local x509; x509="$(served_cert "$1" "$2")"
+  [[ -n "$x509" ]] || fail "openssl s_client to $1:443 (SNI $2) served no certificate — is this client on the tenant tailnet?"
+  echo "$x509"
+  [[ "$x509" == *"DNS:$PD"* && "$x509" == *"DNS:*.$PD"* ]] || fail "SNI $2 is not served the project certificate ($PD + *.$PD)"
+  [[ "$x509" == *"$STAGING_MARK"* ]] || fail "issuer of the project certificate is not the Let's Encrypt STAGING hierarchy (was the Auth App deployed with --acme-directory staging?)"
+}
 
 # ---- 12a — zone registry (admin) ---------------------------------------------
 step "12a zone registry"
@@ -195,7 +207,7 @@ pass "set-domain with the same domain is a no-op"
 step "12c machine contract"
 OUT="$(sc create "$REF")" || fail "sc create $REF"
 echo "$OUT"
-[[ "$OUT" == *"Public name: $FQDN (A record pending, certificate pending — see: sc project status $PROJECT)"* ]] \
+[[ "$OUT" == *"Public name: $FQDN (A record pending, served by project certificate)"* ]] \
   || fail "sc create output lacks the Public name line"
 [[ "$OUT" == *"DNS: $MACHINE.$PROJECT."* ]] || fail "sc create printed no DNS: line — every machine keeps its Machine Private Hostname (ADR-0028)"
 pass "sc create prints the DNS: line and the Public name line"
@@ -218,20 +230,24 @@ pass "both A records answer $IP"
 cert_ok() { cert_installed "$MACHINE" "$FQDN"; }
 wait_for "$CERT_TIMEOUT" "CERT installed on $FQDN" cert_ok
 pass "cert-state installed"
-sc ls "$REF" | awk -v m="$MACHINE" '$2==m' | grep -qw ok || fail "sc ls CERT column is not ok: $(sc ls "$REF")"
+sc ls -l "$REF" | awk -v m="$MACHINE" '$2==m' | grep -qw ok || fail "sc ls CERT column is not ok: $(sc ls -l "$REF")"
 pass "sc ls CERT = ok"
 STATUS="$(sc project status "$PROJECT" --json)"
-echo "$STATUS" | jq -e --arg m "$MACHINE" --arg h "$FQDN" '.machines[] | select(.machine==$m and .publicHostname==$h) | .certState=="installed" and (.certNotAfter|length>0)' >/dev/null \
-  || fail "sc project status: $MACHINE/$FQDN not installed with a NOT AFTER: $STATUS"
-pass "sc project status shows installed with NOT AFTER $(echo "$STATUS" | jq -r --arg m "$MACHINE" '.machines[]|select(.machine==$m)|.certNotAfter' | head -1)"
+echo "$STATUS" | jq -e --arg d "$PD" '.certState=="installed" and (.certNotAfter|length>0) and ((.sans|sort)==([$d, "*."+$d]|sort))' >/dev/null \
+  || fail "sc project status: the project certificate is not installed with a NOT AFTER and SANs $PD, *.$PD: $STATUS"
+pass "sc project status shows the project certificate installed, NOT AFTER $(echo "$STATUS" | jq -r .certNotAfter), SANs $PD, *.$PD"
 
-assert_staging_cert "$IP" "$FQDN"
-pass "Caddy serves both SANs from the Let's Encrypt staging issuer"
+# Caddy picks the certificate up on its refresh after the install.
+project_cert_served() { [[ "$(served_cert "$IP" "$FQDN")" == *"DNS:*.$PD"* ]]; }
+wait_for 120 "Caddy to serve the project certificate for $FQDN" project_cert_served
+assert_project_cert "$IP" "$FQDN"
+pass "Caddy serves $FQDN the project certificate from the Let's Encrypt staging issuer"
 # No file routes since ADR-0031: any HTTP status (502 with nothing on :3000)
-# proves the wildcard vhost terminated TLS on the same Caddy; 000 does not.
-CODE="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 --resolve "x.$FQDN:443:$IP" "https://x.$FQDN/" || true)"
-[[ "$CODE" =~ ^[1-5][0-9][0-9]$ ]] || fail "wildcard vhost https://x.$FQDN/ answered $CODE"
-pass "wildcard vhost x.$FQDN answers ($CODE) over the same Caddy"
+# proves Caddy terminated TLS for the derived name; 000 does not. The
+# project certificate covers one label only, so *.$FQDN gets no vhost.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -k --resolve "$FQDN:443:$IP" "https://$FQDN/" || true)"
+[[ "$CODE" =~ ^[1-5][0-9][0-9]$ ]] || fail "https://$FQDN/ answered $CODE"
+pass "https://$FQDN/ answers ($CODE) over the machine's Caddy"
 
 # ---- 12g — explicit Machine Public Hostnames (ADR-0028) ------------------------
 step "12g explicit hostnames"
@@ -240,11 +256,11 @@ OUT="$(sc create "$REF2" --hostname "$HOST2")" || fail "sc create $REF2 --hostna
 echo "$OUT"
 [[ "$OUT" == *"DNS: $PRIVATE2 "* ]] || fail "sc create --hostname output lacks the DNS: $PRIVATE2 line"
 [[ "$OUT" == *"Public name: $HOST2 (A record pending, certificate pending"* ]] || fail "sc create output lacks the Public name line for $HOST2"
-[[ "$OUT" == *"Public name: $FQDN2 (A record pending, certificate pending"* ]] || fail "sc create output lacks the Public name line for the derived $FQDN2"
+[[ "$OUT" == *"Public name: $FQDN2 (A record pending, served by project certificate)"* ]] || fail "sc create output lacks the Public name line for the derived $FQDN2"
 pass "sc create --hostname prints the DNS: line and one Public name line per name (explicit + derived)"
 [[ "$(machine_json "$MACHINE2" | jq -c '.publicHostnames')" == "$(jq -nc --arg a "$HOST2" --arg b "$FQDN2" '[$a,$b]|sort')" ]] \
   || fail "sc ls --json publicHostnames is not exactly {$HOST2, $FQDN2}: $(machine_json "$MACHINE2")"
-sc ls "$REF2" | grep -q "$HOST2 (+1)" || fail "sc ls FQDN column does not read '$HOST2 (+1)': $(sc ls "$REF2")"
+sc ls -l "$REF2" | grep -q "$HOST2 (+1)" || fail "sc ls FQDN column does not read '$HOST2 (+1)': $(sc ls -l "$REF2")"
 pass "sc ls shows the public name set ($HOST2 (+1); --json lists both)"
 LISTING="$(sc hostname list "$REF2")"; echo "$LISTING"
 echo "$LISTING" | grep -q "^$HOST2 *explicit *$ZONE" || fail "sc hostname list lacks the explicit row for $HOST2"
@@ -260,7 +276,7 @@ wait_for "$DNS_TIMEOUT" "A records of $HOST2 and $FQDN2 (base + wildcard) → $I
 pass "A records for the apex-level $HOST2 and the derived $FQDN2 answer $IP2"
 cert2_ok() { cert_installed "$MACHINE2" "$HOST2" && cert_installed "$MACHINE2" "$FQDN2"; }
 wait_for "$CERT_TIMEOUT" "CERT installed on $HOST2 and $FQDN2" cert2_ok
-sc ls "$REF2" | awk -v m="$MACHINE2" '$2==m' | grep -qw ok || fail "sc ls CERT column is not ok: $(sc ls "$REF2")"
+sc ls -l "$REF2" | awk -v m="$MACHINE2" '$2==m' | grep -qw ok || fail "sc ls CERT column is not ok: $(sc ls -l "$REF2")"
 pass "cert-state installed for both names; sc ls CERT = ok"
 assert_staging_cert "$IP2" "$HOST2"
 SERIAL_HOST2="$(cert_serial "$IP2" "$HOST2")"
@@ -298,10 +314,21 @@ assert_staging_cert "$IP2" "$HOST2"
 pass "$HOST2 still serves its first certificate (serial $SERIAL_HOST2) — one certificate per hostname"
 
 # refusals (all --dry-run: nothing changes)
-expect_fail "machine hostname \"sub.$PD\" overlaps project domain \"$PD\" claimed by project \"$PROJECT\" in this tenant" -- sc hostname add "$REF2" "sub.$PD" --dry-run
+# A one-label name under the machine's own Project Domain is an alias the
+# project certificate serves (docs/spec/project-certificates.md); only the
+# machine's own derived name cannot be claimed explicitly.
+OUT="$(sc hostname add "$REF2" "sub.$PD" --dry-run)" || fail "sc hostname add $REF2 sub.$PD --dry-run (an alias) was refused: $OUT"
+[[ "$OUT" == *"served by project certificate"* ]] || fail "alias sub.$PD dry-run does not say it is served by the project certificate: $OUT"
+pass "alias sub.$PD is accepted (dry-run), served by the project certificate"
+expect_fail "machine hostname \"$FQDN2\" overlaps project domain \"$PD\" claimed by project \"$PROJECT\" in this tenant" -- sc hostname add "$REF2" "$FQDN2" --dry-run
 expect_fail "machine hostname \"$HOST2\" overlaps \"$HOST2\" held by machine \"$REF2\" in this tenant" -- sc hostname add "$REF" "$HOST2" --dry-run
 expect_fail "project domain \"$HOST2\" overlaps hostname \"$HOST2\" held by machine \"$REF2\" in this tenant" -- sc project create "x-$ID" --domain "$HOST2" --dry-run
-expect_fail "is a zone apex" -- sc hostname add "$REF2" "$ZONE" --dry-run
+# The e2e Auth Hostname sits one label below the zone (docs/e2e-sc2.md,
+# Prerequisites), so the apex is also an ancestor of an install name: the
+# install-reservation refusal may answer first. Either refusal is correct.
+OUT_APEX="$(sc hostname add "$REF2" "$ZONE" --dry-run 2>&1)" && fail "sc hostname add $REF2 $ZONE --dry-run (the zone apex) succeeded: $OUT_APEX"
+[[ "$OUT_APEX" == *"is a zone apex"* || "$OUT_APEX" == *"is reserved by this install"* ]] || fail "zone apex hostname: want \"is a zone apex\" or \"is reserved by this install\", got: $OUT_APEX"
+pass "refused: the zone apex as a hostname ($OUT_APEX)"
 expect_fail "machine hostname \"$FQDN2\" is not held by machine \"$REF2\"" -- sc hostname remove "$REF2" "$FQDN2" --dry-run
 three_names || fail "a refused --dry-run changed the public-name set of $MACHINE2"
 pass "the refused dry-runs changed nothing"

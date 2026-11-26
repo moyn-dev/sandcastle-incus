@@ -34,7 +34,7 @@ name are all operator-chosen and differ per deployment.
 
 Switch context with `sc remote switch <name>` (install), `sc tenant switch
 <name>` (`sc t sw`), `sc project switch <name>`. Every switch writes the nearest
-`.sandcastle` (remote, project AND tenant), searching the current directory
+`.sandcastle.yml` (remote, project AND tenant), searching the current directory
 then parents; with none, they create it in the current directory. `sc tenant
 list` marks the active tenant with `*` and shows the Role (`owner` for your
 Personal Tenant, `member` for a Shared Tenant). Messages name machines by their
@@ -48,7 +48,7 @@ for one invocation; credentials stay in the global enrollment store.
 second, slash grammar — a **Sandcastle Path** `/install/tenant/project/machine`
 (the install is the first label of its Auth Hostname; the remote is resolved),
 absolute or relative to the **Current Position** (what `sc pwd` prints; the
-nearest `.sandcastle`). It is additive: the colon grammar and the switch
+nearest `.sandcastle.yml`). It is additive: the colon grammar and the switch
 commands are unchanged, and any command that takes a machine also takes a path.
 
 ```bash

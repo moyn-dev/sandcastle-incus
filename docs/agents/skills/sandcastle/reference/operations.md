@@ -110,7 +110,7 @@ remote's client certificate.
 ```bash
 sc project create backend     # broker scaffolds it and extends your certificate
 sc project list
-sc project switch backend     # writes the nearest .sandcastle; leaves global Incus defaults alone
+sc project switch backend     # writes the nearest .sandcastle.yml; leaves global Incus defaults alone
 sc project status backend
 sc project delete backend --yes
 ```
@@ -187,7 +187,11 @@ sc tailnet unpublish <project>:<machine> [--hostname 'internal-*.example.com']
 `sc tailnet publish` waits (default `--wait-timeout 5m`) until the name
 resolves to the Machine private IP, its certificate is `installed`, and HTTPS
 answers without a TLS error, on two consecutive polls; progress goes to stderr.
-An unreachable :443 (CLI host not on the Tenant Tailnet) does not block it. A
+An unreachable :443 (CLI host not on the Tenant Tailnet) does not block it. On
+an install using Let's Encrypt staging (`--acme-directory` staging, as the e2e
+does), a staging leaf valid for the name counts as ready and HTTPS reads
+`ok (…, Let's Encrypt staging certificate)`; any other untrusted issuer is an
+error. A
 `failed:<reason>` certificate ends the wait with an error. If the app answers
 400/403/421 for the new Host header, publish warns: add the name to the app's
 host allowlist.
@@ -430,7 +434,7 @@ sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuse
 - Membership lives on the tenant's infra project (`user.sandcastle.v2.members`);
   the tenant's own keys are one per line in `user.sandcastle.v2.sshkey`.
 - `sc tenant switch` records remote, project and tenant in the nearest
-  `.sandcastle` selection file (created in the working directory when
+  `.sandcastle.yml` selection file (created in the working directory when
   missing, like `sc remote switch`), so the tenant is per directory.
 - After `sc tenant switch <shared>`, every `sc` command (machines, projects,
   hostnames, certificates, shares) acts on that tenant: the CLI sends the

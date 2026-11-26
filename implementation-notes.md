@@ -7527,3 +7527,103 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
   phases (7b, 7f and variants) are marked as not part of the e2e; the agent skill steers to `sc tunnel publish`.
 - **Alternatives.** Removal now — rejected: it breaks installs and routes that exist today. Doc-only deprecation —
   rejected: CLI users would never see it.
+
+## 2026-11-25 — a `.sandcastle` directory is walked past, not a Directory Config error
+
+> **Superseded 2026-11-26** by the rename to `.sandcastle.yml` (entry below). The walk-past survives only
+> for the legacy-name fallback; the "refuse to write in `$HOME`" rule is gone.
+
+- **Found by.** The first box e2e with secrets: after a full `sc login` (no `--skip-setup`) on Linux, every `sc`
+  and `sc-adm` command run under `$HOME` failed with `read ~/.sandcastle: is a directory`. The local DNS state is
+  `~/.sandcastle/dns.yaml` (`localdns.DefaultStatePath`, since 2026-05), and the Directory Config lookup (2026-09)
+  reads the nearest `.sandcastle` and failed on anything unreadable, including a directory. Earlier e2e runs used
+  `--skip-setup` or ran outside `$HOME`, so they never created both.
+- **Decision.** `LoadDirectoryConfig` treats a `.sandcastle` directory as "no Directory Config here" and keeps
+  walking up. Invalid or unreadable *files* still stop the lookup with an error. `SaveDirectoryConfig` refuses to
+  write over a directory with a clear error instead of a failed rename.
+- **Alternatives.** Moving the DNS state to `~/.config/sandcastle/` would also free `~/.sandcastle` for `sc cd` at
+  `$HOME`. Rejected for now: it relocates existing state (CLAUDE.md "Compatibility"), and existing machines already
+  have the directory, so the lookup has to tolerate it anyway. Left as a follow-up for the user to decide.
+
+## 2026-11-25 — the zone reconciler does not cache an absent Caddy Setup Marker
+
+- **Found by.** Phase 12 on the box: the Project Certificate was issued at 20:40, but the first push to `web` landed
+  at 20:50. The reconciler read `/etc/sandcastle/caddy.ready` while cloud-init was still running, and the file cache
+  (`zoneFileCacheTTL`, 10 min) keeps a "not found". cloud-init writing the file is not an Incus lifecycle event, so
+  nothing dropped the entry early.
+- **Decision.** `readMarker` drops the cached read when the marker is absent, so the next pass reads it again. Other
+  not-found reads (certificate, key, hostnames file) stay cached: a missing one there is drift that we fix by
+  pushing, which forgets the machine's files anyway.
+- **Alternatives.** A shorter TTL for every not-found read: it brings back part of the Incus read traffic the cache
+  removed (HANDOFF incusd-polling) for no gain. Re-reading every marker every pass: the same objection. The cost of
+  this change is one marker read per pass per marker-less machine (Dev Image machines never write one).
+
+## 2026-11-25 — late settle passes while a dirty project waits for a DHCP lease
+
+- **Found by.** Phase 12 run 4: `web`'s A records appeared after 4 minutes, from the ticker. The create event's
+  settle passes (3 s, 8 s) re-read the project before the machine had its lease, and the later passes (one kicked by
+  the certificate order) read the event-fed cache, which a lease does not update.
+- **Decision.** The live re-read of a dirty project records whether a running instance there still has no global
+  IPv4 address (`leasePending`). While one does, the loop runs extra passes at 15 s, 30 s and 60 s after the settle
+  passes, and stops as soon as none is waiting. The ticker still backstops anything slower than about two minutes.
+- **Alternatives.** Longer fixed settle passes for every event: extra Incus reads on every stop/start, even when
+  the lease already landed. Polling the cache for address changes: the cache has no lease events to poll.
+
+## 2026-11-25 — the cache-backed `sc ls` resolves the Project Certificate too
+
+- **Found by.** On the box, `sc ls --json` showed `certStates: {…: "project"}` with no `projectCertState`.
+  `enrichProjectCertificates` ran only on the live path (`listMachines`), and `sc ls` takes the cache-backed
+  `/api/resources` path once the Auth App's cache is ready.
+- **Decision.** `listMachinesViaCache` calls the same enrichment before returning, so both paths agree (and so do the
+  path-navigation listings that use it).
+
+## 2026-11-25 — `sc tailnet publish --wait` accepts a Let's Encrypt staging leaf
+
+- **Found by.** The Machine publication lifecycle on the box: the install uses Let's Encrypt staging (CLAUDE.md, the
+  e2e protocol), so the publish wait's TLS probe (system trust store) failed every poll with `x509: certificate
+  signed by unknown authority` and the publish timed out after 5 minutes, although DNS, the certificate and Caddy
+  were all in place.
+- **Decision.** When the handshake fails *only* with an unknown authority, the probe retries without chain
+  verification and accepts the connection if the leaf's issuer CN carries Let's Encrypt's `(STAGING)` mark, the leaf
+  is valid now, and it covers the hostname. The probe records `staging: true` and the status reads `ok (…, Let's
+  Encrypt staging certificate)`. Any other untrusted issuer (a self-signed or tenant-CA leaf on a public name) is
+  still an error.
+- **Alternatives.** `--wait=false` in the e2e driver: it hides the bug from the e2e, while every staging user still
+  waits 5 minutes for an error. Accepting any untrusted chain: it would report a misconfigured machine as ready.
+  Telling the CLI the install's ACME directory: the Auth App does not expose it to the CLI today; the issuer mark is
+  enough and adds no API.
+
+## 2026-11-26 — the AI image takes Node.js 22 from mise
+
+- **Found by.** The `images` tier on the box: the AI image build failed in the skills step. Debian 13's `nodejs` is
+  20.19, `npx skills@latest` (≥ 1.5.19) needs Node ≥ 22.20 (it imports `glob` from `fs/promises`), and Claude Code
+  ≥ 2.1.198 declares Node ≥ 22. The `images` tier had not run since that drift. Its test helper also lacked the Dev
+  Image alias that `config.Admin` validation now requires (fixed in `internal/e2e/image_build_test.go`).
+- **Decision (the user chose mise).** `images/ai/Dockerfile` drops apt `nodejs`/`npm` and runs `mise install
+  node@${NODE_VERSION}` (default `22`; mise is already in the base image) with `MISE_DATA_DIR=/usr/local/share/mise`,
+  so the install is system-wide rather than under one user's `~/.local`. `node`/`npm`/`npx` are linked into
+  `/usr/local/bin`, which every login shell of an Incus system container has on PATH (a Docker `ENV PATH` would not
+  reach those shells), and npm's global prefix is set to `/usr/local`, so the AI CLIs land in `/usr/local/bin` too.
+  `install-ai-cli-tools.sh` is unchanged and stays byte-identical with the dev template's copy.
+- **Alternatives.** The nodejs.org tarball or the NodeSource apt repo: both work, but the user chose mise, which the
+  base image already carries. Pinning the old `skills` 1.5.18: it fixes only half the problem (Claude Code still
+  warns that the engine is too old) and freezes the skills installer. The dev image (Ubuntu 26.04) is not changed
+  here: its Node is newer, and it was not part of this failure.
+
+## 2026-11-26 — the Directory Config file is renamed `.sandcastle.yml`
+
+- **Why.** The per-directory selection file `.sandcastle` (2026-09-17, `20cdc40`) shared its name with the local DNS
+  state directory `~/.sandcastle/` (2026-05-20, `6e002b6`), so every command under `$HOME` failed after a full
+  `sc login`. The 2026-11-25 fix walked past the directory, but left the clash, and `sc cd`/switches in `$HOME`
+  had to refuse. The user authorized the rename: they are the file's only user (CLAUDE.md "Compatibility").
+- **Decision.** The file is `.sandcastle.yml` (`config.DirectoryConfigFile`). Per directory, `.sandcastle.yml` is
+  read first; without it, a legacy `.sandcastle` FILE is read (the user chose a fallback over a clean break), and a
+  `.sandcastle` directory is skipped. The next save writes `.sandcastle.yml` beside a legacy file and removes the
+  old one (a symlink is removed, its target kept). Invalid files of either name still stop the lookup. A switch in
+  `$HOME` now just writes `~/.sandcastle.yml`. The DNS state stays at `~/.sandcastle/dns.yaml`.
+- **Alternatives.** Moving the DNS state instead: that relocates state on every logged-in machine, rather than one
+  user's few selection files. A clean break without fallback: offered; the user preferred the fallback. Other names
+  (`.sc.yml`, `.sandcastle-dir`): `.sandcastle.yml` says what it is and stays greppable.
+- **Not changed.** Dated run records under `docs/e2e-runs/` and earlier entries here keep the old name: they are
+  history. ADR-0021/0032 mention the old name in passing; ADR-0030, which defines the file's role, carries the
+  amendment note.
