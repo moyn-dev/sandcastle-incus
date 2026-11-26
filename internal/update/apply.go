@@ -71,32 +71,36 @@ func IsBrewManaged() bool {
 // manual rollback. Replacement is write-new + rename (never overwrite in
 // place), so a running process keeps its old inode and macOS never kills a
 // process over mutated executable pages.
-func Apply(targetPath string, newBinary []byte) error {
+//
+// It returns the path the new binary now lives at. Run the new binary from
+// there, not from a fresh os.Executable(): on Linux that reads /proc/self/exe,
+// which follows the running (old) inode to <real>.bak after the swap.
+func Apply(targetPath string, newBinary []byte) (string, error) {
 	real, err := filepath.EvalSymlinks(targetPath)
 	if err != nil {
-		return fmt.Errorf("resolve %s: %w", targetPath, err)
+		return "", fmt.Errorf("resolve %s: %w", targetPath, err)
 	}
 	newPath := real + ".new"
 	bakPath := real + ".bak"
 
 	if err := os.WriteFile(newPath, newBinary, 0o755); err != nil {
-		return fmt.Errorf("stage new binary: %w", err)
+		return "", fmt.Errorf("stage new binary: %w", err)
 	}
 	if err := os.Remove(bakPath); err != nil && !os.IsNotExist(err) {
 		os.Remove(newPath)
-		return fmt.Errorf("clear stale backup: %w", err)
+		return "", fmt.Errorf("clear stale backup: %w", err)
 	}
 	if err := os.Rename(real, bakPath); err != nil {
 		os.Remove(newPath)
-		return fmt.Errorf("back up current binary: %w", err)
+		return "", fmt.Errorf("back up current binary: %w", err)
 	}
 	if err := os.Rename(newPath, real); err != nil {
 		// Put the old binary back so the install keeps working.
 		if rbErr := os.Rename(bakPath, real); rbErr != nil {
-			return fmt.Errorf("install new binary failed (%v) and rollback failed: %w", err, rbErr)
+			return "", fmt.Errorf("install new binary failed (%v) and rollback failed: %w", err, rbErr)
 		}
 		os.Remove(newPath)
-		return fmt.Errorf("install new binary: %w", err)
+		return "", fmt.Errorf("install new binary: %w", err)
 	}
-	return nil
+	return real, nil
 }

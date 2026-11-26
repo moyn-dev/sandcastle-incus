@@ -7627,3 +7627,17 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
 - **Not changed.** Dated run records under `docs/e2e-runs/` and earlier entries here keep the old name: they are
   history. ADR-0021/0032 mention the old name in passing; ADR-0030, which defines the file's role, carries the
   amendment note.
+
+## 2026-11-26 — `sc update`'s second stage runs the path `update.Apply` installed to
+
+- **Found by.** Updating a Linux client from v0.25.1 to v0.26.0: after replacing itself, `sc update` re-ran
+  `…/sandcastle.bak update --yes --no-self-update`, i.e. the OLD binary. The second table still showed the CLI as
+  v0.25.1, and the skill/payload stages would have installed the old embedded content.
+- **Cause.** `update.Apply` renames the running file to `<real>.bak` and puts the new one at `<real>`. The re-exec
+  then asked `os.Executable()` for the path; on Linux that reads `/proc/self/exe`, which follows the running inode,
+  now named `.bak`. macOS returns the path the process was started from, so it never showed there.
+- **Decision.** `update.Apply` returns the path it installed to, `selfUpdateCLI` passes it on, and
+  `rerunUpdateWithNewCLI` execs exactly that. `TestApplyReturnsTheInstalledPathNotTheBackup` covers it.
+- **Alternatives.** Stripping a `.bak` suffix from `os.Executable()`: it relies on the name and would break if the
+  backup naming changes. Resolving the path once before `Apply` in the caller: equivalent, but `Apply` already
+  knows the resolved target, so returning it keeps the knowledge in one place.

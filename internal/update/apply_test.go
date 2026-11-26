@@ -46,7 +46,7 @@ func applyFixture(t *testing.T) (dir, real, link string) {
 func TestApplyReplacesSymlinkTargetAndKeepsBak(t *testing.T) {
 	_, real, link := applyFixture(t)
 
-	if err := Apply(link, []byte("new-binary")); err != nil {
+	if _, err := Apply(link, []byte("new-binary")); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	// The symlink still resolves, to the new content.
@@ -76,15 +76,33 @@ func TestApplyReplacesSymlinkTargetAndKeepsBak(t *testing.T) {
 
 func TestApplySecondRunOverwritesStaleBak(t *testing.T) {
 	_, real, link := applyFixture(t)
-	if err := Apply(link, []byte("v2")); err != nil {
+	if _, err := Apply(link, []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(link, []byte("v3")); err != nil {
+	if _, err := Apply(link, []byte("v3")); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
 	got, _ := os.ReadFile(real)
 	bak, _ := os.ReadFile(real + ".bak")
 	if string(got) != "v3" || string(bak) != "v2" {
 		t.Fatalf("got %q bak %q", got, bak)
+	}
+}
+
+// The second `sc update` stage must run the NEW binary. On Linux a running
+// process's os.Executable() follows its inode to <real>.bak after the swap,
+// so Apply returns the installed path for the caller to exec instead.
+func TestApplyReturnsTheInstalledPathNotTheBackup(t *testing.T) {
+	_, real, link := applyFixture(t)
+	installed, err := Apply(link, []byte("new-binary"))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	want, _ := filepath.EvalSymlinks(real)
+	if installed != want {
+		t.Fatalf("installed = %q, want the resolved real path %q", installed, want)
+	}
+	if got, err := os.ReadFile(installed); err != nil || string(got) != "new-binary" {
+		t.Fatalf("installed path holds %q (err %v), want the new binary", got, err)
 	}
 }
