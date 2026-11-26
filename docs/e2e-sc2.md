@@ -173,7 +173,7 @@ and silently operated on the *other* install's project.
   same GitHub user into BOTH from one client machine, choosing a different
   Tenant DNS Suffix per login (e.g. `sc login https://<host-a> --dns-suffix=tcA`,
   `sc login https://<host-b> --dns-suffix=tcB`). Switch installs with
-  `sc remote switch <suffix>`. **PASS:** the nearest `.sandcastle` selects the
+  `sc remote switch <suffix>`. **PASS:** the nearest `.sandcastle.yml` selects the
   remote and project; the CLI's tenant and bearer identity follow that selection
   in memory. Global Sandcastle and Incus defaults are unchanged. Without a local
   file, existing global defaults are fallback; environment overrides still win.
@@ -353,7 +353,7 @@ Unit-tested, but the connect resolution deserves a live pass on `home`:
     scoped to the default project alone, and only certificates that lived
     through each `sc project create` had been extended project-by-project).
 13. **`sc project switch`.** With ≥2 projects, `sc project switch api` **PASS:**
-    prints `Switched to project "api"` and the absolute `.sandcastle` path,
+    prints `Switched to project "api"` and the absolute `.sandcastle.yml` path,
     `sc config show` shows resolved `project: "api"`, and `sc project list`
     reports the same file and marks `* api`. `sc project switch ghost`
     **PASS:** errors `project ghost not found in tenant … (projects: …)` unless
@@ -383,7 +383,7 @@ pin unchanged (directory selection supersedes ADR-0021's switch write-through).
 Login still collapses per-project remotes for the same install.
 
 15. **Directory selection and isolated checkouts.** In checkout A, run
-    `sc project switch h2`. **PASS:** it creates `.sandcastle` with remote and
+    `sc project switch h2`. **PASS:** it creates `.sandcastle.yml` with remote and
     project, prints its absolute path, and `sc incus ls` lists `h2`. Record the
     global Sandcastle and Incus config bytes before switching; **PASS:** unchanged
     afterward. Raw `incus` retains its existing project pin.
@@ -394,7 +394,7 @@ Login still collapses per-project remotes for the same install.
     commands use that remote's tenant credentials. No credentials appear locally.
     In independent checkout B, **PASS:** A's selection has no effect; without a
     file B uses global fallback and says so. Its first switch creates B's file.
-    Put an independent `.sandcastle` in A/src; **PASS:** only that file is read.
+    Put an independent `.sandcastle.yml` in A/src; **PASS:** only that file is read.
     Export `SANDCASTLE_REMOTE`/`SANDCASTLE_PROJECT`; **PASS:** overrides win without
     changing files. Invalid YAML or missing required fields in the nearest file
     must fail with its path instead of using a parent/global fallback.
@@ -473,8 +473,10 @@ sc login "https://$E2E_HOSTNAME" --simulate-token "$SIMULATE_TOKEN" --as e2edns 
 #       (server: incus project get sc2-<tenant> user.sandcastle.v2.suffix)
 cd ~ && sc ls && sc-adm public-dns-zone list
 # PASS: both work from $HOME. The login's DNS setup leaves the directory ~/.sandcastle/ (dns.yaml); the
-#       Directory Config lookup walks past a .sandcastle DIRECTORY (before 2026-11-25 every command under
-#       $HOME failed with "read ~/.sandcastle: is a directory"). `sc cd` AT $HOME refuses to write over it.
+#       Directory Config is `.sandcastle.yml` (before 2026-11-26 it was `.sandcastle`, and every command under
+#       $HOME failed with "read ~/.sandcastle: is a directory"). `cd ~ && sc project switch default` writes
+#       ~/.sandcastle.yml beside the ~/.sandcastle/ directory; an old `.sandcastle` FILE elsewhere is still
+#       read, and the next switch moves it to `.sandcastle.yml`.
 
 # 2. projects + machines (flagless broker path, project-scoped refs)
 sc create web --detach                       # default project
@@ -3420,15 +3422,15 @@ coverage: `go test ./internal/cli -run 'TestCdPwdLs|TestPathToMachine|TestResolv
 | Step | PASS criteria |
 |---|---|
 | **14a** pwd | inside a project directory `sc pwd` prints `/<install>/<tenant>/<project>`; `sc pwd --json` carries `install`, `remote` (the enrolled Incus remote), `tenant`, `project`, `level: project` |
-| **14b** cd | `sc cd web` (from `default`) prints `/<install>/<tenant>/web`; `.sandcastle` has `project: web`, no `level`; `sc project list` marks `web`; `sc cd nope` fails with `project nope not found`; `sc cd ./dev` fails with `is a machine` |
-| **14c** up | `sc cd ..` prints `/<install>/<tenant>`; `.sandcastle` has `level: tenant`, `previous: /<install>/<tenant>/web`, `project: web` kept; `sc ls` lists the project names; `sc create x` is refused with `not in a project`; `sc connect dev -- hostname` resolves `web:dev` through the tenant-wide lookup and `sc connect nope` is refused with `no machine "nope" in any project`; `sc cd -` returns to `/<install>/<tenant>/web` |
+| **14b** cd | `sc cd web` (from `default`) prints `/<install>/<tenant>/web`; `.sandcastle.yml` has `project: web`, no `level`; `sc project list` marks `web`; `sc cd nope` fails with `project nope not found`; `sc cd ./dev` fails with `is a machine` |
+| **14c** up | `sc cd ..` prints `/<install>/<tenant>`; `.sandcastle.yml` has `level: tenant`, `previous: /<install>/<tenant>/web`, `project: web` kept; `sc ls` lists the project names; `sc create x` is refused with `not in a project`; `sc connect dev -- hostname` resolves `web:dev` through the tenant-wide lookup and `sc connect nope` is refused with `no machine "nope" in any project`; `sc cd -` returns to `/<install>/<tenant>/web` |
 | **14d** globs | from `web`: `sc ls '../*'` prints every project under a `path:` header; `sc ls -d '../*'` the paths only; `sc ls -l ..` a `PROJECT DOMAIN IMAGE` table; `sc ls -R ..` the machines of every project; `sc ls ../web/d*` prints `/<install>/<tenant>/web/dev`; `sc ls -d '../**'` lists every project and machine of the tenant; `sc ls '/**/web/*'` the machines of project web; `sc stop /<install>/<tenant>/web/dev`, `sc start ./dev` and `sc restart '/**/dev'` act on `web:dev` |
 | **14e** mkdir/rm | `sc mkdir ../api` creates project api (visible in `sc project list`); `sc mkdir -p ../api2/dev` creates project api2 and machine `api2:dev`; `sc rm ../api --yes` deletes the empty project; `sc rm -r ../api2 --yes` deletes `api2:dev` then api2 (interactively, `sc rm -r ../api2` asks ONCE — "Delete project … and its 1 machine (dev)?" — never a second "Delete project" prompt; `-f` asks nothing); `sc mkdir /` and `sc rm ..` are refused with the install/tenant guidance |
 | **14f** home/root | `sc cd /` prints `/`; `sc ls` lists the installs (one per Auth Hostname, not one per remote) and `sc ls -l /` shows `INSTALL AUTH REMOTES`; `sc ls /<install>` lists every tenant the install's Auth App lists, `-l` adds `TENANT ROLE SHARED REMOTE`; `sc cd /<install>` writes `level: install`; `sc cd` (no argument) returns to the global config's `/<install>/<tenant>/<project>` |
 | **14g** cross-remote | with a second enrolled install: `sc cd /<other install>/<its tenant>/<its project>` switches to the remote enrolled for that tenant (as `sc remote switch` does) and `sc ls` lists that install's machines; `sc cd /<other install>/<unlisted tenant>` fails with `install <other install> does not list tenant`; `sc c /<other install>/<tenant>/<project>/<machine> -- true` from the first install runs without a durable switch (`sc pwd` unchanged); `sc ls <other>:<project>` reports `<its tenant>@<other>:<project>`, not the current tenant |
 | **14h** completion | `sc completion zsh` emits a script; `sc __complete cd ../` lists the sibling projects with a trailing `/`; `sc __complete connect ./` lists the project's machines; `sc __complete cd /` lists the installs and `sc __complete cd /<install>/` its Auth App's tenants |
-| **14i** compatibility | with `.sandcastle` at project level, `sc ls`, `sc ls -a`, `sc ls 'gbrain:*'` keep their filters (output is now the position line plus names; `-l` restores the table), and `sc c web:dev`, `sc remote switch`, `sc project switch`, `sc tenant switch` behave exactly as in Phases 7c/13 |
-| **14j** install form (ADR-0032) | on a client with two remotes for one tenant name on two installs (e.g. `moyn-dev` on obelix and `moyn-dev-miraculix` on miraculix): `sc ls /` shows each install once; `sc ls -d /miraculix/moyn-dev/default/*` and `/obelix/moyn-dev/default/*` list different machines; `sc ls --json /miraculix/moyn-dev/default` entries carry `path` `/miraculix/…` and `remote_path` `/moyn-dev-miraculix/…`; `sc ls -d /moyn-dev-miraculix/moyn-dev/default` prints `/miraculix/moyn-dev/default` and a `note:` on stderr; `sc cd /<install>/<listed tenant without a remote>` enrols the tenant's remote (named `<dns-suffix>-<install>` when another install already uses the suffix) and `sc remote list` shows it; a `.sandcastle` written by an older binary with `level: remote` is read as the install level; with the install's Auth App unreachable `sc ls /<install>` lists the enrolled tenants and notes the list may be incomplete |
+| **14i** compatibility | with `.sandcastle.yml` at project level, `sc ls`, `sc ls -a`, `sc ls 'gbrain:*'` keep their filters (output is now the position line plus names; `-l` restores the table), and `sc c web:dev`, `sc remote switch`, `sc project switch`, `sc tenant switch` behave exactly as in Phases 7c/13 |
+| **14j** install form (ADR-0032) | on a client with two remotes for one tenant name on two installs (e.g. `moyn-dev` on obelix and `moyn-dev-miraculix` on miraculix): `sc ls /` shows each install once; `sc ls -d /miraculix/moyn-dev/default/*` and `/obelix/moyn-dev/default/*` list different machines; `sc ls --json /miraculix/moyn-dev/default` entries carry `path` `/miraculix/…` and `remote_path` `/moyn-dev-miraculix/…`; `sc ls -d /moyn-dev-miraculix/moyn-dev/default` prints `/miraculix/moyn-dev/default` and a `note:` on stderr; `sc cd /<install>/<listed tenant without a remote>` enrols the tenant's remote (named `<dns-suffix>-<install>` when another install already uses the suffix) and `sc remote list` shows it; a `.sandcastle.yml` written by an older binary with `level: remote` is read as the install level; with the install's Auth App unreachable `sc ls /<install>` lists the enrolled tenants and notes the list may be incomplete |
 
 Live run 2026-09-21 (`big:sc-shared-e2e`, client `big:e2e-pdz-client`, branch
 `feat/path-navigation`): see `docs/e2e-runs/2026-09-21-phase14-path-navigation.md`.

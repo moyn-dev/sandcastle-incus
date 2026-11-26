@@ -110,7 +110,7 @@ remote's client certificate.
 ```bash
 sc project create backend     # broker scaffolds it and extends your certificate
 sc project list
-sc project switch backend     # writes the nearest .sandcastle; leaves global Incus defaults alone
+sc project switch backend     # writes the nearest .sandcastle.yml; leaves global Incus defaults alone
 sc project status backend
 sc project delete backend --yes
 ```
@@ -434,7 +434,7 @@ sc-adm tenant remove-ssh-key moyn-dev "ssh-ed25519 …"  # remove-ssh-key refuse
 - Membership lives on the tenant's infra project (`user.sandcastle.v2.members`);
   the tenant's own keys are one per line in `user.sandcastle.v2.sshkey`.
 - `sc tenant switch` records remote, project and tenant in the nearest
-  `.sandcastle` selection file (created in the working directory when
+  `.sandcastle.yml` selection file (created in the working directory when
   missing, like `sc remote switch`), so the tenant is per directory.
 - After `sc tenant switch <shared>`, every `sc` command (machines, projects,
   hostnames, certificates, shares) acts on that tenant: the CLI sends the

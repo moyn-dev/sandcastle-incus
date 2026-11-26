@@ -135,7 +135,7 @@ func TestPathToMachineReference(t *testing.T) {
 	}
 }
 
-// cd writes the same .sandcastle the switch commands write, plus the level
+// cd writes the same .sandcastle.yml the switch commands write, plus the level
 // and the previous position; pwd reads it back; ls at the tenant level lists
 // projects.
 func TestCdPwdLsAcrossLevels(t *testing.T) {

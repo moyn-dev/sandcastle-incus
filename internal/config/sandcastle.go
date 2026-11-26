@@ -284,7 +284,7 @@ func LoadUser() Admin {
 
 // SharedIncusDefaultRemote returns the shared incus config dir's current
 // remote when it names a Sandcastle enrollment ("sc-…"), else "". This makes
-// the incus current remote a legacy fallback when no .sandcastle exists.
+// the incus current remote a legacy fallback when no .sandcastle.yml exists.
 // Directory selection and explicit environment overrides take precedence.
 // Non-sandcastle remotes (local,
 // images, …) are ignored so raw-incus work doesn't hijack sc.

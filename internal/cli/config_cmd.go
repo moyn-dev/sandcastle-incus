@@ -89,7 +89,7 @@ func newConfigSetCommand(_ commandConfig) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "Set %s = %q in %s\n", key, value, cfgPath)
 			printRemoteSwitchEffects(cmd.OutOrStdout(), cfg, fx)
 			// This explicit global edit updates both fallback stores. A local
-			// .sandcastle selection still takes precedence over either one.
+			// .sandcastle.yml selection still takes precedence over either one.
 			if key == "remote" {
 				if err := scconfig.SetSharedIncusDefaultRemote(value); err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Note: incus current remote not switched: %v\n", err)

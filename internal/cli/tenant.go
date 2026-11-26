@@ -181,7 +181,7 @@ func runTenantSwitch(ctx context.Context, config commandConfig, tenantName strin
 	if err := scconfig.SaveSandcastleConfig(cfgPath, cfg); err != nil {
 		return tenantSwitchOutput{}, fmt.Errorf("save config: %w", err)
 	}
-	// The tenant is a directory selection like the remote (`.sandcastle`,
+	// The tenant is a directory selection like the remote (`.sandcastle.yml`,
 	// the file `sc remote switch` writes): record remote, project AND
 	// tenant in the nearest selection, creating one here when none
 	// exists — otherwise the directory would keep addressing the

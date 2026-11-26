@@ -48,7 +48,7 @@ func TestDirectorySwitchesAreIsolatedAndRememberProjects(t *testing.T) {
 		}
 		return out
 	}
-	path := filepath.Join(a, ".sandcastle")
+	path := filepath.Join(a, scconfig.DirectoryConfigFile)
 	if out := run("project", "switch", "web", "--local-only"); !strings.Contains(out, path) {
 		t.Fatalf("write path missing: %s", out)
 	}
@@ -73,7 +73,7 @@ func TestDirectorySwitchesAreIsolatedAndRememberProjects(t *testing.T) {
 	if out := run("project", "list", "--json"); !strings.Contains(out, `"config_path": "`+path+`"`) {
 		t.Fatalf("JSON source missing: %s", out)
 	}
-	if _, err := os.Stat(filepath.Join(a, "src", ".sandcastle")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(a, "src", scconfig.DirectoryConfigFile)); !os.IsNotExist(err) {
 		t.Fatalf("created child file: %v", err)
 	}
 	data, _ := os.ReadFile(path)
@@ -89,7 +89,7 @@ func TestDirectorySwitchesAreIsolatedAndRememberProjects(t *testing.T) {
 		t.Fatalf("fallback not shown: %s", out)
 	}
 	run("project", "switch", "backend", "--local-only")
-	if _, err := os.Stat(filepath.Join(b, ".sandcastle")); err != nil {
+	if _, err := os.Stat(filepath.Join(b, scconfig.DirectoryConfigFile)); err != nil {
 		t.Fatal(err)
 	}
 	globalAfter, _ := os.ReadFile(scconfig.DefaultConfigPath())

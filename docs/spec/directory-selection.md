@@ -2,20 +2,24 @@
 
 ## Agreed behavior
 
-The active remote and project belong to the working directory. Read `.sandcastle`
+The active remote and project belong to the working directory. Read `.sandcastle.yml`
 in that directory, then each parent up to the filesystem root; stop at the first
-file. Do not merge ancestor files. Explicit command flags/reference prefixes and
+file. Do not merge ancestor files. Until 2026-11-26 the file was `.sandcastle`,
+which clashed with the local DNS state directory `~/.sandcastle/`: a directory
+with no `.sandcastle.yml` still has a legacy `.sandcastle` *file* read (a
+`.sandcastle` directory is never a selection), and the next write moves it to
+`.sandcastle.yml` and removes the old file. Explicit command flags/reference prefixes and
 exported environment variables take precedence. When no file exists, retain the
 existing global fallback: the shared Incus Sandcastle default remote (when
 eligible), then the user config; project comes from the user config/default.
 
 `sc project switch` and `sc remote switch` update that nearest file. With no file,
-they create `.sandcastle` in the current directory containing both the remote and
+they create `.sandcastle.yml` in the current directory containing both the remote and
 project. They report its absolute path. These commands do not change global
 Sandcastle defaults, the shared Incus default remote, or remote project pins.
 
 `sc project list` and `sc remote list` report the absolute path of the file read,
-or explicitly say that no `.sandcastle` was found and global fallback applies.
+or explicitly say that no `.sandcastle.yml` was found and global fallback applies.
 The current marker reflects the effective selection, including environment
 variables. Project-list JSON retains its existing fields and adds `config_path`
 (empty when no local file exists). `sc config show` also reports the source.
@@ -44,7 +48,7 @@ parents (not a Git boundary); an existing file symlink is followed when writing.
 Credentials and enrollment metadata remain in `~/.config/sandcastle/config.yml`
 and the existing Incus directories. On each invocation, resolve the selected
 remote's Auth Hostname, tenant, token and broker from the global enrollment maps
-in memory. Never persist credentials in `.sandcastle` or borrow a different
+in memory. Never persist credentials in `.sandcastle.yml` or borrow a different
 remote's credentials for an unknown local remote. Environment overrides remain
 available for explicit invocations.
 
@@ -54,7 +58,7 @@ This intentionally supersedes ADR-0021's project-switch write-through behavior.
 `sc` and `sc incus` use directory selection; raw `incus` keeps its independent
 global defaults. Existing login/enrollment behavior and explicit `sc config
 set/unset` operations on global fallback configuration remain available. They do
-not override a `.sandcastle` file. Other settings and admin credentials stay global.
+not override a `.sandcastle.yml` file. Other settings and admin credentials stay global.
 
 ## Validation
 

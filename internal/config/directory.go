@@ -64,11 +64,18 @@ func PositionDepth(level string) int {
 	}
 }
 
+// DirectoryConfigFile is the Directory Config's file name.
+const DirectoryConfigFile = ".sandcastle.yml"
+
+// legacyDirectoryConfigFile is the name before 2026-11-26. It clashed with
+// ~/.sandcastle/, the local DNS state directory (localdns.DefaultStatePath),
+// so every command under $HOME failed after a full `sc login`. A legacy FILE
+// is still read when a directory has no DirectoryConfigFile, and the next
+// save moves it to the new name; a legacy DIRECTORY is not a Directory Config.
+const legacyDirectoryConfigFile = ".sandcastle"
+
 // LoadDirectoryConfig walks from start to the filesystem root. Only the nearest
 // file is read; an unreadable or invalid file is an error, never a fallback.
-// A .sandcastle directory is not a Directory Config and is walked past:
-// ~/.sandcastle/ holds the local DNS state (localdns.DefaultStatePath), so
-// failing on it would break every command run under $HOME after `sc login`.
 // With no file, path is empty. An empty start uses the working directory.
 func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err error) {
 	if start == "" {
@@ -82,21 +89,14 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 		return cfg, "", err
 	}
 	for {
-		path = filepath.Join(dir, ".sandcastle")
-		data, readErr := os.ReadFile(path)
-		if readErr == nil {
-			if err = yaml.UnmarshalStrict(data, &cfg); err == nil {
-				err = cfg.validate()
+		for _, name := range []string{DirectoryConfigFile, legacyDirectoryConfigFile} {
+			path = filepath.Join(dir, name)
+			if name == legacyDirectoryConfigFile && isDirectory(path) {
+				continue
 			}
-			if err != nil {
-				return cfg, path, fmt.Errorf("read %s: %w", path, err)
-			}
-			return cfg, path, nil
-		}
-		if !isDirectory(path) {
-			_, statErr := os.Lstat(path)
-			if !os.IsNotExist(readErr) || statErr == nil {
-				return cfg, path, fmt.Errorf("read %s: %w", path, readErr)
+			var found bool
+			if cfg, found, err = readDirectoryConfig(path); found || err != nil {
+				return cfg, path, err
 			}
 		}
 		parent := filepath.Dir(dir)
@@ -105,6 +105,25 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 		}
 		dir = parent
 	}
+}
+
+// readDirectoryConfig reads one candidate file. A missing file is not found;
+// anything else that cannot be read or parsed is an error.
+func readDirectoryConfig(path string) (cfg DirectoryConfig, found bool, err error) {
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if _, statErr := os.Lstat(path); os.IsNotExist(readErr) && statErr != nil {
+			return cfg, false, nil
+		}
+		return cfg, true, fmt.Errorf("read %s: %w", path, readErr)
+	}
+	if err = yaml.UnmarshalStrict(data, &cfg); err == nil {
+		err = cfg.validate()
+	}
+	if err != nil {
+		return cfg, true, fmt.Errorf("read %s: %w", path, err)
+	}
+	return cfg, true, nil
 }
 
 func isDirectory(path string) bool {
@@ -137,18 +156,20 @@ func (c DirectoryConfig) validate() error {
 
 // SaveDirectoryConfig updates the nearest file, or creates one in the working
 // directory. Atomic replacement prevents interrupted switches truncating it.
+// A legacy .sandcastle file is replaced by a DirectoryConfigFile beside it.
 func SaveDirectoryConfig(cfg DirectoryConfig) (string, error) {
 	_, path, err := LoadDirectoryConfig("")
 	if err != nil {
 		return "", err
 	}
+	legacy := ""
+	if filepath.Base(path) == legacyDirectoryConfigFile {
+		legacy, path = path, filepath.Join(filepath.Dir(path), DirectoryConfigFile)
+	}
 	if path == "" {
-		path, err = filepath.Abs(".sandcastle")
+		path, err = filepath.Abs(DirectoryConfigFile)
 		if err != nil {
 			return "", err
-		}
-		if isDirectory(path) {
-			return "", fmt.Errorf("write %s: it is a directory (the local DNS state when this is $HOME), not a Directory Config; run this from another directory", path)
 		}
 	}
 	if err := cfg.validate(); err != nil {
@@ -163,7 +184,7 @@ func SaveDirectoryConfig(cfg DirectoryConfig) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved
 	}
-	file, err := os.CreateTemp(filepath.Dir(target), ".sandcastle-*")
+	file, err := os.CreateTemp(filepath.Dir(target), DirectoryConfigFile+"-*")
 	if err != nil {
 		return "", fmt.Errorf("write %s: %w", path, err)
 	}
@@ -177,6 +198,13 @@ func SaveDirectoryConfig(cfg DirectoryConfig) (string, error) {
 	}
 	if err := os.Rename(file.Name(), target); err != nil {
 		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	// The new file shadows the legacy one; removing it (a symlink, not its
+	// target) only finishes the move.
+	if legacy != "" {
+		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("remove %s after moving it to %s: %w", legacy, path, err)
+		}
 	}
 	return path, nil
 }

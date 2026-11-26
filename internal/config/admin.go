@@ -39,9 +39,9 @@ const (
 )
 
 type Admin struct {
-	DirectoryConfigPath string // nearest .sandcastle read; empty means global fallback
+	DirectoryConfigPath string // nearest .sandcastle.yml read; empty means global fallback
 	// PositionLevel is the Current Position's level from the nearest
-	// .sandcastle ("root", "remote", "tenant", "project"); empty when no
+	// .sandcastle.yml ("root", "remote", "tenant", "project"); empty when no
 	// selection file was read, which means the project level.
 	PositionLevel string
 	Tenant        string

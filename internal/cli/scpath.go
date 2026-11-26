@@ -15,7 +15,7 @@ import (
 // machine, ADR-0020) and is selected purely by shape: an argument that starts
 // with "/", "./", "../" or "~", or is exactly ".", "..", "~" or "-", is a
 // path; everything else is the colon grammar, untouched. A path resolves
-// against the Current Position (the nearest .sandcastle) like a shell path
+// against the Current Position (the nearest .sandcastle.yml) like a shell path
 // resolves against the working directory, and every segment may be a shell
 // glob. Machine commands then see the resolved path as the colon reference
 // remote:project:machine, the remote being the one enrolled for the path's
@@ -46,7 +46,7 @@ func levelName(depth int) string {
 	}
 }
 
-// levelKeyword is the .sandcastle level value for a depth.
+// levelKeyword is the .sandcastle.yml level value for a depth.
 func levelKeyword(depth int) string {
 	switch depth {
 	case levelRoot:

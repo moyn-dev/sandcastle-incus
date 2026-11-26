@@ -28,11 +28,11 @@ func TestDirectorySelectionWalkAndWrite(t *testing.T) {
 	if err != nil || written != path {
 		t.Fatalf("write: %s %v", written, err)
 	}
-	if _, err := os.Stat(filepath.Join(child, ".sandcastle")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(child, DirectoryConfigFile)); !os.IsNotExist(err) {
 		t.Fatalf("unexpected child file: %v", err)
 	}
 	// A nearer file completely shadows its parent, including project history.
-	if err := os.WriteFile(filepath.Join(child, ".sandcastle"), []byte("remote: beta\nproject: docs\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(child, DirectoryConfigFile), []byte("remote: beta\nproject: docs\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, readPath, err = LoadDirectoryConfig("")
@@ -53,33 +53,80 @@ func TestDirectorySelectionInvalidFileStopsLookup(t *testing.T) {
 	}
 	t.Chdir(child)
 	for _, contents := range []string{"[broken", "remote: beta\n", "remote: beta\nproject: web\nauth_token: secret\n"} {
-		if err := os.WriteFile(".sandcastle", []byte(contents), 0600); err != nil {
+		if err := os.WriteFile(DirectoryConfigFile, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, path, err := LoadDirectoryConfig(""); err == nil || !strings.Contains(err.Error(), path) {
 			t.Fatalf("invalid file silently ignored: %s %v", path, err)
 		}
 	}
-	if err := os.Remove(".sandcastle"); err != nil {
+	if err := os.Remove(DirectoryConfigFile); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(".sandcastle", 0700); err != nil {
+	if err := os.Mkdir(DirectoryConfigFile, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// A .sandcastle directory (~/.sandcastle/ holds the local DNS state) is
-	// not a Directory Config: the walk passes it and finds the parent's file.
+	if _, _, err := LoadDirectoryConfig(""); err == nil {
+		t.Fatal("directory should fail")
+	}
+}
+
+// The pre-2026-11-26 name: a legacy .sandcastle FILE is still read (the new
+// name wins in the same directory) and the next save moves it; a .sandcastle
+// DIRECTORY (~/.sandcastle/, the local DNS state) is no Directory Config.
+func TestDirectoryLegacyFileReadAndMovedOnSave(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(root, legacyDirectoryConfigFile)
+	if err := os.WriteFile(legacy, []byte("remote: alpha\nproject: web\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The DNS-state directory in the child does not stop the walk.
+	if err := os.MkdirAll(filepath.Join(child, legacyDirectoryConfigFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(child)
 	cfg, path, err := LoadDirectoryConfig("")
-	if err != nil || path != filepath.Join(root, ".sandcastle") || cfg.Remote != "alpha" {
-		t.Fatalf("directory not walked past: %+v %s %v", cfg, path, err)
+	if err != nil || path != legacy || cfg.Remote != "alpha" {
+		t.Fatalf("legacy file not read past the directory: %+v %s %v", cfg, path, err)
 	}
-	if err := os.Remove(filepath.Join(root, ".sandcastle")); err != nil {
+	cfg.Project = "api"
+	written, err := SaveDirectoryConfig(cfg)
+	if want := filepath.Join(root, DirectoryConfigFile); err != nil || written != want {
+		t.Fatalf("save: %s %v, want %s", written, err, want)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy file not removed after the move: %v", err)
+	}
+	if cfg, path, err := LoadDirectoryConfig(""); err != nil || path != written || cfg.Project != "api" {
+		t.Fatalf("after the move: %+v %s %v", cfg, path, err)
+	}
+	// In one directory the new name wins over a legacy file.
+	if err := os.WriteFile(legacy, []byte("remote: beta\nproject: web\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, path, err := LoadDirectoryConfig(""); err != nil || path != "" {
-		t.Fatalf("directory alone should read as no Directory Config: %s %v", path, err)
+	if cfg, _, err := LoadDirectoryConfig(""); err != nil || cfg.Remote != "alpha" {
+		t.Fatalf("legacy file shadowed the new one: %+v %v", cfg, err)
 	}
-	if _, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"}); err == nil || !strings.Contains(err.Error(), "is a directory") {
-		t.Fatalf("write over a directory: %v", err)
+	// An invalid legacy file is an error, like an invalid new one.
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, legacyDirectoryConfigFile), []byte("[broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadDirectoryConfig(other); err == nil {
+		t.Fatal("invalid legacy file silently ignored")
+	}
+	// A save where only the DNS-state directory exists creates the new file.
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, legacyDirectoryConfigFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(home)
+	if written, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"}); err != nil || written != filepath.Join(home, DirectoryConfigFile) {
+		t.Fatalf("save at $HOME: %s %v", written, err)
 	}
 }
 
@@ -179,13 +226,13 @@ func TestDirectorySelectionFileSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
-	if err := os.Symlink(target, ".sandcastle"); err != nil {
+	if err := os.Symlink(target, DirectoryConfigFile); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := SaveDirectoryConfig(DirectoryConfig{Remote: "beta", Project: "web"}); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Lstat(".sandcastle"); err != nil || info.Mode()&os.ModeSymlink == 0 {
+	if info, err := os.Lstat(DirectoryConfigFile); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("symlink replaced: %v", err)
 	}
 	data, err := os.ReadFile(target)
@@ -205,7 +252,7 @@ func TestDirectorySelectionFileSymlink(t *testing.T) {
 func TestDirectoryLevelInstallAndRemoteAlias(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, level := range []string{PositionInstall, PositionRemote} {
-		if err := os.WriteFile(".sandcastle", []byte("remote: obelix\nproject: default\nlevel: "+level+"\n"), 0600); err != nil {
+		if err := os.WriteFile(DirectoryConfigFile, []byte("remote: obelix\nproject: default\nlevel: "+level+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		cfg, _, err := LoadDirectoryConfig("")

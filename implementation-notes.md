@@ -7530,6 +7530,9 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
 
 ## 2026-11-25 — a `.sandcastle` directory is walked past, not a Directory Config error
 
+> **Superseded 2026-11-26** by the rename to `.sandcastle.yml` (entry below). The walk-past survives only
+> for the legacy-name fallback; the "refuse to write in `$HOME`" rule is gone.
+
 - **Found by.** The first box e2e with secrets: after a full `sc login` (no `--skip-setup`) on Linux, every `sc`
   and `sc-adm` command run under `$HOME` failed with `read ~/.sandcastle: is a directory`. The local DNS state is
   `~/.sandcastle/dns.yaml` (`localdns.DefaultStatePath`, since 2026-05), and the Directory Config lookup (2026-09)
@@ -7606,3 +7609,21 @@ daemon saw vsock) or adding the user to `kvm` (needs a new login, and the user d
   base image already carries. Pinning the old `skills` 1.5.18: it fixes only half the problem (Claude Code still
   warns that the engine is too old) and freezes the skills installer. The dev image (Ubuntu 26.04) is not changed
   here: its Node is newer, and it was not part of this failure.
+
+## 2026-11-26 — the Directory Config file is renamed `.sandcastle.yml`
+
+- **Why.** The per-directory selection file `.sandcastle` (2026-09-17, `20cdc40`) shared its name with the local DNS
+  state directory `~/.sandcastle/` (2026-05-20, `6e002b6`), so every command under `$HOME` failed after a full
+  `sc login`. The 2026-11-25 fix walked past the directory, but left the clash, and `sc cd`/switches in `$HOME`
+  had to refuse. The user authorized the rename: they are the file's only user (CLAUDE.md "Compatibility").
+- **Decision.** The file is `.sandcastle.yml` (`config.DirectoryConfigFile`). Per directory, `.sandcastle.yml` is
+  read first; without it, a legacy `.sandcastle` FILE is read (the user chose a fallback over a clean break), and a
+  `.sandcastle` directory is skipped. The next save writes `.sandcastle.yml` beside a legacy file and removes the
+  old one (a symlink is removed, its target kept). Invalid files of either name still stop the lookup. A switch in
+  `$HOME` now just writes `~/.sandcastle.yml`. The DNS state stays at `~/.sandcastle/dns.yaml`.
+- **Alternatives.** Moving the DNS state instead: that relocates state on every logged-in machine, rather than one
+  user's few selection files. A clean break without fallback: offered; the user preferred the fallback. Other names
+  (`.sc.yml`, `.sandcastle-dir`): `.sandcastle.yml` says what it is and stays greppable.
+- **Not changed.** Dated run records under `docs/e2e-runs/` and earlier entries here keep the old name: they are
+  history. ADR-0021/0032 mention the old name in passing; ADR-0030, which defines the file's role, carries the
+  amendment note.

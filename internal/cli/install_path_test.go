@@ -237,6 +237,8 @@ func TestCdIntoAnUnenrolledTenantEnrolsItsRemote(t *testing.T) {
 
 func TestCdWritesTheInstallLevelAndReadsOldSelections(t *testing.T) {
 	seedADRClient(t)
+	// An old selection in every sense: the pre-ADR-0032 level and remote-form
+	// previous, under the pre-2026-11-26 file name .sandcastle.
 	if err := os.WriteFile(".sandcastle", []byte("remote: moyn-dev-miraculix\nproject: default\ntenant: moyn-dev\nlevel: remote\nprevious: /asterix/skorfmann/default\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +262,12 @@ func TestCdWritesTheInstallLevelAndReadsOldSelections(t *testing.T) {
 	local, _, err := scconfig.LoadDirectoryConfig("")
 	if err != nil || local.Level != scconfig.PositionInstall || local.Remote != "asterix" || local.Previous != "/obelix/skorfmann/default" {
 		t.Fatalf("selection = %+v %v", local, err)
+	}
+	if _, err := os.Stat(scconfig.DirectoryConfigFile); err != nil {
+		t.Fatalf("cd did not move the selection to %s: %v", scconfig.DirectoryConfigFile, err)
+	}
+	if _, err := os.Lstat(".sandcastle"); !os.IsNotExist(err) {
+		t.Fatalf("legacy .sandcastle left behind: %v", err)
 	}
 }
 

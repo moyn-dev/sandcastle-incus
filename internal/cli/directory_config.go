@@ -33,5 +33,5 @@ func selectionSource(config commandConfig) string {
 	if path := config.adminConfig.DirectoryConfigPath; path != "" {
 		return "Selection file: " + path
 	}
-	return fmt.Sprintf("Selection file: none (.sandcastle not found; global fallback: %s / Incus defaults)", scconfig.DefaultConfigPath())
+	return fmt.Sprintf("Selection file: none (.sandcastle.yml not found; global fallback: %s / Incus defaults)", scconfig.DefaultConfigPath())
 }

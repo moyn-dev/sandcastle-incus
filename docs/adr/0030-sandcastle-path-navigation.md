@@ -5,6 +5,12 @@ Date: 2026-09-21. Status: accepted. Wayfinder map: issue #190.
 > **2026-11-14:** [ADR-0032](0032-install-first-sandcastle-path.md) makes
 > the first path level the install instead of the remote
 > (`/install/tenant/project/machine`). Remote-form paths still resolve.
+>
+> **2026-11-26:** the selection file this ADR calls `.sandcastle` is now
+> `.sandcastle.yml`. The old name clashed with `~/.sandcastle/`, the local DNS
+> state directory, and broke every command under `$HOME` after `sc login`. An
+> old `.sandcastle` file is still read and moved on the next write
+> (`docs/spec/directory-selection.md`).
 
 ## Context
 

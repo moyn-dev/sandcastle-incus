@@ -46,7 +46,7 @@ func TestProjectSwitchLeavesIncusDefaultsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, ".sandcastle") {
+	if !strings.Contains(stdout, scconfig.DirectoryConfigFile) {
 		t.Fatalf("stdout missing selection path:\n%s", stdout)
 	}
 	data, err := os.ReadFile(incusCfg)
