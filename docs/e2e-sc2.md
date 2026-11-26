@@ -2513,6 +2513,10 @@ curl -fsSL https://raw.githubusercontent.com/moyn-dev/sandcastle-incus/main/inst
 sc update --version v<older> --yes      # roll the CLI back…
 sc version                              # …binary now reports <older>, .bak kept
 sc update --yes                         # …and forward to latest again
+# PASS (Linux, with the sidecar/skill/payload also outdated): after "== re-running with the new CLI…" the
+#       second table shows the sc CLI row CURRENT at the new version, and no error names `sandcastle.bak`.
+#       (Before 2026-11-26 the second stage re-ran the OLD binary: /proc/self/exe follows the renamed inode
+#       to .bak, so os.Executable() pointed there; the v0.25.1 → v0.26.0 update showed this.)
 # Homebrew installs instead print `brew upgrade sandcastle` and change nothing.
 
 # 10e — passive notice + skew warning

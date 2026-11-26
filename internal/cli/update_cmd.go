@@ -161,7 +161,8 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 					fmt.Fprintln(config.stdout, "\nThe CLI is Homebrew-managed. Update it with:\n\n    brew upgrade sandcastle")
 				} else {
 					fmt.Fprintf(config.stdout, "\n== sc CLI: %s -> %s\n", cliCurrent, release.TagName)
-					if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
+					installed, err := selfUpdateCLI(ctx, config, checker, release)
+					if err != nil {
 						return err
 					}
 					if sidecarOutdated || skillsOutdated || payloadsOutdated || mirrorOutdated {
@@ -170,7 +171,7 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 						// the rest over to the binary just installed instead of
 						// asking the user to run `sc update` twice.
 						fmt.Fprintf(config.stdout, "== re-running with the new CLI to apply the remaining updates\n")
-						return rerunUpdateWithNewCLI(ctx, config, pin)
+						return rerunUpdateWithNewCLI(ctx, config, installed, pin)
 					}
 					return nil
 				}
@@ -226,11 +227,10 @@ func newUpdateCommand(config commandConfig, opts *rootOptions) *cobra.Command {
 // `sc update` finishes the sidecar, skill and payload stages with the new
 // embedded content. A child process rather than exec(2): portable, and the
 // exit status still reaches the caller.
-func rerunUpdateWithNewCLI(ctx context.Context, config commandConfig, pin string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate the updated binary: %w", err)
-	}
+//
+// exe is the path selfUpdateCLI installed to; os.Executable() here would
+// name the old binary's .bak on Linux.
+func rerunUpdateWithNewCLI(ctx context.Context, config commandConfig, exe, pin string) error {
 	args := []string{"update", "--yes", "--no-self-update"}
 	if strings.TrimSpace(pin) != "" {
 		args = append(args, "--version", strings.TrimSpace(pin))
@@ -333,21 +333,23 @@ func sidecarStatus(outdated, known, reachable bool) string {
 // selfUpdateCLI downloads the release tarball for this platform, verifies it
 // against checksums.txt, and atomically replaces the running binary keeping
 // a .bak (#124 §3).
-func selfUpdateCLI(ctx context.Context, config commandConfig, checker *update.Checker, release update.Release) error {
+// It returns the path the new binary was installed at.
+func selfUpdateCLI(ctx context.Context, config commandConfig, checker *update.Checker, release update.Release) (string, error) {
 	fmt.Fprintf(config.stdout, "\nDownloading %s (%s)...\n", release.TagName, update.AssetName(runtime.GOOS, runtime.GOARCH))
 	binary, err := checker.FetchBinary(ctx, release, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return err
+		return "", err
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate running binary: %w", err)
+		return "", fmt.Errorf("locate running binary: %w", err)
 	}
-	if err := update.Apply(exe, binary); err != nil {
-		return err
+	installed, err := update.Apply(exe, binary)
+	if err != nil {
+		return "", err
 	}
 	fmt.Fprintf(config.stdout, "CLI updated to %s (previous kept as .bak).\n", release.TagName)
-	return nil
+	return installed, nil
 }
 
 // updateSidecarViaDeployment delegates the sidecar update, preferring the

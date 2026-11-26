@@ -381,7 +381,7 @@ func finishUpdateAll(ctx context.Context, config commandConfig, prefix string, t
 	case version == release.TagName || "v"+version == release.TagName:
 		fmt.Fprintf(config.stdout, "  ok   CLI already %s\n", release.TagName)
 	default:
-		if err := selfUpdateCLI(ctx, config, checker, release); err != nil {
+		if _, err := selfUpdateCLI(ctx, config, checker, release); err != nil {
 			failed++
 			fmt.Fprintf(config.stdout, "  FAIL CLI: %v\n", err)
 		} else {
