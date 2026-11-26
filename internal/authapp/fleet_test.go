@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
+	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
 
 type fakeFleetLister struct {
@@ -115,5 +116,64 @@ func TestZoneFileCacheServesRepeatsUntilPushOrEvent(t *testing.T) {
 	r.fileCacheTTL = 0
 	if read() != "four" {
 		t.Fatal("TTL 0 bypasses the cache")
+	}
+}
+
+// cloud-init writes the Caddy Setup Marker with no lifecycle event: an absent
+// marker must not stay cached, or the first push waits for the cache TTL.
+func TestZoneFileCacheDoesNotKeepAnAbsentMarker(t *testing.T) {
+	m := ZoneMachine{Tenant: "acme", Project: "default", IncusProject: "sc2-acme-default", Name: "web", Running: true}
+	fleet := newFakeZoneFleet(m)
+	r := newZoneReconciler(nil, fleet, nil, "", nil)
+	r.fileCacheTTL = time.Hour
+	if _, ok, err := r.readMarker(context.Background(), m); ok || err != nil {
+		t.Fatalf("booting machine: ok=%v err=%v", ok, err)
+	}
+	fleet.setFile("sc2-acme-default", "web", tenant.CaddySetupMarkerPath, "PRIVATE=web.default.castle\n")
+	r.markerByMachine = map[string]markerRead{} // the next pass
+	if marker, ok, err := r.readMarker(context.Background(), m); !ok || err != nil || marker.Private != "web.default.castle" {
+		t.Fatalf("marker written after boot not read: %+v ok=%v err=%v", marker, ok, err)
+	}
+}
+
+func TestLeasePendingAndDirtyRefreshMarksAwaiting(t *testing.T) {
+	addressed := func(ip string) *api.InstanceState {
+		return &api.InstanceState{Network: map[string]api.InstanceStateNetwork{
+			"lo":   {Addresses: []api.InstanceStateNetworkAddress{{Family: "inet", Address: "127.0.0.1", Scope: "local"}}},
+			"eth0": {Addresses: []api.InstanceStateNetworkAddress{{Family: "inet", Address: ip, Scope: "global"}}},
+		}}
+	}
+	running := func(name string, state *api.InstanceState) api.InstanceFull {
+		i := inst("sc2-a-default", name)
+		i.Status, i.StatusCode, i.State = "Running", api.Running, state
+		return i
+	}
+	stopped := inst("sc2-a-default", "off")
+	booting := running("web", &api.InstanceState{Network: map[string]api.InstanceStateNetwork{"eth0": {}}})
+	leased := running("web", addressed("10.254.0.9"))
+	if leasePending([]api.InstanceFull{stopped}) || leasePending([]api.InstanceFull{leased, stopped}) {
+		t.Fatal("stopped or addressed instances are not waiting for a lease")
+	}
+	if !leasePending([]api.InstanceFull{leased, booting}) {
+		t.Fatal("a running instance with no global IPv4 is waiting for a lease")
+	}
+
+	lister := &fakeFleetLister{byProject: map[string][]api.InstanceFull{"sc2-a-default": {booting}}}
+	dirty := &dirtyProjects{}
+	source := fleetSource{lister: lister, dirty: dirty, logf: func(string, string, ...any) {}}
+	dirty.add("sc2-a-default")
+	source.fleet(context.Background())
+	if !dirty.awaitingLease() {
+		t.Fatal("dirty project with a booting instance must keep the loop passing")
+	}
+	lister.byProject["sc2-a-default"] = []api.InstanceFull{leased}
+	source.fleet(context.Background())
+	if dirty.awaitingLease() {
+		t.Fatal("the lease landed: no more late passes")
+	}
+	dirty.setAwaiting("sc2-a-default", true)
+	dirty.clear()
+	if dirty.awaitingLease() {
+		t.Fatal("clear drops the awaiting set")
 	}
 }

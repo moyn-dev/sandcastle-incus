@@ -66,6 +66,9 @@ func PositionDepth(level string) int {
 
 // LoadDirectoryConfig walks from start to the filesystem root. Only the nearest
 // file is read; an unreadable or invalid file is an error, never a fallback.
+// A .sandcastle directory is not a Directory Config and is walked past:
+// ~/.sandcastle/ holds the local DNS state (localdns.DefaultStatePath), so
+// failing on it would break every command run under $HOME after `sc login`.
 // With no file, path is empty. An empty start uses the working directory.
 func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err error) {
 	if start == "" {
@@ -90,9 +93,11 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 			}
 			return cfg, path, nil
 		}
-		_, statErr := os.Lstat(path)
-		if !os.IsNotExist(readErr) || statErr == nil {
-			return cfg, path, fmt.Errorf("read %s: %w", path, readErr)
+		if !isDirectory(path) {
+			_, statErr := os.Lstat(path)
+			if !os.IsNotExist(readErr) || statErr == nil {
+				return cfg, path, fmt.Errorf("read %s: %w", path, readErr)
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -100,6 +105,11 @@ func LoadDirectoryConfig(start string) (cfg DirectoryConfig, path string, err er
 		}
 		dir = parent
 	}
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func (c DirectoryConfig) validate() error {
@@ -136,6 +146,9 @@ func SaveDirectoryConfig(cfg DirectoryConfig) (string, error) {
 		path, err = filepath.Abs(".sandcastle")
 		if err != nil {
 			return "", err
+		}
+		if isDirectory(path) {
+			return "", fmt.Errorf("write %s: it is a directory (the local DNS state when this is $HOME), not a Directory Config; run this from another directory", path)
 		}
 	}
 	if err := cfg.validate(); err != nil {

@@ -16,10 +16,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         build-essential \
         git \
         gh \
-        nodejs \
-        npm \
         python3 \
         python3-pip
+
+# Node.js through mise (in the base image), not Debian's nodejs: Debian 13
+# ships Node 20, and current Claude Code and the skills installer need >= 22.
+# Installed system-wide under /usr/local/share/mise (not a user's ~/.local),
+# node/npm/npx linked into /usr/local/bin so every login shell finds them,
+# and npm's global prefix is /usr/local so `npm install -g` lands there too.
+ARG NODE_VERSION=22
+RUN MISE_DATA_DIR=/usr/local/share/mise mise install "node@${NODE_VERSION}" \
+    && node_bin="$(MISE_DATA_DIR=/usr/local/share/mise mise where "node@${NODE_VERSION}")/bin" \
+    && for tool in node npm npx; do ln -sf "$node_bin/$tool" "/usr/local/bin/$tool"; done \
+    && npm config set prefix /usr/local --location=global \
+    && node --version && npm --version
 
 # Tool-version args are declared here (after the toolchain layer) so a version
 # bump rebuilds only the npm layer below, not the apt layer above.

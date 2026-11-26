@@ -187,7 +187,11 @@ sc tailnet unpublish <project>:<machine> [--hostname 'internal-*.example.com']
 `sc tailnet publish` waits (default `--wait-timeout 5m`) until the name
 resolves to the Machine private IP, its certificate is `installed`, and HTTPS
 answers without a TLS error, on two consecutive polls; progress goes to stderr.
-An unreachable :443 (CLI host not on the Tenant Tailnet) does not block it. A
+An unreachable :443 (CLI host not on the Tenant Tailnet) does not block it. On
+an install using Let's Encrypt staging (`--acme-directory` staging, as the e2e
+does), a staging leaf valid for the name counts as ready and HTTPS reads
+`ok (…, Let's Encrypt staging certificate)`; any other untrusted issuer is an
+error. A
 `failed:<reason>` certificate ends the wait with an error. If the app answers
 400/403/421 for the new Host header, publish warns: add the name to the app's
 host allowlist.

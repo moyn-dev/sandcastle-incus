@@ -104,6 +104,8 @@ func imageBuildAdminConfig(e2eConfig Config, baseTag string, aiTag string) confi
 		Images: config.Images{
 			Base: baseTag,
 			AI:   aiTag,
+			// Required by Admin validation since the Dev Image; not built here.
+			Dev: config.DefaultDevImageAlias,
 		},
 	}
 }

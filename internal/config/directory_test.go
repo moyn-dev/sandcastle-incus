@@ -66,8 +66,20 @@ func TestDirectorySelectionInvalidFileStopsLookup(t *testing.T) {
 	if err := os.Mkdir(".sandcastle", 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadDirectoryConfig(""); err == nil {
-		t.Fatal("directory should fail")
+	// A .sandcastle directory (~/.sandcastle/ holds the local DNS state) is
+	// not a Directory Config: the walk passes it and finds the parent's file.
+	cfg, path, err := LoadDirectoryConfig("")
+	if err != nil || path != filepath.Join(root, ".sandcastle") || cfg.Remote != "alpha" {
+		t.Fatalf("directory not walked past: %+v %s %v", cfg, path, err)
+	}
+	if err := os.Remove(filepath.Join(root, ".sandcastle")); err != nil {
+		t.Fatal(err)
+	}
+	if _, path, err := LoadDirectoryConfig(""); err != nil || path != "" {
+		t.Fatalf("directory alone should read as no Directory Config: %s %v", path, err)
+	}
+	if _, err := SaveDirectoryConfig(DirectoryConfig{Remote: "alpha", Project: "web"}); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("write over a directory: %v", err)
 	}
 }
 

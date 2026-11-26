@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/moyn-dev/sandcastle-incus/internal/authapp"
+	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
 	"github.com/moyn-dev/sandcastle-incus/internal/machine"
 	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 	"github.com/moyn-dev/sandcastle-incus/internal/tenant"
@@ -53,5 +54,22 @@ func TestSetDomainUsesCurrentProject(t *testing.T) {
 	}
 	if strings.Join(stub.calls, ",") != "set-domain zp baum.hase.de true" {
 		t.Fatalf("calls: %v", stub.calls)
+	}
+}
+
+// The cache-backed `sc ls` path carries the raw mirror ("project"); it must
+// resolve the Project Certificate like the live path, not print "project".
+func TestListViaCacheResolvesProjectCertificateState(t *testing.T) {
+	fake := &fakeResourceClient{result: authapp.ResourceListResult{
+		Tenant:   tenant.Summary{Tenant: "acme", Projects: []meta.Project{{Name: "zp", Domain: "baum.hase.de"}}},
+		Machines: []meta.Machine{{Project: "zp", Name: "web", PrivateIP: "10.1.0.9", Running: true, PublicHostnames: []string{"web.baum.hase.de"}, CertState: "project"}},
+	}}
+	config := commandConfig{adminConfig: scconfig.Admin{Tenant: "acme"}, authResources: fake, authProjects: projectCertificateClientStub{&stubAuthProjects{}}}
+	result, ok := listMachinesViaCache(context.Background(), config, listMachinesRequest{Project: "zp"}, listRenderOptions{})
+	if !ok {
+		t.Fatal("cache path fell back")
+	}
+	if m := result.Machines[0]; m.CertState != "installed" || m.CertStateOf("web.baum.hase.de") != "installed" || m.CertNotAfter != "2026-12-11T10:00:00Z" {
+		t.Fatalf("machine: %+v", m)
 	}
 }

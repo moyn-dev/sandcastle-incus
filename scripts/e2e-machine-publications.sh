@@ -130,7 +130,7 @@ wait_for "$DNS_TIMEOUT" "public tunnel response" public_tunnel_responds "$TUNNEL
 sc tunnel publish "$REF" --port 3000 --hostname "$TUNNEL" >/dev/null
 [[ "$(tunnel_record)" == "$FIRST_RECORD" ]] || fail "idempotent publish changed Cloudflare Tunnel record"
 public_tunnel_responds "$TUNNEL" || fail "idempotent tunnel publish broke public tunnel response"
-sc ls "$REF" | grep -F "$TUNNEL" >/dev/null || fail "sc ls does not render TUNNEL hostname"
+sc ls -l "$REF" | grep -F "$TUNNEL" >/dev/null || fail "sc ls does not render TUNNEL hostname"
 expect_fail "already" sc tailnet publish "$REF" --hostname "$TUNNEL"
 sc tunnel publish "$REF" --port 3000 --hostname "$SECOND_TUNNEL"
 wait_for "$DNS_TIMEOUT" "second tunnel response" public_tunnel_responds "$SECOND_TUNNEL"
@@ -158,12 +158,12 @@ assert_no_sidecar_tailnet_artifact
 curl -k --fail --connect-timeout 10 --resolve "$TAILNET:443:$PRIVATE_IP" "https://$TAILNET" | grep -q machine-publications || fail "Tailnet HTTPS did not reach Machine Caddy"
 sc tailnet publish "$REF" --hostname "$TAILNET" >/dev/null
 [[ "$(dig_a "$TAILNET")" == "$PRIVATE_IP" ]] || fail "idempotent Tailnet publish changed direct Machine target"
-sc ls "$REF" | grep -F "$TAILNET" >/dev/null || fail "sc ls does not render TAILNET hostname"
+sc ls -l "$REF" | grep -F "$TAILNET" >/dev/null || fail "sc ls does not render TAILNET hostname"
 expect_fail "already" sc tunnel publish "$REF" --port 3000 --hostname "$TAILNET"
 sc tailnet publish "$REF" --hostname "$SECOND_TAILNET"
 wait_for "$DNS_TIMEOUT" "second Tailnet DNS" bash -c '[[ "$(dig +short A "$1" "@$2")" == "$3" ]]' _ "$SECOND_TAILNET" "$RESOLVER" "$PRIVATE_IP"
 sc tailnet unpublish "$REF" --hostname "tailnet-*.$ZONE"
-sc ls "$REF" | grep -F "$SECOND_TAILNET" >/dev/null || fail "wildcard removed unrelated Tailnet publication"
+sc ls -l "$REF" | grep -F "$SECOND_TAILNET" >/dev/null || fail "wildcard removed unrelated Tailnet publication"
 sc tailnet unpublish "$REF"
 sc tailnet unpublish "$REF"
 wait_for "$DNS_TIMEOUT" "second Tailnet removal" bash -c '[[ -z "$(dig +short A "$1" "@$2")" ]]' _ "$SECOND_TAILNET" "$RESOLVER"

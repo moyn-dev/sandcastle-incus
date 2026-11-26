@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -51,8 +52,16 @@ type tailnetTLSProbe struct {
 	Status   int       `json:"status,omitempty"`
 	Issuer   string    `json:"issuer,omitempty"`
 	NotAfter time.Time `json:"notAfter,omitempty"`
-	Error    string    `json:"error,omitempty"`
+	// Staging marks a Let's Encrypt STAGING certificate (an install deployed
+	// with --acme-directory staging, as the e2e is): valid for the name, but
+	// no host trusts its issuer, so OK is judged without the chain.
+	Staging bool   `json:"staging,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
+
+// letsEncryptStagingMark is in the issuer CN of every Let's Encrypt staging
+// certificate ("(STAGING) …").
+const letsEncryptStagingMark = "(STAGING)"
 
 // netTailnetProber asks the zone's authoritative name servers before any
 // caching resolver. A lookup through the local resolver before the record is
@@ -193,10 +202,28 @@ func (p netTailnetProber) ProbeTLS(ctx context.Context, host string) tailnetTLSP
 	}
 	defer raw.Close()
 	conn := tls.Client(raw, &tls.Config{ServerName: host})
+	staging := false
 	if err := conn.HandshakeContext(ctx); err != nil {
-		return tailnetTLSProbe{Reachable: true, Error: err.Error()}
+		var unknown x509.UnknownAuthorityError
+		if !errors.As(err, &unknown) {
+			return tailnetTLSProbe{Reachable: true, Error: err.Error()}
+		}
+		// Untrusted issuer: accept it only for a Let's Encrypt staging leaf
+		// that is valid for the name now; anything else stays an error.
+		raw.Close()
+		if raw, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "443")); err != nil {
+			return tailnetTLSProbe{Error: err.Error()}
+		}
+		defer raw.Close()
+		conn = tls.Client(raw, &tls.Config{ServerName: host, InsecureSkipVerify: true, VerifyConnection: func(state tls.ConnectionState) error {
+			return verifyStagingLeaf(state, host, time.Now())
+		}})
+		if herr := conn.HandshakeContext(ctx); herr != nil {
+			return tailnetTLSProbe{Reachable: true, Error: err.Error()}
+		}
+		staging = true
 	}
-	probe := tailnetTLSProbe{Reachable: true, OK: true}
+	probe := tailnetTLSProbe{Reachable: true, OK: true, Staging: staging}
 	if certs := conn.ConnectionState().PeerCertificates; len(certs) > 0 {
 		probe.Issuer = certs[0].Issuer.CommonName
 		if len(certs[0].Issuer.Organization) > 0 {
@@ -212,6 +239,22 @@ func (p netTailnetProber) ProbeTLS(ctx context.Context, host string) tailnetTLSP
 		}
 	}
 	return probe
+}
+
+// verifyStagingLeaf accepts a peer leaf issued by Let's Encrypt staging that
+// is valid for host at now.
+func verifyStagingLeaf(state tls.ConnectionState, host string, now time.Time) error {
+	if len(state.PeerCertificates) == 0 {
+		return errors.New("no peer certificate")
+	}
+	leaf := state.PeerCertificates[0]
+	if !strings.Contains(leaf.Issuer.CommonName, letsEncryptStagingMark) {
+		return fmt.Errorf("issuer %q is not Let's Encrypt staging", leaf.Issuer.CommonName)
+	}
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return errors.New("certificate is not valid now")
+	}
+	return leaf.VerifyHostname(host)
 }
 
 func tailnetProberFor(config commandConfig) tailnetProber {
@@ -264,6 +307,10 @@ func (s tailnetPublicationStatus) httpsText() string {
 	switch {
 	case !s.DNSReady:
 		return "-"
+	case s.HTTPS.OK && s.HTTPS.Staging && s.HTTPS.Status != 0:
+		return fmt.Sprintf("ok (%d, Let's Encrypt staging certificate)", s.HTTPS.Status)
+	case s.HTTPS.OK && s.HTTPS.Staging:
+		return "ok (Let's Encrypt staging certificate)"
 	case s.HTTPS.OK && s.HTTPS.Status != 0:
 		return fmt.Sprintf("ok (%d)", s.HTTPS.Status)
 	case s.HTTPS.OK:

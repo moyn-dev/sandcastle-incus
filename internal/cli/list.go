@@ -397,7 +397,7 @@ func listMachinesViaCache(ctx context.Context, config commandConfig, request lis
 		logListCacheFallback(config, fmt.Sprintf("cached machine %s/%s is running with no address", stale.Project, stale.Name))
 		return listPayload{}, false
 	}
-	return listPayload{
+	payload := listPayload{
 		Tenant:         result.Tenant,
 		Remote:         strings.TrimSpace(config.adminConfig.Remote),
 		Project:        result.Project,
@@ -409,7 +409,11 @@ func listMachinesViaCache(ctx context.Context, config commandConfig, request lis
 		StorageVolumes: result.StorageVolumes,
 		Profiles:       result.Profiles,
 		Images:         result.Images,
-	}, true
+	}
+	// The cache carries the raw instance mirror ("project" for a name the
+	// Project Certificate covers); resolve it as listMachines does.
+	enrichProjectCertificates(ctx, config, &payload)
+	return payload, true
 }
 
 // runningWithoutAddress returns the first cached machine that is running but

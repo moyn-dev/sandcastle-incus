@@ -19,6 +19,7 @@ starts from a clean slate.
   - Give the server VM a bigger root disk (`-d root,size=80GiB`): the default 10 GiB fills up after the appliances, a sidecar and about five machines (`Unable to unpack image, run out of disk space`). Growing it later needs a VM restart; the appliances and machines come back by themselves.
   - With `--ingress none` the auth-app serves plain HTTP on `:9444` inside the server VM's `sc2-net`. A proxy device stands in for the edge: `incus config device add sc2-auth-app e2eedge proxy listen=tcp:0.0.0.0:80 connect=tcp:127.0.0.1:9444 --project sc2-infra`, an `/etc/hosts` line for the Auth Hostname on the client, and `sc login http://<auth-host> …`; `curl http://<auth-host>/healthz` from the client is 200.
   - The tenant's Incus remote is enrolled as `https://<server-vm>:8443`, which the client reaches over `incusbr0`, so without any tailnet `sc login --skip-setup` provisions the tenant, and steps 1 (suffix), 2, 2b, 2c, 2d, 2e, 4 (except `sc c`), 4a and 5 PASS. Step 3 PASSES when `dig` runs on the server VM. What needs the tailnet (`sc c`/ssh, 2d-ii/iii, routing checks) is blocked: the client has no route to the tenant /24.
+- ✅ **Box run with secrets (2026-11-25, `moyn-dev.net`, nested `e2eserver` + `e2eclient`):** `sc-adm install --ingress cloudflare --cloudflare-api-token … --simulate-github-token … --acme-directory <LE staging> --auth-hostname <run>.moyn-dev.net` on the server VM (no broker: the Cloudflare install serves the tenant plane from the auth-app); `tailscale up --authkey … --accept-routes` and a full `sc login` (no `--skip-setup`) on the client: the `tag:sandcastle` autoApprover approves the sidecar's /24, all routing checks ✓. From the client: `pdz` (Phase 12, 12a–12g + 12f) **ALL PASS**, the Machine publication lifecycle **ALL PASS**, `sc c` over the tailnet, the cache-first connect (2d-ii hit) and 8c (tenant-CA HTTPS) PASS. The `unit`, `gated`, `incus` tiers PASS; `images` PASS (base + AI) once the AI image takes Node 22 from mise: Debian 13 ships Node 20.19, and current `skills` (≥ 1.5.19, `npx skills@latest`) and Claude Code (≥ 2.1.198) need Node ≥ 22. PASS for the AI image also means `node --version` is 22.x at `/usr/local/bin/node`, `claude`/`codex`/`gemini --version` print the pinned versions, and `/etc/skel/.claude/skills` is populated. Run the drivers on the client VM directly (`scripts/e2e-pdz.sh`, `scripts/e2e-machine-publications.sh` with `SANDCASTLE_E2E_SANDCASTLE_BIN`): the Go tiers only wrap them. Fixed on the way: `sc` under `$HOME` after a full login, the first certificate push waiting on a cached absent marker, A records waiting for the ticker when a lease lands after the settle passes, `sc ls` not resolving the Project Certificate on the cached path, `sc tailnet publish --wait` never ready under staging, and the drivers' stale project-certificate / `sc ls -l` / alias / apex assertions. The `images` tier needs `docker` on the box (not in `kitchen-setup.toml`'s packages).
 - The one **fat binary** built static for linux: `bin/linux-amd64/sandcastle` (`make build` with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 BIN_DIR=bin/linux-amd64`). It is copied into every appliance.
 - **Stock images, no `sandcastle/base`.** Everything (auth-app, broker, tenant sidecars) runs on the stock upstream image `images:debian/13`, **pulled on demand from the public `images:` remote** — no custom image build and no manual `incus image copy` pre-caching required. (The appliance/sidecar launch code resolves `images:…`/`ubuntu:…` refs to a simplestreams pull; a bare alias or fingerprint still means a local image.) The Incus **server** just needs outbound access to `images.linuxcontainers.org`.
 - **Host network listener — now automatic.** Provisioning turns the daemon's network listener on itself: `CreateToken` calls `ensureServerListening`, which sets `core.https_address=:8443` if unset (a fresh `incus admin init --minimal` host only has the unix socket). No manual `incus config set core.https_address :8443` is needed anymore; before this fix, provisioning failed at token issuance with `Can't issue token when server isn't listening on network`.
@@ -470,6 +471,10 @@ sc login "https://$E2E_HOSTNAME" --simulate-token "$SIMULATE_TOKEN" --as e2edns 
 #    tag:sandcastle autoApprover)
 # PASS: all four routing checks ✓; the tenant's stored suffix is the chosen one
 #       (server: incus project get sc2-<tenant> user.sandcastle.v2.suffix)
+cd ~ && sc ls && sc-adm public-dns-zone list
+# PASS: both work from $HOME. The login's DNS setup leaves the directory ~/.sandcastle/ (dns.yaml); the
+#       Directory Config lookup walks past a .sandcastle DIRECTORY (before 2026-11-25 every command under
+#       $HOME failed with "read ~/.sandcastle: is a directory"). `sc cd` AT $HOME refuses to write over it.
 
 # 2. projects + machines (flagless broker path, project-scoped refs)
 sc create web --detach                       # default project
@@ -2856,8 +2861,8 @@ SANDCASTLE_E2E=1 scripts/e2e.sh pdz            # sources .env.sc2, runs TestPubl
 SANDCASTLE_E2E=1 make e2e-safe                 # same, after the unit + gated tiers
 ```
 The script drives 12a → 12b → 12c/12d (create: `DNS:` + `Public name:` lines,
-A records at `1.1.1.1`, CERT `ok`, `sc project status`, `openssl s_client`,
-wildcard vhost) → 12g (`sc create --hostname` with an apex-level name, the
+A records at `1.1.1.1`, the Project Certificate `ok`, `sc project status`,
+`openssl s_client`, HTTPS on the derived name) → 12g (`sc create --hostname` with an apex-level name, the
 derived name beside it, the private name still served, `sc hostname
 add|list|remove`, per-name certificates with unchanged serials, the refusals,
 `sc create --hostname` of a taken name) → 12f (`unset-domain --dry-run`
@@ -2935,8 +2940,9 @@ sc project set-domain zp e2e-$RUN.$ZONE            # re-claim for the rest of th
 ```bash
 sc create zp:web
 # PASS: output has "DNS: web.zp.<suffix> (auto-registers within seconds)" and, under it,
-#       "Public name: web.e2e-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)"
-#       (the IP: line stands alone above both) and returns without waiting;
+#       "Public name: web.e2e-$RUN.$ZONE (A record pending, served by project certificate)"
+#       (docs/spec/project-certificates.md: a derived one-label name is served by the Project Domain's
+#       certificate, never its own order; the IP: line stands alone above both) and returns without waiting;
 #       `sc create zp:web2 --dry-run` prints the same DNS: + Public name lines and makes no Auth App request;
 #       with the Auth App stopped the parenthesis reads
 #       "certificate pending: Auth App unreachable — retried by the reconciler" and the machine is still created.
@@ -2979,25 +2985,28 @@ dig +short web.e2e-$RUN.$ZONE @1.1.1.1; dig +short x.web.e2e-$RUN.$ZONE @1.1.1.1
 # PASS (≤ 60s): both answer the machine's tenant-bridge IPv4 (the IP column of `sc ls`); the Cloudflare
 #       dashboard shows both records DNS-only (grey cloud), TTL 60; the auth-app log has
 #       "zone reconcile: zone $ZONE: set 2 A record(s)" exactly once — later passes make no writes.
-sc ls zp:web; sc project status zp
-# PASS (≤ 5 min): the auth-app log shows, in order, "web.e2e-$RUN.$ZONE: certificate <serial> issued" and
-#       "certificate <serial> installed on <prefix>-<tenant>-zp/web"; `sc ls` CERT reads `ok`;
-#       `sc project status zp` shows `installed` with a NOT AFTER ~90 days out;
-#       `sc incus config get web user.sandcastle.v2.cert-state` = `web.e2e-$RUN.$ZONE=installed` (per name since
-#       ADR-0028 slice 3) and `… user.sandcastle.v2.cert-not-after` equals that NOT AFTER (RFC 3339 UTC).
-# PASS (machine side after the push): /etc/sandcastle/tls/web.e2e-$RUN.$ZONE/ holds cert.pem (0644) and key.pem
-#       (root:caddy 0640 after the refresh), no *.new leftovers; the private leaf /etc/sandcastle/tls/{cert,key}.pem is untouched;
-#       /etc/sandcastle/caddy.ready now has `PUBLIC=web.e2e-$RUN.$ZONE` and a newer RENDERED=; the Caddyfile has
-#       a second block "web.e2e-$RUN.$ZONE, *.web.e2e-$RUN.$ZONE {" with `tls /etc/sandcastle/tls/web.e2e-$RUN.$ZONE/…`;
-#       `systemctl is-active caddy` → active; `journalctl -u caddy` shows one start and one reload
-#       (the push's `sandcastle-caddy-setup --refresh`), no failure loop.
+sc ls -l zp:web; sc project status zp --json
+# PASS (≤ 5 min): the auth-app log shows, in order, "e2e-$RUN.$ZONE: certificate <serial> issued" (the Project
+#       Certificate, ordered on the claim, whether or not a machine exists) and "certificate <serial> installed on
+#       <prefix>-<tenant>-zp/web" within one reconcile pass of web's Caddy Setup Marker appearing (an absent marker
+#       is not cached: 2026-11-25 the first push waited ~12 min for the file cache before that fix); `sc ls -l`
+#       CERT reads `ok (project installed; expires …)`; `sc project status zp --json` has certState `installed`,
+#       a certNotAfter ~60–90 days out and sans exactly ["e2e-$RUN.$ZONE", "*.e2e-$RUN.$ZONE"];
+#       `sc incus config get web user.sandcastle.v2.cert-state` = `project` and there is no cert-not-after
+#       (`sc ls` resolves state and expiry through the Auth App, on the cache-backed path too).
+# PASS (machine side after the push): /etc/sandcastle/project-domain = e2e-$RUN.$ZONE; /etc/sandcastle/tls/e2e-$RUN.$ZONE/
+#       holds cert.pem (0644) and key.pem (root:caddy 0640 after the refresh), no *.new leftovers; the private leaf
+#       /etc/sandcastle/tls/{cert,key}.pem is untouched; the Caddyfile serves web.e2e-$RUN.$ZONE from that directory
+#       and has NO *.web.e2e-$RUN.$ZONE block (a project certificate covers one label); `systemctl is-active caddy`
+#       → active, no failure loop.
 openssl s_client -connect <bridge-ip>:443 -servername web.e2e-$RUN.$ZONE </dev/null 2>/dev/null \
   | openssl x509 -noout -ext subjectAltName -issuer
-# PASS: both SANs `DNS:web.e2e-$RUN.$ZONE, DNS:*.web.e2e-$RUN.$ZONE` and an issuer from the Let's Encrypt
-#       STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
-curl -s -o /dev/null -w '%{http_code}\n' --resolve x.web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://x.web.e2e-$RUN.$ZONE/
-# PASS: an HTTP status from Caddy (502 with nothing on :3000), not 000 — the wildcard vhost reaches the same Caddy.
-dig +short TXT _acme-challenge.web.e2e-$RUN.$ZONE @1.1.1.1
+# PASS: the project certificate's SANs `DNS:e2e-$RUN.$ZONE, DNS:*.e2e-$RUN.$ZONE` and an issuer from the Let's
+#       Encrypt STAGING hierarchy ("(STAGING)" in the issuer CN). Browser trust is NOT asserted.
+curl -s -o /dev/null -w '%{http_code}\n' --resolve web.e2e-$RUN.$ZONE:443:<bridge-ip> -k https://web.e2e-$RUN.$ZONE/
+# PASS: an HTTP status from Caddy (502 with nothing on :3000), not 000. The reconciler still writes the
+#       x.web.e2e-$RUN.$ZONE A record, but Caddy renders no vhost for it unless `sc hostname add '*.web…'` asks.
+dig +short TXT _acme-challenge.e2e-$RUN.$ZONE @1.1.1.1
 # PASS: empty once installed (certmagic cleans up; the reconciler sweeps before every order).
 sc create --bare zp:b1
 # PASS: prints the DNS: line, the Public name line, "HTTPS: https://b1.zp.<suffix>   (Caddy with the tenant-CA leaf,
@@ -3112,7 +3121,7 @@ sc create zp:api --hostname api-$RUN.$ZONE
 # PASS: output has "DNS: api.zp.<suffix> (auto-registers within seconds)" (every machine keeps its Machine
 #       Private Hostname) and one Public name line PER name:
 #       "Public name: api-$RUN.$ZONE (A record pending, certificate pending — see: sc project status zp)" and
-#       "Public name: api.e2e-$RUN.$ZONE (A record pending, certificate pending — …)"; returns at once.
+#       "Public name: api.e2e-$RUN.$ZONE (A record pending, served by project certificate)"; returns at once.
 sc ls zp:api; sc ls zp:api --json | jq .machines[0].publicHostnames
 # PASS: FQDN column reads "api-$RUN.$ZONE (+1)" (first name + count); --json carries exactly
 #       ["api-$RUN.$ZONE","api.e2e-$RUN.$ZONE"] (sorted). `sc incus config get api user.sandcastle.v2.public-hostnames`
@@ -3155,15 +3164,21 @@ openssl s_client -connect <api-ip>:443 -servername api-$RUN.$ZONE </dev/null 2>/
 
 # refusals — every one --dry-run, and `sc ls zp:api --json` .publicHostnames is unchanged afterwards
 sc hostname add zp:api sub.e2e-$RUN.$ZONE --dry-run
-# PASS: `machine hostname "sub.e2e-$RUN.$ZONE" overlaps project domain "e2e-$RUN.$ZONE" claimed by project "zp"
-#       in this tenant` (a name inside a Project Domain — even the project's own — is the domain's).
+# PASS: accepted — `[dry-run] would have: claimed sub.e2e-$RUN.$ZONE for machine zp:api (zone $ZONE) — served by
+#       project certificate` (a one-label alias under the project's own domain, docs/spec/project-certificates.md).
+sc hostname add zp:api api.e2e-$RUN.$ZONE --dry-run
+# PASS: `machine hostname "api.e2e-$RUN.$ZONE" overlaps project domain "e2e-$RUN.$ZONE" claimed by project "zp"
+#       in this tenant` (the machine's own derived name cannot be claimed explicitly; a name under ANOTHER
+#       project's domain is refused the same way).
 sc hostname add zp:web api-$RUN.$ZONE --dry-run
 # PASS: `machine hostname "api-$RUN.$ZONE" overlaps "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`.
 sc project create x-$RUN --domain api-$RUN.$ZONE --dry-run
 # PASS: `project domain "api-$RUN.$ZONE" overlaps hostname "api-$RUN.$ZONE" held by machine "zp:api" in this tenant`
 #       (reverse check: a domain may not sit on, above or below a hostname).
 sc hostname add zp:api $ZONE --dry-run
-# PASS: `machine hostname "$ZONE" is a zone apex; use at least one label below $ZONE`.
+# PASS: `machine hostname "$ZONE" is a zone apex; use at least one label below $ZONE` — or, when the Auth
+#       Hostname is under the same zone (the moyn-dev.net convention), `machine hostname "$ZONE" is reserved by
+#       this install`, which is checked first. Either refusal passes.
 sc hostname remove zp:api api.e2e-$RUN.$ZONE --dry-run
 # PASS: `machine hostname "api.e2e-$RUN.$ZONE" is not held by machine "zp:api"` — the derived name goes with the
 #       project's domain, never per machine.
@@ -3286,7 +3301,11 @@ From the Tailnet client HTTPS reaches the Machine and serves its certificate;
 assert the Machine's Caddy service override executes
 `/.sc/platform/sbin/caddy` for start and reload;
 the Machine holds the certificate/key but neither it nor the Sidecar holds the
-Cloudflare API token. Repeating publish is idempotent; `sc ls` renders the
+Cloudflare API token. `sc tailnet publish` (default `--wait`) returns ready on
+this staging install: its probe accepts a Let's Encrypt staging leaf valid for
+the name and prints `HTTPS ok (…, Let's Encrypt staging certificate)` (before
+2026-11-25 it timed out after 5 min with `x509: certificate signed by unknown
+authority`, so the driver never got past the publish). Repeating publish is idempotent; `sc ls` renders the
 requested view in `TAILNET`; repeated `sc tailnet unpublish` safely removes DNS
 and the Machine-Caddy site according to Machine Public Hostname cleanup. The
 gate also verifies a shell-quoted hostname wildcard and an omitted hostname
