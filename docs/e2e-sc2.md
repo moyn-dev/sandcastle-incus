@@ -516,6 +516,19 @@ sc incus exec web -- cat /workspace/marker   # → from-ct then from-vm
 #       write /workspace. /home is NOT shared here: web and vm1 were created
 #       without --home-share, so each has its own machine-local /home.
 
+# 2b'. `sc incus exec` output arrives whole (issue #250). Piped, the exec runs natively
+# in sc; the incus CLI used to cut a large stdout to its first ~12-150 KB about one
+# run in three over a link with latency, and still exit 0.
+for m in web vm1; do
+  for i in $(seq 10); do sc incus exec $m -- head -c 2000000 /dev/zero </dev/null | wc -c; done | sort | uniq -c
+  sc incus exec $m -- sh -c 'head -c 500000 /dev/zero >&2' 2>&1 >/dev/null | wc -c
+  sc incus exec $m -- sh -c 'exit 3'; echo "rc=$?"
+done
+# PASS: every count is 2000000 (10 of 10) and the stderr count is 500000, for the CT and
+#       the VM; `exit 3` prints `exit status 3` and rc=1. A cut stream fails with
+#       `incus exec: stdout stream from <m> ended early, output is incomplete`, never
+#       a short count and exit 0.
+
 # 2c. --home-share: the opt-in shared /home (homeshare profile)
 sc create hs1 --home-share --detach
 sc create hs2 --home-share --vm --detach
@@ -2976,7 +2989,8 @@ sc create zp:web
 #   sc restart zp:web; sc incus exec web -- systemctl is-active caddy   # → active again (no conditional start)
 #   openssl s_client -connect <bridge-ip>:443 -servername web.zp.<suffix> </dev/null 2>/dev/null | openssl x509 -noout -issuer
 #       # → the tenant CA issuer: the private name serves from the first boot
-# PASS (connect): `sc c zp:web -- hostname -f` prints web.zp.<suffix>, the ssh line is
+# PASS (connect): `sc c zp:web -- hostname -f` prints web.zp.<suffix> and nothing else on stdout; the ssh line,
+#       on stderr, is
 #       `Connecting to /<install>/<tenant>/zp/web: ssh dev@<bridge-ip>` with HostKeyAlias=web.zp.<suffix>, and ~/.ssh/known_hosts gains ONE line
 #       keyed `web.zp.<suffix>,web.e2e-$RUN.$ZONE` (private name first, then the public name) with the
 #       `# sandcastle:<remote>/<tenant>` marker; `sc ssh-key purge --dry-run` reports nothing to do for it.

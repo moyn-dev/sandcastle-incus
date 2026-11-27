@@ -567,7 +567,7 @@ func runSSHSession(ctx context.Context, config commandConfig, dialed dialedV2Mac
 	if line := remoteCommandLine(command); line != "" {
 		sshArgs = append(sshArgs, line)
 	}
-	fmt.Fprintf(config.stdout, "Connecting to %s: ssh %s@%s\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.loginUser, dialed.privateIP)
+	fmt.Fprintf(config.stderr, "Connecting to %s: ssh %s@%s\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.loginUser, dialed.privateIP)
 	logSSHCommand(config, sshArgs)
 	sshCmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 	sshCmd.Stdin = osStdinFor(config)
@@ -615,12 +615,21 @@ func connectV2Bare(ctx context.Context, config commandConfig, summary tenant.Sum
 	remote := []string{"exec", dialed.machine, "--"}
 	if line := remoteCommandLine(command); line != "" {
 		remote = append(remote, "/bin/sh", "-c", line)
-		fmt.Fprintf(config.stdout, "Connecting to %s: incus exec %s (bare machine — no sshd)\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.machine)
+		fmt.Fprintf(config.stderr, "Connecting to %s: incus exec %s (bare machine — no sshd)\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.machine)
 	} else {
 		remote = append(remote, "/bin/sh", "-c", bareLoginShellCommand)
-		fmt.Fprintf(config.stdout, "Connecting to %s: incus exec %s as root (bare machine — no user, no sshd)\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.machine)
+		fmt.Fprintf(config.stderr, "Connecting to %s: incus exec %s as root (bare machine — no user, no sshd)\n", currentMachinePath(config, dialed.project, dialed.machine), dialed.machine)
 	}
 	incusProject := summary.V2IncusProjectName(dialed.project)
+	// A command whose output is not going to a terminal runs through the native
+	// exec, as `sc incus exec` does: the incus CLI can cut its output short
+	// (issue #250). The login shell, and any terminal session, stay with incus.
+	if line := remoteCommandLine(command); line != "" {
+		stdinTerminal, stdoutTerminal := incusExecTerminals(config)
+		if native, ok := parseNativeIncusExec(remote, stdinTerminal, stdoutTerminal, os.Getenv); ok {
+			return runNativeIncusExec(config, incusDir, incusProject, native)
+		}
+	}
 	env := append(os.Environ(), "INCUS_CONF="+incusDir, "INCUS_PROJECT="+incusProject, "INCUS_REMOTE="+config.adminConfig.Remote)
 	return runner(ctx, remote, env, osStdinFor(config), config.stdout, config.stderr)
 }

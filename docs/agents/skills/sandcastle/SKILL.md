@@ -211,6 +211,12 @@ Prefer the multi-argument form.
 home explicitly. Use `sc incus exec` when you need root or when the machine has
 no sshd.
 
+**Reading data out of a machine.** Piped `sc incus exec` (and `sc c <bare> --
+<cmd>`) runs natively in `sc` and delivers the whole stdout/stderr or fails with
+`… stream … ended early, output is incomplete`; a plain `incus exec` can cut a
+large output short and still exit 0. `sc c <m> -- <cmd>` prints its
+`Connecting to …` line on stderr, so its stdout is only the command's output.
+
 **Never assume the Incus project prefix.** It is `<install-prefix>-<tenant>-<project>`
 where the prefix is operator-chosen (the built-in default `sc` maps to `sc2`).
 Read the real names from `sc remote list` (PROJECT column) or `sc ls -a`.
