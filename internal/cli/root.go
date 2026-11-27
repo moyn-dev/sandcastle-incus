@@ -124,6 +124,7 @@ type commandConfig struct {
 	loginTailnetPrecheck func(context.Context) error
 	loginRoutingCheck    func(context.Context, io.Writer, string) error
 	incusRunner          incusRunner
+	incusExec            incusExecRunner
 	gcloudRunner         gcloudRunner
 	// skillEnv overrides where `sc skill` and the `sc update` skill refresh
 	// resolve agent skill directories (tests point it at a temp home so the

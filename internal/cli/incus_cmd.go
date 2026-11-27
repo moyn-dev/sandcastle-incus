@@ -62,6 +62,10 @@ func runIncusWithProject(cmd *cobra.Command, config commandConfig, args []string
 		fmt.Fprintf(config.stderr, "[verbose] sc incus env: %s\n", strings.Join(envOverrides, " "))
 		fmt.Fprintf(config.stderr, "[verbose] sc incus command: %s\n", shellCommandLine(append([]string{"incus"}, args...)))
 	}
+	stdinTerminal, stdoutTerminal := incusExecTerminals(config)
+	if native, ok := parseNativeIncusExec(args, stdinTerminal, stdoutTerminal, os.Getenv); ok {
+		return runNativeIncusExec(config, incusDir, projectName, native)
+	}
 	return runner(cmd.Context(), args, env, config.stdin, config.stdout, config.stderr)
 }
 

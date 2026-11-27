@@ -5,6 +5,51 @@ spot, deviations from what was asked, tradeoffs, and workarounds for
 environment/tooling limits. The "why" behind the code; larger hard-to-reverse
 decisions live in `docs/adr/`. Newest first.
 
+## 2026-11-27 — non-interactive `sc incus exec` runs natively, not through the incus CLI (#250)
+
+**Cause, reproduced on this box** (incus 7.6 client and server, HTTPS loopback
+remote with `tc netem` 20–60 ms delay): `incus exec … -- head -c 1000000 f | wc -c`
+returned 65–170 KB in nearly every run, exit 0. incusd's exec `connect` sends a
+websocket ping (`"keepalive"`) the moment each exec socket connects and every
+10 s after. It closes all exec sockets as soon as the command exits. The client
+answers each ping with a pong. When the pong reaches incusd after that close,
+the kernel answers with RST and drops the output still queued in the send buffer
+(seen in `ss`: ~820 KB Send-Q at close). The client swallows the
+`connection reset by peer` from its stdout mirror, so the run "succeeds". The
+v7 client makes it worse by connecting all exec sockets concurrently
+(`getExecWebsockets`): the command starts with every pong still in flight. The
+vendored v6.23 `ExecInstance` connects one socket at a time, so only the last
+one (stderr) was exposed, and it lost large stderr every time under 60 ms.
+
+**Decision:** sc wires the exec websockets itself (`incusx.ExecStream`,
+`RawOperation` + `GetOperationWebsocket` + `shared/ws` mirrors). Ping and close
+handlers on every socket do not reply, so the client never writes on an output
+socket and incusd's close is a clean FIN that delivers the queued data. stdin
+connects last. A stream that still ends in an error is returned as an error,
+never as a short success. `sc incus exec` uses it when the session is
+non-interactive by the incus CLI's own rule (`-n`, `-T`, `--mode
+non-interactive`, or stdin and stdout not both terminals). Interactive
+sessions, unknown flags and any other subcommand still exec the incus CLI. The
+bare-machine `sc connect <m> -- <cmd>` path uses it too, because it ran
+`incus exec` the same way.
+
+**Alternatives turned down:** (1) staying a pure passthrough and documenting
+`sc incus file pull`. That leaves every pipeline through `sc incus exec`
+silently lossy. (2) `RecordOutput: true` (the server records the output and the
+client fetches the log over HTTP). It is reliable, but it has no stdin and
+nothing streams until the command ends. (3) Wrapping the command with a trailing
+`sleep`. It only narrows the race, and the 10 s keepalive ping reopens it for
+long commands. (4) Only reordering connects with stock handlers. Measured: the
+last-connected socket still loses data. The upstream fix belongs in incusd (keep
+the socket open until the client closes it, or stop pinging after exit). This
+works against today's servers.
+
+**Also from the issue:** the `Connecting to …` banner of `sc connect` moved from
+stdout to stderr, so `sc c m -- cmd | …` carries only the command's output.
+That changes existing output. The issue asked for it, and nothing parsed the
+banner from stdout. The sshd refusals the issue reports after ≈7 quick
+`sc connect`s were not investigated and are not changed here.
+
 ## 2026-11-23 — kitchen.toml becomes kitchen-setup.toml; the e2e reads ~/.kitchen-setup/env
 
 moyn-dev/kitchen-setup#50 renames the repo's file to `kitchen-setup.toml` and

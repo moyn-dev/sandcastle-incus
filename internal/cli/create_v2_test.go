@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lxc/incus/v6/shared/api"
 	scconfig "github.com/moyn-dev/sandcastle-incus/internal/config"
+	"github.com/moyn-dev/sandcastle-incus/internal/incusx"
 	"github.com/moyn-dev/sandcastle-incus/internal/meta"
 	tenant "github.com/moyn-dev/sandcastle-incus/internal/tenant"
 )
@@ -403,12 +405,23 @@ func TestConnectV2BareExecsAShellInsteadOfSSH(t *testing.T) {
 	}
 
 	// A trailing command runs instead of the shell, shell-quoted into one line
-	// so `sc c web -- ls -l /tmp` does not lose its arguments.
+	// so `sc c web -- ls -l /tmp` does not lose its arguments. Off a terminal it
+	// runs through the native exec, which delivers all of its output (#250).
+	gotArgs = nil
+	var gotProject, gotInstance string
+	var gotCommand []string
+	config.incusExec = func(_, _, project, instance string, req api.InstanceExecPost, _ incusx.ExecStreams) (int, error) {
+		gotProject, gotInstance, gotCommand = project, instance, req.Command
+		return 0, nil
+	}
 	if err := connectV2Bare(context.Background(), config, summary, dialed, []string{"ls", "-l"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(gotArgs, " "); got != `exec web -- /bin/sh -c 'ls' '-l'` {
-		t.Fatalf("args with a command = %q", got)
+	if gotArgs != nil {
+		t.Fatalf("a command off a terminal went through the incus CLI: %q", gotArgs)
+	}
+	if got := strings.Join(gotCommand, " "); got != `/bin/sh -c 'ls' '-l'` || gotProject != "sc2-acme-default" || gotInstance != "web" {
+		t.Fatalf("native exec: project=%q instance=%q command=%q", gotProject, gotInstance, got)
 	}
 }
 
